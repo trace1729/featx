@@ -1,0 +1,25 @@
+# Build recipe defaults. type: gsim-two-step | script
+type: gsim-two-step
+cores: 64            # placement need (make -j)
+mem_gb: 96
+host: null           # pin to a host; null = least-loaded
+workdir: ${worktree}
+timeout_hours: 10
+cache: true          # reuse bincache/<key> when commit+diff+submodules+recipe match
+artifact: build/emu  # relative to workdir; copied into bincache on success
+env:
+  NOOP_HOME: ${worktree}
+  NEMU_HOME: ${worktree}/ready-to-run
+# Text patches applied before the build and reverted afterwards (parameter flips without
+# a commit). Each: {file: <path relative to workdir>, find: <exact text>, replace: <text>}.
+patches: []
+gsim:
+  gsim_bin: /nfs/share/bin/gsim
+  dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  jobs: 64
+  step1_args: EMU_THREADS=1 TRACERTL_MODE=1 WITH_DRAMSIM3=1 WITH_CONSTANTIN=0 WITH_CHISELDB=0 EMU_OPTIMIZE=-O3
+  step2_args: SIM_TOP=SimTop NUM_CORES=1 RTL_SUFFIX=sv TRACERTL_MODE=1 WITH_DRAMSIM3=1 EMU_THREADS=1 WITH_CHISELDB=1 WITH_CONSTANTIN=0 EMU_OPTIMIZE=-O3
+  # C++-only change (TraceRTL/difftest): copy this build/ dir and only relink (step 2).
+  reuse_build_from: null
+# type: script -> bash body run in workdir; must leave ${artifact}.
+script: null

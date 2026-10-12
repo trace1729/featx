@@ -1,0 +1,17 @@
+name: perf-keys
+description: >-
+  Formal-window (2nd PERF block) key counters per point for this runset and any number of
+  references (baselines / other runsets), IPC error vs the first reference
+  (generalizes the 1007/1009 summarize.py + compare-panel.py). Writes points.csv, report.md,
+  summary.json (per run: n, mean|err|, mean err, IPC geomean).
+with:
+  self: ${run}
+  # label: point-dir root (first entry is the IPC reference)
+  baselines:
+    exec: "@baseline(exec-0903)"
+  points: ${points_config}     # collector JSON or one point name per line
+  block: 2                     # PERF block (2 = formal window after warmup)
+  keys: ""                     # optional YAML file with extra keys: [[name, module.suffix, counter], ...]
+cmd: |
+  ${python} ${scripts}/perf_keys.py --runs ${baselines} self=${self} --ref-first --points ${points} \
+    --block ${block} --keys "${keys}" -o ${out}

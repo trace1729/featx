@@ -1,0 +1,138 @@
+## 2026-10-12  tree.mv 子节点路径拼接错误
+
+问题与解决方案总结:
+问题：featx node mv 把一个带子节点的子树 cat/feat 移到 cat2/feat 时，子节点的新路径被算成
+"cat2/featsub"（少了 '/'），子节点 node.yaml 被写到一个不存在的目录，树索引损坏。由单元测试
+test_mv_cascade_symlink_and_active_refusal 发现（断言 {'cat2/feat','cat2/featsub'} != 期望）。
+原因：循环里先处理源节点本身，并在循环末尾执行 entry.rel = rel_new，把 src.rel 改成了新路径；
+后续子节点用 entry.rel[len(src.rel):] 截取相对后缀时，len(src.rel) 已是新路径长度（9 而非 8），
+截掉了多一个字符。
+解决：循环前把旧前缀保存为 src_rel，子节点后缀统一用 len(src_rel) 截取。
+
+代码修改说明:
+featx/tree.py Tree.mv：新增 src_rel = src.rel（循环前快照），report["from"] 和
+rel_new = dst_rel + entry.rel[len(src_rel):] 都改用该快照，源节点在循环中被改写 rel 不再影响子节点。
+
+## 2026-10-12  /hosts 500：codex_dispatch 动态加载时 @dataclass 崩溃
+
+问题与解决方案总结:
+问题：真实集群上 `featx daemon hosts` 返回 Internal Server Error，daemon 日志（.runwatch/featxd/log）
+traceback 显示 placement.codex_dispatch() 用 importlib.util.spec_from_file_location 加载
+util/codex_dispatch.py 时，在其第 109 行 @dataclass(frozen=True) 处抛
+AttributeError: 'NoneType' object has no attribute '__dict__'（dataclasses._is_type 中
+sys.modules.get(cls.__module__) 为 None）。单测用 LocalPlacement 桩替换了 Placement，因此未覆盖。
+原因：Python 3.12 的 dataclass 在处理带字符串注解（from __future__ import annotations）的字段时，
+要通过 sys.modules[cls.__module__] 取模块命名空间；module_from_spec + exec_module 不会自动注册
+到 sys.modules。该问题会同时影响任务投放（choose 也调用 refresh），不只是 /hosts。
+解决：exec_module 之前先 sys.modules[spec.name] = mod。修复后进程内 Placement().refresh(True)
+正常返回各节点 load/score，不可达节点（node006 超时、node023 banner 断开）以 error 字段呈现。
+
+代码修改说明:
+featx/sched/placement.py codex_dispatch()：新增 import sys，并在 spec.loader.exec_module(mod)
+前插入 sys.modules[spec.name] = mod，使 dataclass 能解析 codex_dispatch 模块内的类型注解。
+
+## 2026-10-12  daemon stop 后立即 start 误判"already running"
+
+问题与解决方案总结:
+问题：`featx daemon stop; sleep 2; featx daemon start` 输出 "featxd already running (pid 833357)"，
+随后 status/hosts 均 Connection refused。证据：daemon.json 中没有 stopped 字段、heartbeat 仍新鲜；
+runwatch exit_code = 143（=128+SIGTERM），说明进程被 SIGTERM 直接杀死，main() 的 finally（写 stopped）
+没有执行。原因：uvicorn 0.54 Server.capture_signals 在优雅关闭后恢复原 SIGTERM 处理器（默认=终止）
+并 signal.raise_signal() 重新抛出该信号（已用 inspect 读源码确认），进程在 finally 之前被杀；
+同时 CLI stop 只发 TERM 不等待，start 用 60 s 心跳窗口判活，于是信任了陈旧的 daemon.json。
+解决：(1) featxd 在 uvicorn.run 前安装 SIGTERM→SystemExit(0) 处理器，uvicorn 恢复并重抛时转成
+正常退出，finally 写入 stopped；(2) `featx daemon stop` 发送 TERM 后最多等 30 s 确认 pid 消失，
+若 daemon.json 仍指向该 pid 且无 stopped 则由 CLI 补写，覆盖硬死亡情况。验证：start→stop→start
+连续执行，exit_code=0，daemon.json 含 stopped，第二次 start 拉起新 pid 且 status/hosts 正常。
+
+代码修改说明:
+featx/sched/daemon.py：新增 import signal 与 _exit_on_term()（raise SystemExit(0)），main() 中
+th.start() 之后 signal.signal(SIGTERM, _exit_on_term)；uvicorn 退出时恢复的"原处理器"即此函数，
+重抛 SIGTERM 变为 SystemExit，finally 中 stop 事件/线程 join/写 stopped 均能执行。
+featx/cli.py daemon_stop：kill 后循环 alive_on_host 等待退出（超时则 fail），再检查 daemon.json
+的 pid 与 stopped 字段并补写 stopped，最后输出 "stopped"。
+
+## 2026-10-12  submit --bin 不生效：命令仍指向 <runset>/bin/emu（rc=127）
+
+问题与解决方案总结:
+问题：首次集群 e2e `featx submit wpe/overlay/smoke run post --bin ext-73ced1f4a0f5cb14` 三个点全部
+exit code 127，simulator_err.txt 为 "timeout: failed to run command '<runset>/bin/emu': No such file"。
+生成的 cmd.sh 中 emu= 检查用的是 bincache 路径（存在），但真正执行的命令行是 <runset>/bin/emu。
+原因：submit 先对 recipe 做 ${} 替换，此时 command 里的 ${emu} 已被展开成默认值 ${bin}
+（=<runset>/bin/emu），之后才 spec["emu"] = _resolve_bin(...)，只改了 emu 字段而命令文本不变。
+单测里 recipe 显式写了 emu=fake 路径，与 --bin 指向同一个文件，因此没暴露。另外 resubmit 不带
+--bin，会再次回落到新 runset 的空 ${bin}。
+解决：--bin 在替换之前解析，作为 run 的 override 合入 recipe，使 ${emu} 展开为真实路径；同时像
+build 一样在 runset/bin/emu 建符号链接并在 experiment.yaml 记录 bin（imported=True），保证 ${bin}
+在 post 等处也一致；resubmit 在不含 build 时沿用源 run 任务的 emu。单测改为 recipe 不写 emu，
+只依赖 --bin，并断言 runset/bin/emu 指向该文件。
+
+代码修改说明:
+featx/sched/scheduler.py submit()：循环前 emu_override = _resolve_bin(bin_ref)，run 的 overrides
+合入 {"emu": emu_override} 后再 effective()+substitute()；删除替换后的 spec["emu"] 赋值；保存
+runset 前若 rs.bin 为空则创建 <rdir>/bin/emu → emu_override 符号链接并写 rs.bin（key/sha256 取自
+bincache manifest）。resubmit() 新增 bin_ref 参数，默认取源 run 任务 spec["emu"]（kinds 不含 build
+时）；daemon /tasks/{id}/resubmit 透传 body["bin"]。tests/test_sched_local.py make_node 去掉 emu。
+
+## 2026-10-12  kill 只杀进程组，timeout 下的 emu 成为孤儿继续运行
+
+问题与解决方案总结:
+问题：集群 infra 重试测试中对 node039 上 featx-exec（pid=pgid=3600107）执行 kill -KILL -- -3600107
+后，featx-exec/心跳/cmd.sh 均消失，但 emu 仍以 100% CPU 运行。ps 显示 timeout 与 emu 的
+PGID=3600123、SID=3600107：coreutils timeout 会 setpgid 自建进程组，所以按进程组杀不到它。
+后果：cancel 与 infra 重试（在另一台机器重跑）都会留下孤儿 emu，重复占核且可能写同一 job 目录。
+本机还发现 9 个 pytest 遗留的 fake-emu `sleep 600`（每次跑 heartbeat 测试泄漏 3 个），同一原因。
+另外，超过 infra 重试上限后的那次失败不走重试分支，原代码也不清理孤儿。
+解决：kill 改为按会话杀（pkill -<SIG> -s <sid>，再兼顾 pgid 与 pid）；alive_on_host 仍只看
+featx-exec 领导进程（领导进程死了就没人写 exit_code，残留 emu 视为孤儿而非存活）；
+_job_failed 中只要 rc 为 None（无 exit_code：宿主机/featx-exec 死亡）就先按会话 KILL，无论是否重试。
+单测加断言：killpg 后会话内仍有进程（复现前提）、重试后与超预算后会话清空、cancel 后会话清空。
+已清理本机泄漏的测试进程。
+
+代码修改说明:
+featx/sched/executor.py kill()：inner 改为 "pkill -SIG -s pid; kill -SIG -- -pid; kill -SIG pid"，
+docstring 说明会话与进程组的差异；alive_on_host 保持 kill -0 leader 并注释原因。
+featx/sched/scheduler.py _job_failed()：孤儿清理从 "infra 且未超预算" 分支提到 "rc is None" 条件下，
+重试分支只保留 mark_bad 与重新排队。tests/test_sched_local.py：新增 session_procs(sid)（pgrep -s）
+及上述三处断言。
+
+
+## 2026-10-12 17:00  node rm --drop-worktrees 残留分支、空目录与悬空转发软链
+
+问题与解决方案总结:
+集群验证 `featx node rm scratch -f --drop-worktrees` 后，worktree 目录与 git worktree 记录都已删除，
+但超级仓库和 TraceRTL 里仍留着分支 featx/scratch/final/mvtest，featx-wt/scratch/{final,moved} 空目录
+以及之前 node mv 留下的悬空转发软链 moved/mvtest 也都还在（证据：git branch --list 'featx/*' 两个仓库
+各一条；ls featx-wt/scratch 显示 final moved，moved/mvtest -> final/mvtest 已失效）。原因是 Tree.rm 调用
+worktree.remove(node) 时没有传 delete_branch，而 remove 即使删分支也只删超级仓库那一条，不处理子模块分支，
+也不清理目录。修复方案：--drop-worktrees 同时删除"没有自有提交"（base..branch 计数为 0）的 featx/ 分支，
+包括超级仓库和子模块两边；有自有提交的分支保留并在报告中标 kept(N commits not in base)，只有加
+--drop-branches 才强删，因为这些提交是该工作的唯一副本。同时删除 moves 记录中的旧 worktree 转发软链，
+并把 wt_root 以下的空父目录逐级 rmdir 掉。
+
+代码修改说明:
+featx/worktree.py 新增 _drop_branch(repo, branch, base, force) 和 _prune_dirs(paths)。前者先用
+rev-parse 确认分支存在，非强制时用 rev-list --count base..branch 判断是否有自有提交；后者先 unlink
+悬空软链，再从叶子目录向上 rmdir，到 wt_root 为止，遇到非空目录就停。remove() 新增 force_branch
+参数，delete_branch 时只处理以 branch_prefix 开头的分支（adopt 进来的用户分支不碰），子模块使用各自的
+repo/base，返回值增加 branches 字段。Tree.rm/service.node_rm/daemon /nodes/rm/CLI node rm 增加
+drop_branches（CLI --drop-branches）。tests/test_core.py 新增
+test_rm_drop_worktrees_cleans_branches_and_dirs：用临时超级仓库和子仓库加一条转发软链，断言无自有提交
+的分支被删除、有自有提交的被保留、软链和空目录被清掉，--drop-branches 时强删。本次残留已用新代码路径清理
+（两边分支均为 deleted，featx-wt 已清空）。
+
+## 2026-10-12 17:05  compare 把成功的运行报成 missing，没有原因
+
+问题与解决方案总结:
+featx compare wpe/overlay/smoke/20261012-3 overlay-0928 把 -3 的唯一点 bzip2_chicken_51_0.182998 报为
+missing，但这个任务是 succeeded。排查发现该运行是 W=1000000 I=300000（基础设施重试测试时故意缩短），
+运行在 30 万条指令处就以 EXCEEDING 结束，预热还没结束，simulator_err.txt 里只有一个 PERF 块
+（time=376161，34638 行）。perf-keys 默认取第 2 块（正式窗口），所以确实没有数据，比较结果本身是对的，
+只是报告不说明原因，看上去像收集出错；另外没有公共点时还会打印 "mean|err| 0.00%"，容易被误读成零误差。
+修复方案：missing 行写明原因（"N PERF block(s) < block" / "no PERF output" / "no cycles counter"），
+没有公共点时不再输出误差统计，改为提示一行。
+
+代码修改说明:
+featx/post/scripts/perf_keys.py：scan() 在块数不足时返回描述字符串而不是 None；main() 遇到字符串或缺
+cycles 时把原因写进 row["reason"]，points.csv 增加 reason 列，report.md 的 missing 单元格显示原因；
+others 非空且 common 为空时跳过 mean|err| 行，追加 "no point finished in every run"。

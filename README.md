@@ -1,0 +1,124 @@
+# featx — feature exploration & task scheduler
+
+Organizes experiments as a feature tree (`category/feature/subfeature`). The tree decides where
+worktrees, builds, runs, logs and results live. A single daemon (`featxd`) schedules
+build/run/post tasks across the cluster. An MCP server gives an LLM the same functions as the CLI:
+read context, submit, wait for failures, log the analysis, relaunch.
+
+- Code: `toolsets/featx` (Python 3.12, uv venv in `.venv`)
+- Data: `/nfs/share/gkc/featx` (`$FEATX_ROOT`)
+- Worktrees: `/nfs/home/gongkaichen/tracertl/featx-wt/<category>/<feature>/<sub>` (branch `featx/<path>`)
+
+## Install
+
+```bash
+cd toolsets/featx
+uv venv .venv && uv pip install --python .venv/bin/python -e . \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple
+export PATH=$PWD/.venv/bin:$PATH          # featx, featxd, featx-mcp
+featx daemon start                         # on node024 under runwatch (ssh if needed)
+claude mcp add featx -- $PWD/.venv/bin/featx-mcp
+```
+
+Optional watchdog (crontab):
+`*/5 * * * * /nfs/home/gongkaichen/tracertl/toolsets/featx/.venv/bin/featx daemon watchdog`.
+Jobs keep running while the daemon is down. On restart it re-adopts them from NFS state.
+
+## Layout
+
+```
+$FEATX_ROOT/
+  featx.yaml                 overrides of featx/defaults/featx.yaml (hosts, liveness, retry ...)
+  daemon.json                daemon host/port/pid/heartbeat (CLI + MCP discover it here)
+  baselines.yaml             named result roots (exec-0903, overlay-0928, ...)
+  bincache/<key>/emu         built or imported binaries (+ manifest.json)
+  events/inbox.jsonl         failure / retry / task_done / runset_done ... events
+  tasks/<id>.json            task state (written only by the daemon)
+  tree/<cat>/<feat>/<sub>/
+    node.yaml                id, hypothesis, verdict, evidence, git, moves
+    recipes/{build,run,post}.yaml   own layer; inherited + deep-merged from ancestors
+    scripts/                 helper scripts (${scripts}/name in recipes)
+    <YYYYMMDD-n>/            runset: experiment.yaml (provenance, recipe snapshot, bin),
+                             problem-analysis.log, bin/emu, build/, run/<point>/, post/<step>/
+```
+
+Runsets are sealed once all their tasks succeed. A rerun after a fix is a new derived runset
+(`task resubmit`). `node mv` moves dirs, worktrees and branches as a cascade, and leaves a forwarding
+symlink so old absolute paths keep resolving.
+
+## Typical loop
+
+```bash
+featx node add wpe/real/after -p -H "after-anchor pick lowers astar error" --worktree
+featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after suite=spec06-1.0
+featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [overlay-0928]}}
+featx submit wpe/real/after                      # build -> run -> post, new runset
+featx tree                                       # status/ETA per node
+featx ps ; featx eta ; featx logs <task> -j <point> -f
+featx events --wait 600                          # failure / retry / done
+featx log append wpe/real/after/20261012-1 -p "<problem>" -s "<fix>" -c "<code explanation>"
+featx task relaunch <task>                       # design failures need the log entry above
+featx result wpe/real/after/20261012-1
+featx node set wpe/real/after --verdict supported --evidence wpe/real/after/20261012-1
+```
+
+`--bin <file | bincache key | runset>` runs an existing binary without a build. Use
+`featx bin import <emu> -m label` to register one. `--point` picks points and
+`--set run.I=300000` overrides a recipe key.
+
+## Failure handling
+
+Every failed job is classified by `config/classify.yaml`.
+
+- **infra** (ssh 255, host down, OOM kill, stale heartbeat): retried automatically on another
+  host, at most `retry.max_infra_attempts` times. The scheduler kills the old attempt's leftover
+  processes (the whole session, including the emu under `timeout`). Each retry emits a `retry` event.
+- **design** (`TraceRTL Error at inst`, `Stuck`, `ABORT`, build `error:` ...): emits a `failure` event
+  with the signature and the last 80 log lines, plus `failure.json` in the job dir.
+  - `task relaunch` is refused until `problem-analysis.log` has an entry newer than the failure.
+  - Relaunches are limited by `retry.max_design_relaunches`. After that, a human must run
+    `featx task unblock`.
+
+## Post-processing plugins
+
+Manifests live in `featx/post/manifests/*.yaml`, or in `$FEATX_ROOT/plugins/` to extend without a
+code change. Each has a `cmd` template and default parameters (`with`), and must write
+`summary.json`. Built-in plugins:
+
+- `perf-keys`: formal-window IPC/counters vs baselines.
+- `collect`, `pair`, `diagnose`, `branch-mpki`: wrap `microarch/spec_trace_compare/03_analysis`.
+
+`featx compare <runset|baseline>...` runs `perf-keys` ad hoc.
+
+## MCP tools
+
+| Group | Tools |
+|---|---|
+| Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
+| Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `script_write`, `script_read`, `worktree_create` |
+| Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel` |
+| Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
+| Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |
+
+Expected errors (unknown node, refused relaunch, daemon down) come back to the model as tool
+errors with their message.
+
+## Storage
+
+`featx storage [--worktrees]` reports usage per node and for bincache.
+
+`featx gc [--build-dirs]` lists unreferenced bincache entries, trash and build dirs. It never
+touches anything referenced by an `experiment.yaml` or an active task. Pass `--apply` to delete.
+
+`featx node rm <node> -f` moves the subtree into `tree/.trash`. Add `--drop-worktrees` to also
+delete its worktrees (uncommitted diffs saved under `.trash/worktree-patches`), the featx branches
+that carry no commits beyond their base, old forwarding symlinks and empty dirs. Branches with their
+own commits are kept and reported unless you also pass `--drop-branches`.
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest -q -p no:cacheprovider    # tmp data root; fake emu via real featx-exec
+```
+
+Fixes found while building and verifying featx are recorded in `problem-analysis.log`.

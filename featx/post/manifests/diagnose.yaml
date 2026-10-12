@@ -1,0 +1,17 @@
+name: diagnose
+description: >-
+  diagnose_top_ipc_gaps.py: per-point TopDown reports for the N largest IPC gaps vs a
+  reference (ranking.csv, topdown_nodes.csv, summary.md, points/*.md).
+after: [collect]
+with:
+  trace: ${post.collect}/points.csv
+  reference: "@baseline(exec-0903)"
+  config: ${points_config}
+  suite: spec06
+  top_n: 10
+  repo_root: /nfs/home/gongkaichen/tracertl/OpenXiangshan
+cmd: |
+  ref=$(${python} ${scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ${python} ${tools}/diagnose_top_ipc_gaps.py --trace ${trace} --execution "$ref" --suite ${suite} \
+    -N ${top_n} -o ${out} --repo-root ${repo_root} > ${out}/diagnose.stdout
+  ${python} ${scripts}/csv_summary.py ${out}/ranking.csv ${out}/summary.json --prefix ranking

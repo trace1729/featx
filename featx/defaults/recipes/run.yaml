@@ -1,0 +1,30 @@
+# Run recipe defaults. executor: points (featx places every point) | perf_trigger
+executor: points
+emu: ${bin}                 # runset binary (build task output); or an absolute path
+W: 20000000
+I: 40000000
+args: ""                    # extra emu arguments
+env: {}                     # exported before the emu (e.g. TRACERTL_WP_MEM: future)
+trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+trace_file: ${trace_root}/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.trace.zstd
+dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+# Points: explicit names <bench>_<cp>_<weight>, a file with one per line, and/or a suite.
+points: []
+points_file: null
+suite: null                 # {config: <spec json>, benchmarks: [optional subset]}
+cores_per_point: 1
+mem_gb_per_point: 8
+timeout_hours: 72
+completion_marker: true     # rc 0 without a marker -> append "EXCEEDING CYCLE/INSTR LIMIT" (collector needs it)
+command: >-
+  ${emu} --no-diff --tracertl-file ${trace_file} -W ${W} -I ${I}
+  --dramsim3-outdir "$FX_TMP/dramsim3" --force-dump-result ${args}
+# executor: perf_trigger
+perf_trigger:
+  main: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr-after-anchor/1010/perf_trigger/main.py
+  gcpt_path: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+  json_path: null
+  emu_wrapper: null
+  servers: null             # comma list; null = featx picks the least-loaded hosts
+  n_servers: 6
+  threads: 1

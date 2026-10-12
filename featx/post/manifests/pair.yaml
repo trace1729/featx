@@ -1,0 +1,17 @@
+name: pair
+description: >-
+  compare_gsim_spec_points.py: pair this runset's collected points with a reference
+  (baseline name / point-dir root / collector dir; raw roots are collected once and cached
+  under $FEATX_ROOT/compare/collect-cache restricted to this runset's points).
+after: [collect]
+with:
+  trace: ${post.collect}/points.csv
+  reference: "@baseline(exec-0903)"
+  config: ${points_config}
+  suite: spec06
+  topdown_config: /nfs/home/gongkaichen/tracertl/OpenXiangshan/scripts/top-down/configs.py
+cmd: |
+  ref=$(${python} ${scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ${python} ${tools}/compare_gsim_spec_points.py --trace ${trace} --execution "$ref" --suite ${suite} \
+    -o ${out} --topdown-config ${topdown_config} > ${out}/compare.stdout
+summary_from: suite.json

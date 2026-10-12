@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# featx-exec <job-dir> <attempt>
+#
+# Runs <job-dir>/.fx/<attempt>/cmd.sh detached on whatever host it was started on and
+# records runwatch-style state in <job-dir>/.fx/<attempt>/ on NFS:
+#   host pid start heartbeat (epoch, rewritten every FX_HB_INTERVAL s) exit_code (atomic)
+# Output goes to the files named in .fx/<attempt>/stdout_name / stderr_name (relative to
+# the job dir; both default to "log"). Liveness is judged by the daemon from the
+# heartbeat, never from a local pid, so jobs on other hosts are not reported dead.
+# Started under setsid, so pid == process group id; `kill -- -<pid>` stops everything.
+
+set -u
+JD=$1
+ATT=$2
+FX="$JD/.fx/$ATT"
+HB_INTERVAL=${FX_HB_INTERVAL:-30}
+
+[[ -f "$FX/cmd.sh" ]] || { echo "featx-exec: missing $FX/cmd.sh" >&2; exit 2; }
+
+put() {  # atomic small-file write on NFS
+    printf '%s\n' "$2" > "$FX/.$1.$$" && mv -f "$FX/.$1.$$" "$FX/$1"
+}
+
+put host "$(hostname -s)"
+put pid "$$"
+put start "$(date +%s)"
+put heartbeat "$(date +%s)"
+
+(
+    while kill -0 $$ 2>/dev/null; do
+        sleep "$HB_INTERVAL"
+        put heartbeat "$(date +%s)"
+    done
+) &
+hb_pid=$!
+
+out_name=log
+err_name=log
+[[ -f "$FX/stdout_name" ]] && out_name=$(<"$FX/stdout_name")
+[[ -f "$FX/stderr_name" ]] && err_name=$(<"$FX/stderr_name")
+
+FX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/featx.XXXXXX")
+export FX_TMP FX_JOB_DIR="$JD" FX_ATTEMPT="$ATT" FX_DIR="$FX"
+
+cd "$JD" || { put exit_code 2; exit 2; }
+if [[ "$out_name" == "$err_name" ]]; then
+    bash "$FX/cmd.sh" >"$JD/$out_name" 2>&1 </dev/null
+else
+    bash "$FX/cmd.sh" >"$JD/$out_name" 2>"$JD/$err_name" </dev/null
+fi
+rc=$?
+
+rm -rf -- "$FX_TMP"
+put end "$(date +%s)"
+put exit_code "$rc"
+kill "$hb_pid" 2>/dev/null
+exit "$rc"

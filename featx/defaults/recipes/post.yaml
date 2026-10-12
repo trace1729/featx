@@ -1,0 +1,3 @@
+# Post-processing steps, keyed by step name (mergeable across the tree; `name: null` drops
+# an inherited step). Each: {plugin: <manifest name>, with: {...}, after: [step], baselines: [...]}
+steps: {}

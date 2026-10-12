@@ -1,0 +1,111 @@
+# Failure classification. Rules are tried in order against the tail of the job's
+# stdout/stderr (+ synthetic lines featx adds, e.g. "featx: heartbeat stale").
+#   class: infra  -> automatic retry on another host (max retry.max_infra_attempts)
+#   class: design -> no retry; a `failure` event is emitted for the LLM/human
+# `signature` is a template; {0},{1}.. are regex groups. Rules may restrict by task kind.
+# The first matching rule wins; unmatched nonzero exits fall back to `default`.
+rules:
+  # ---- infra ---------------------------------------------------------------
+  - name: heartbeat-stale
+    class: infra
+    regex: 'featx: heartbeat stale'
+    signature: 'heartbeat stale (host down / job killed)'
+  - name: launch-failed
+    class: infra
+    regex: 'featx: launch failed'
+    signature: 'launch failed'
+  - name: ssh-closed
+    class: infra
+    regex: '(Connection closed by UNKNOWN port|Connection reset by peer|ssh: connect to host \S+|kex_exchange_identification)'
+    signature: 'ssh: {0}'
+  - name: no-space
+    class: infra
+    regex: '(No space left on device|ENOSPC|Disk quota exceeded)'
+    signature: 'disk full: {0}'
+  - name: oom
+    class: infra
+    regex: '(Out of memory|Killed process|std::bad_alloc|Cannot allocate memory|MemoryError)'
+    signature: 'out of memory: {0}'
+  - name: stale-nfs
+    class: infra
+    regex: '(Stale file handle|Input/output error)'
+    signature: 'nfs: {0}'
+  - name: killed-signal
+    class: infra
+    rc: [137, 143]
+    unless_regex: '(ABORT at pc|TraceRTL Stuck|TraceRTL Error at inst|Assertion)'
+    signature: 'killed by signal (rc={rc})'
+
+  # ---- design (simulation) ------------------------------------------------
+  - name: timeout
+    class: design
+    rc: [124]
+    signature: 'timeout (timeout_hours exceeded)'
+  - name: featx-input
+    class: design
+    regex: 'featx: (trace file not found: \S+|emu not executable: \S+|artifact missing.{0,100}|patch failed.{0,160})'
+    signature: '{0}'
+  - name: tracertl-error
+    class: design
+    kinds: [run]
+    regex: 'TraceRTL Error at inst (\S+)'
+    signature: 'TraceRTL Error at inst {0}'
+  - name: tracertl-stuck
+    class: design
+    kinds: [run]
+    regex: 'TraceRTL Stuck at inst (\S+)'
+    signature: 'TraceRTL Stuck at inst {0}'
+  - name: chisel-assert
+    class: design
+    regex: 'Assertion failed at (\S+)'
+    signature: 'Assertion failed at {0}'
+  - name: c-assert
+    class: design
+    regex: "Assertion `(.{0,100})' failed"
+    signature: 'C assertion: {0}'
+  - name: abort-pc
+    class: design
+    kinds: [run]
+    regex: 'ABORT at pc = (0x[0-9a-f]+)'
+    signature: 'ABORT at pc = {0}'
+  - name: fatal
+    class: design
+    regex: 'FATAL: (.{0,120})'
+    signature: 'FATAL: {0}'
+  - name: segfault
+    class: design
+    regex: '(Segmentation fault|SIGSEGV|core dumped)'
+    signature: 'crash: {0}'
+  - name: no-marker
+    class: design
+    kinds: [run]
+    regex: 'featx: no completion marker'
+    signature: 'exited 0 without a completion marker (truncated run?)'
+
+  # ---- build ---------------------------------------------------------------
+  - name: scala-error
+    class: design
+    kinds: [build]
+    regex: '\[error\] (.{0,160})'
+    signature: 'scala: {0}'
+  - name: cxx-error
+    class: design
+    kinds: [build]
+    regex: '(\S+\.(?:cpp|cc|h|hpp|c|sv|v):\d+(?::\d+)?: (?:fatal )?error: .{0,140})'
+    signature: '{0}'
+  - name: make-error
+    class: design
+    kinds: [build]
+    regex: '(make(?:\[\d+\])?: \*\*\* .{0,140})'
+    signature: '{0}'
+
+  # ---- post ----------------------------------------------------------------
+  - name: py-traceback
+    class: design
+    kinds: [post]
+    regex: '^(\w+(?:Error|Exception): .{0,160})'
+    signature: '{0}'
+
+default:
+  class: design
+  signature: 'exit code {rc}'

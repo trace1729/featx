@@ -1,0 +1,14 @@
+name: branch-mpki
+description: >-
+  extract_branch_type_mpki.py: per-point branch-type MPKI, this runset vs a reference.
+after: [collect]
+with:
+  trace: ${post.collect}/points.csv
+  reference: "@baseline(exec-0903)"
+  config: ${points_config}
+  suite: spec06
+cmd: |
+  ref=$(${python} ${scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ${python} ${tools}/extract_branch_type_mpki.py --trace ${trace} --execution "$ref" --suite ${suite} \
+    -o ${out}/branch_type_mpki.csv
+  ${python} ${scripts}/csv_summary.py ${out}/branch_type_mpki.csv ${out}/summary.json --prefix mpki

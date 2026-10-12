@@ -1,0 +1,32 @@
+[project]
+name = "featx"
+version = "0.1.0"
+description = "Feature-exploration tree + cluster task scheduler for XiangShan/TraceRTL experiments"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "typer>=0.12",
+    "pydantic>=2.6",
+    "pyyaml>=6",
+    "httpx>=0.27",
+    "mcp>=2.0",
+]
+
+[project.scripts]
+featx = "featx.cli:main"
+featxd = "featx.sched.daemon:main"
+featx-mcp = "featx.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["featx*"]
+
+[tool.setuptools.package-data]
+featx = ["post/manifests/*.yaml", "post/scripts/*.py","defaults/*.yaml", "defaults/recipes/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

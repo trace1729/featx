@@ -1,0 +1,38 @@
+# Built-in defaults. Override any key in $FEATX_ROOT/featx.yaml (deep-merged).
+wt_root: /nfs/home/gongkaichen/tracertl/featx-wt
+util_dir: /nfs/home/gongkaichen/tracertl/toolsets/util
+analysis_dir: /nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis
+
+git:
+  repo: /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim
+  base: main
+  branch_prefix: featx/
+  # Submodules that get their own worktree+branch (code changes land there);
+  # every other submodule is shared via symlink (add-worktree-with-shared-submodules.sh).
+  submodule_worktrees: [TraceRTL]
+
+daemon:
+  host: node024
+  port: 8765
+  bind: 0.0.0.0
+  tick_seconds: 5
+
+# Hosts featx may place jobs on. Empty = util/codex_dispatch.py DEFAULT_HOSTS.
+hosts: []
+exclude_hosts: []
+
+placement:
+  probe_ttl: 60            # seconds a host probe stays valid
+  probe_timeout: 4
+  reserve_cores: 4         # never fill a host's last N cores
+  max_jobs_per_host: 96    # featx's own concurrent jobs per host
+  mem_reserve_gb: 32
+
+liveness:
+  heartbeat_interval: 30
+  dead_after: 180          # heartbeat unchanged this long (daemon clock) + no exit_code = dead
+  launch_grace: 120        # a job that never wrote fx/start within this window = launch failure
+
+retry:
+  max_infra_attempts: 3
+  max_design_relaunches: 3
