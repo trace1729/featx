@@ -66,6 +66,50 @@ featx node set wpe/real/after --verdict supported --evidence wpe/real/after/2026
 `featx bin import <emu> -m label` to register one. `--point` picks points and
 `--set run.I=300000` overrides a recipe key.
 
+## Web UI (leaderboard)
+
+featxd serves a React app at `/ui/` from the committed bundle `featx/web/dist`. Nodes need no
+node runtime. `featx ui` prints the URL, the tunnel command and the token location.
+
+```bash
+ssh -N -L 8765:node024:8765 <login-node>       # or a VS Code port forward of node024:8765
+# open http://localhost:8765/ui/ and paste the token from: cat ~/.config/featx/token
+```
+
+Pages:
+
+- **Leaderboard**: rank runsets by any post metric (`<step>.<summary key>`, default
+  `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
+  reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
+  only with "show incomplete" and are never ranked.
+- **Node**: hypothesis, verdict, evidence, recipes (own-layer editor and explain view), scripts,
+  worktree, runsets, submit form.
+- **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
+  problem log, cancel/relaunch/resubmit/unblock.
+- **Tasks**, **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
+  (`featx.yaml` editor, baselines, bin import).
+- In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
+
+Everything the UI does also has a CLI form:
+
+```bash
+featx leaderboard [--metric pk.self.ipc_geomean] [--class KEY] [--node wpe/] [--best] [--all]
+featx config show [user|defaults|effective] ; featx config set retry.max_infra_attempts=4 ; featx config edit
+featx node mv SRC DST [--parents] --dry-run
+featx preview <path under $FEATX_ROOT or the worktree root> [--tail N]
+```
+
+The matching MCP tools are `leaderboard` and `config_get`.
+
+Frontend development (Node ≥ 18):
+
+```bash
+cd featx/web && npm ci
+npm run dev        # Vite on :5173, proxies the API to $FEATX_DEV_API (default a dev featxd on 127.0.0.1:8766)
+npm test           # vitest
+npm run build      # tsc + vite -> featx/web/dist (commit it; a running featxd picks it up)
+```
+
 ## Failure handling
 
 Every failed job is classified by `config/classify.yaml`.

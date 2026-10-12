@@ -109,3 +109,70 @@ def util_dir() -> Path:
 def ensure_layout() -> None:
     for d in (tree_root(), tasks_dir(), events_path().parent, bincache_dir(), compare_dir()):
         d.mkdir(parents=True, exist_ok=True)
+
+
+# ------------------------------------------------------------- editing
+RESTART_KEYS = ("daemon",)   # read once when featxd starts
+
+
+def defaults() -> dict:
+    return yaml.safe_load((DEFAULTS_DIR / "featx.yaml").read_text()) or {}
+
+
+def user_layer_path() -> Path:
+    return root() / "featx.yaml"
+
+
+def validate_user_layer(data, schema=None, prefix: str = "") -> list[str]:
+    """The user layer may only override keys that exist in the defaults, with the same type
+    (int/float interchangeable; None deletes a key, see deep_merge)."""
+    schema = defaults() if schema is None else schema
+    if not isinstance(data, dict):
+        return [f"{prefix or 'top level'}: expected a mapping, got {type(data).__name__}"]
+    errors = []
+    for key, value in data.items():
+        path = f"{prefix}{key}"
+        if key not in schema:
+            errors.append(f"{path}: unknown key (known: {', '.join(sorted(schema))})")
+            continue
+        want = schema[key]
+        if value is None:
+            continue
+        if isinstance(want, dict):
+            errors += validate_user_layer(value, want, path + ".")
+        elif isinstance(want, bool) or isinstance(value, bool):
+            if not (isinstance(want, bool) and isinstance(value, bool)):
+                errors.append(f"{path}: expected {type(want).__name__}, got {type(value).__name__}")
+        elif isinstance(want, (int, float)):
+            if not isinstance(value, (int, float)):
+                errors.append(f"{path}: expected a number, got {type(value).__name__}")
+        elif not isinstance(value, type(want)):
+            errors.append(f"{path}: expected {type(want).__name__}, got {type(value).__name__}")
+    return errors
+
+
+def config_view() -> dict:
+    path = user_layer_path()
+    text = path.read_text() if path.is_file() else ""
+    return {"path": str(path), "user_text": text, "user": yaml.safe_load(text) or {} if text else {},
+            "defaults_text": (DEFAULTS_DIR / "featx.yaml").read_text(), "effective": settings(),
+            "restart_keys": list(RESTART_KEYS)}
+
+
+def write_user_layer(text: str) -> dict:
+    """Validate and replace $FEATX_ROOT/featx.yaml; returns the keys that need a daemon restart."""
+    from . import store
+    try:
+        data = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError as error:
+        raise ValueError(f"invalid YAML: {error}") from error
+    errors = validate_user_layer(data or {})
+    if errors:
+        raise ValueError("; ".join(errors))
+    before = settings()
+    store.atomic_write_text(user_layer_path(), text if text.endswith("\n") or not text else text + "\n")
+    reload_settings()
+    after = settings()
+    changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+    return {"path": str(user_layer_path()), "changed": changed,
+            "restart_needed": [k for k in changed if k in RESTART_KEYS]}

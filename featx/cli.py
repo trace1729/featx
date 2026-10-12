@@ -16,7 +16,7 @@ from typing import List, Optional
 import typer
 import yaml
 
-from . import config, service, store
+from . import config, files, leaderboard, service, store
 from .client import ApiError, Client, DaemonDown, daemon_alive, daemon_info
 from .sched.eta import fmt_duration
 from .tree import Tree, TreeError
@@ -31,9 +31,10 @@ log_app = typer.Typer(no_args_is_help=True, help="problem-analysis.log entries."
 base_app = typer.Typer(no_args_is_help=True, help="Named baselines (reference result roots).")
 bin_app = typer.Typer(no_args_is_help=True, help="Binary cache.")
 script_app = typer.Typer(no_args_is_help=True, help="Per-node helper scripts.")
+config_app = typer.Typer(no_args_is_help=True, help="featx.yaml (user layer over the package defaults).")
 for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_app), ("task", task_app),
                   ("daemon", daemon_app), ("log", log_app), ("baseline", base_app), ("bin", bin_app),
-                  ("script", script_app)):
+                  ("script", script_app), ("config", config_app)):
     app.add_typer(sub, name=name)
 
 KINDS = ("build", "run", "post")
@@ -66,7 +67,8 @@ def guarded(fn):
     def wrap(*a, **kw):
         try:
             return fn(*a, **kw)
-        except (TreeError, ApiError, DaemonDown, KeyError, ValueError, FileNotFoundError, TimeoutError) as error:
+        except (TreeError, ApiError, DaemonDown, KeyError, ValueError, FileNotFoundError, TimeoutError,
+                PermissionError) as error:
             fail(str(error).strip("'\""))
     return wrap
 
@@ -153,13 +155,15 @@ def node_set(ref: str, hypothesis: Optional[str] = typer.Option(None, "-H", "--h
 @node_app.command("mv")
 @guarded
 def node_mv(src: str, dst: str, parents: bool = typer.Option(False, "-p", "--parents"),
-            keep_branches: bool = typer.Option(False, help="do not rename featx/ branches")):
+            keep_branches: bool = typer.Option(False, help="do not rename featx/ branches"),
+            dry_run: bool = typer.Option(False, "-n", "--dry-run", help="run the checks and print the plan only")):
     """Cascade move: node dirs (+forwarding symlink), worktrees, branches. Refused while
     tasks under the subtree are active."""
     c = via_daemon()
-    body = {"src": src, "dst": dst, "parents": parents, "rename_branches": not keep_branches}
+    body = {"src": src, "dst": dst, "parents": parents, "rename_branches": not keep_branches,
+            "dry_run": dry_run}
     out(c.post("/nodes/mv", body, timeout=600) if c else
-        service.node_mv(src, dst, parents=parents, rename_branches=not keep_branches))
+        service.node_mv(src, dst, parents=parents, rename_branches=not keep_branches, dry_run=dry_run))
 
 
 @node_app.command("rm")
@@ -489,6 +493,119 @@ def compare(refs: List[str] = typer.Argument(..., help="baseline names or runset
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
     typer.echo((dst / "report.md").read_text())
     typer.secho(f"== {dst}", fg=typer.colors.BLUE, err=True)
+
+
+# ============================================================== leaderboard
+@app.command("leaderboard")
+@guarded
+def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric", help="<post step>.<summary key>"),
+                    cls: Optional[str] = typer.Option(None, "--class", help="comparability class key"),
+                    node: Optional[str] = typer.Option(None, "--node", help="subtree prefix"),
+                    order: Optional[str] = typer.Option(None, help="asc|desc (default by metric name)"),
+                    best: bool = typer.Option(False, "--best", help="best runset per node only"),
+                    all_: bool = typer.Option(False, "-a", "--all", help="include incomplete runsets"),
+                    as_json: bool = typer.Option(False, "--json")):
+    """Rank runsets by a post metric inside one comparability class (same reference, PERF
+    block, W, I and point set)."""
+    r = leaderboard.build(metric=metric, order=order, cls=cls, node=node, best_per_node=best,
+                          include_incomplete=all_)
+    if as_json:
+        out(r)
+        return
+    if not r["metric"]:
+        typer.echo("no post summaries yet")
+        return
+    typer.echo(f"metric {r['metric']} ({r['order']})")
+    for c in r["classes"]:
+        mark = "*" if c["key"] == r["class"] else " "
+        typer.echo(f" {mark} {c['label']}  [{c['complete_rows']}/{c['rows']} complete]  {c['key']}")
+    typer.echo("")
+    for row in r["rows"]:
+        rank = f"{row['rank']:>3d}" if row["rank"] else "  -"
+        pts = f"{row['common_points']}/{row['points']}" if row["points"] is not None else ""
+        flag = "" if row["complete"] else "  INCOMPLETE"
+        typer.echo(f"{rank}  {row['value']:>12.4f}  {row['runset']:40s} {pts:>7s}  "
+                   f"{row['verdict'] or '':10s} {row['purpose'] or ''}{flag}")
+    if not r["rows"]:
+        typer.echo("no complete runset in this class (use -a to list incomplete ones)")
+    others = [m["name"] for m in r["metrics"] if m["name"] != r["metric"]]
+    if others:
+        typer.echo("\nother metrics: " + ", ".join(others))
+
+
+# =================================================================== config
+@config_app.command("show")
+@guarded
+def config_show(layer: str = typer.Argument("effective", help="effective|user|defaults")):
+    v = config.config_view()
+    if layer == "effective":
+        typer.echo(yaml.safe_dump(v["effective"], sort_keys=False).rstrip())
+    elif layer in ("user", "defaults"):
+        typer.echo(f"# {v['path']}" if layer == "user" else "# package defaults")
+        typer.echo(v[f"{layer}_text"].rstrip())
+    else:
+        fail("layer must be effective, user or defaults")
+
+
+def _config_write(text: str) -> None:
+    c = via_daemon()
+    r = c.put("/config", {"text": text}) if c else config.write_user_layer(text)
+    out(r)
+    if r.get("restart_needed"):
+        typer.secho("restart featxd for: " + ", ".join(r["restart_needed"]), fg=typer.colors.YELLOW)
+
+
+@config_app.command("set")
+@guarded
+def config_set(pairs: List[str] = typer.Argument(..., help="key.sub=value ... (value parsed as YAML; "
+                                                 "'key=null' removes the override)")):
+    """Merge key=value pairs into the user layer ($FEATX_ROOT/featx.yaml)."""
+    merged = config.deep_merge(config.config_view()["user"], parse_kv(pairs))
+    _config_write(yaml.safe_dump(merged, sort_keys=False))
+
+
+@config_app.command("edit")
+@guarded
+def config_edit():
+    text = typer.edit(config.config_view()["user_text"] or "# overrides of the featx defaults\n",
+                      extension=".yaml")
+    if text is None:
+        typer.echo("unchanged")
+        return
+    _config_write(text)
+
+
+@app.command()
+@guarded
+def preview(path: str = typer.Argument(..., help="file or dir under the data/worktree roots "
+                                       "(relative = from $FEATX_ROOT)"),
+            tail: Optional[int] = typer.Option(None, "--tail", help="last N lines"),
+            skip_perf: bool = typer.Option(False, help="drop [PERF lines"),
+            depth: int = typer.Option(2, help="listing depth for a directory")):
+    """Preview a log/result file, or list a directory (what the UI file viewer shows)."""
+    if files.resolve(path).is_dir():
+        r = files.listing(path, depth=depth)
+        typer.echo(r["root"])
+        for f in r["files"]:
+            typer.echo(f"  {store.human_size(f['size']):>8s}  {f['path']}")
+        return
+    r = files.read(path, tail=tail, skip_perf=skip_perf)
+    typer.echo(r["text"])
+    if r["truncated"]:
+        typer.secho(f"[truncated: {store.human_size(r['size'])} total]", fg=typer.colors.YELLOW, err=True)
+
+
+@app.command()
+@guarded
+def ui():
+    """Print the web UI address and the tunnel command."""
+    info = daemon_info()
+    if not daemon_alive(info):
+        fail("featxd not running (featx daemon start)", 3)
+    host, port = info["host"], info["port"]
+    typer.echo(f"on the cluster:   http://{host}:{port}/ui/")
+    typer.echo(f"from a laptop:    ssh -N -L {port}:{host}:{port} <login-node>   then  http://localhost:{port}/ui/")
+    typer.echo(f"token:            cat {config.token_path()}")
 
 
 # ================================================================== storage

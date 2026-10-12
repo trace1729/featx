@@ -26,7 +26,8 @@ build-backend = "setuptools.build_meta"
 include = ["featx*"]
 
 [tool.setuptools.package-data]
-featx = ["post/manifests/*.yaml", "post/scripts/*.py","defaults/*.yaml", "defaults/recipes/*.yaml"]
+featx = ["post/manifests/*.yaml", "post/scripts/*.py","defaults/*.yaml", "defaults/recipes/*.yaml",
+         "web/dist/*", "web/dist/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

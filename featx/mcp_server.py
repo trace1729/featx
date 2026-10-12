@@ -16,7 +16,7 @@ import yaml
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import config, service
+from . import config, leaderboard as board, service
 from .client import ApiError, Client, DaemonDown
 from .post import plugins
 from .sched.scheduler import SchedError
@@ -47,7 +47,7 @@ server = MCPServer(name="featx", instructions=INSTRUCTIONS)
 # Expected failures (unknown node, refused relaunch, daemon down...) must reach the model with
 # their message; MCPServer hides the text of any other exception as an internal crash.
 USER_ERRORS = (TreeError, SchedError, ApiError, DaemonDown, KeyError, ValueError, FileNotFoundError,
-               TimeoutError)
+               TimeoutError, PermissionError)
 
 
 def tool(fn):
@@ -272,6 +272,25 @@ def storage_report() -> dict:
 def hosts() -> list:
     """Cluster placement view (free cores/memory, featx jobs per host)."""
     return _c().get("/hosts")
+
+
+@tool
+def leaderboard(metric: str | None = None, cls: str | None = None, node: str | None = None,
+                best_per_node: bool = False, include_incomplete: bool = False) -> dict:
+    """Rank runsets by a post metric ("<step>.<summary key>", default IPC mean|err|). Only
+    runsets in one comparability class (same reference, PERF block, W, I, point set) are ranked
+    together; `classes` lists the others, `metrics` the available metric names."""
+    return board.build(metric=metric, cls=cls, node=node, best_per_node=best_per_node,
+                       include_incomplete=include_incomplete)
+
+
+@tool
+def config_get() -> dict:
+    """featx settings: package defaults, the user layer ($FEATX_ROOT/featx.yaml) and the
+    effective merge."""
+    v = config.config_view()
+    return {"path": v["path"], "user": v["user"], "effective": v["effective"],
+            "restart_keys": v["restart_keys"]}
 
 
 def main() -> None:

@@ -63,3 +63,6 @@ class Client:
 
     def post(self, path: str, body: dict | None = None, timeout: float | None = None):
         return self._do("POST", path, json=body or {}, timeout=timeout)
+
+    def put(self, path: str, body: dict | None = None, timeout: float | None = None):
+        return self._do("PUT", path, json=body or {}, timeout=timeout)

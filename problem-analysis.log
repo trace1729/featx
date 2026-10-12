@@ -136,3 +136,25 @@ missing，但这个任务是 succeeded。排查发现该运行是 W=1000000 I=30
 featx/post/scripts/perf_keys.py：scan() 在块数不足时返回描述字符串而不是 None；main() 遇到字符串或缺
 cycles 时把原因写进 row["reason"]，points.csv 增加 reason 列，report.md 的 missing 单元格显示原因；
 others 非空且 common 为空时跳过 mean|err| 行，追加 "no point finished in every run"。
+
+## 2026-10-12 19:02  UI 删除节点后结果对话框消失、移动/删除后旧路径请求 400
+
+问题与解决方案总结:
+在 dev daemon 上做 Playwright 端到端测试时，节点页 Remove… 输入路径确认后，本应显示的 "Removed" 结果
+对话框没有出现，页面变成错误框；移动和删除之后浏览器还会对旧路径发出 /nodes/context 请求并得到 400。
+原因：两个对话框都是先调用 refresh()（使 tree/node/leaderboard/storage 查询失效并重取），再跳转。
+被删除节点的 ["node", path] 查询被重取，后端对不存在的节点返回 400，NodePage 渲染 ErrorBox，
+连带卸载了挂在它下面的 RemoveDialog，所以结果永远显示不出来。移动时，路由切换是 transition，旧页面
+在失效期间仍挂载，于是也对旧路径重取一次。修复方案：先跳转（删除跳到父节点，移动跳到新路径），
+再刷新；刷新时把已不存在路径（及其子路径）的 node 查询直接移除，并从失效范围中排除，不再重取；
+删除结果改为通过路由 state 在父节点页显示提示条。修复后 e2e 中两类 400 都消失，删除后 URL 为父节点，
+提示 "Removed dev/moved"。
+
+代码修改说明:
+featx/web/src/components/NodeDialogs.tsx：useRefreshTree() 返回的函数接受可选的 gone 路径，
+isGone() 判断 queryKey 为 ["node", p] 且 p 等于 gone 或以 gone/ 开头；先 qc.removeQueries 删掉这些
+缓存，再对 tree/node/leaderboard/storage 做 invalidateQueries，并用 predicate 排除 gone 查询。
+MoveDialog 的 apply 改为 post /nodes/mv → onDone(dst) → refresh(src)；RemoveDialog 去掉了内部的结果
+对话框，onDone 改为接收 rm 的返回值，顺序为 post /nodes/rm → onDone(r) → refresh(path)。
+featx/web/src/pages/Node.tsx：Remove 的 onDone 跳到父节点（顶层节点则跳到 /leaderboard），并带
+state.notice；NodePage 读取 useLocation().state.notice，用 okbox 显示。

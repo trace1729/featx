@@ -93,6 +93,31 @@ def _sub_worktree(repo: str, base: str, wt: Path, sub: str, branch: str, sub_bas
     return SubWorktree(repo=str(sub_repo), base=sub_base, branch=branch, path=str(dst))
 
 
+def plan_relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> dict:
+    """What relocate() would do, without doing it (node mv --dry-run)."""
+    git = node.git
+    assert git is not None
+    rec: dict = {}
+    old = Path(git.worktree)
+    if _at_default(old) and old.is_dir() and not old.is_symlink():
+        new = default_path(rel_new)
+        rec["worktree"] = {"from": str(old), "to": str(new)}
+        if new.exists() and not new.is_symlink():
+            rec["error"] = f"worktree destination exists: {new}"
+    else:
+        rec["worktree_kept"] = str(old)
+    prefix = config.settings()["git"].get("branch_prefix", "featx/")
+    new_branch = default_branch(rel_new)
+    if rename_branch and git.branch.startswith(prefix) and git.branch != new_branch:
+        rec["branch"] = {"from": git.branch, "to": new_branch,
+                         "submodules": [n for n, s in git.submodule_worktrees.items() if s.branch.startswith(prefix)]}
+    return rec
+
+
+def _at_default(path: Path) -> bool:
+    return path.parent == config.wt_root() or str(path).startswith(str(config.wt_root()) + "/")
+
+
 def relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> dict:
     """Called by Tree.mv. Moves the worktree dir if it lives at the default location for
     the old path, then `git worktree repair` (git refuses `worktree move` for worktrees
@@ -101,8 +126,7 @@ def relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> dict:
     assert git is not None
     rec: dict = {}
     old = Path(git.worktree)
-    old_default = old.parent == config.wt_root() or str(old).startswith(str(config.wt_root()) + "/")
-    if old_default and old.is_dir() and not old.is_symlink():
+    if _at_default(old) and old.is_dir() and not old.is_symlink():
         new = default_path(rel_new)
         if new.exists() or new.is_symlink():
             if new.is_symlink():

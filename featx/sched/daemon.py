@@ -20,7 +20,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .. import config, service, store
+from .. import config, files, leaderboard, service, store
 from ..events import Inbox
 from ..tree import Tree, TreeError
 from .classify import tail_text
@@ -28,7 +28,7 @@ from .scheduler import Scheduler, SchedError
 
 try:
     from fastapi import Body, FastAPI, Request
-    from fastapi.responses import JSONResponse, PlainTextResponse
+    from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 except ImportError:  # pragma: no cover - nodes without the venv never import the daemon
     FastAPI = None
 
@@ -77,13 +77,19 @@ class Daemon:
             self.stop.wait(max(0.5, self.tick_seconds - (time.time() - t0)))
 
 
+UI_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+
+
 def build_app(d: Daemon) -> "FastAPI":
     app = FastAPI(title="featx", version="0.1")
     sched = d.sched
 
     @app.middleware("http")
     async def auth(request: Request, call_next):
-        if request.url.path not in ("/health",) and request.headers.get("x-featx-token") != d.token:
+        path = request.url.path
+        # the UI bundle is public (it holds no data); every API call it makes carries the token
+        public = path in ("/health", "/", "/ui") or path.startswith("/ui/")
+        if not public and request.headers.get("x-featx-token") != d.token:
             return JSONResponse({"error": "bad or missing X-Featx-Token"}, status_code=401)
         return await call_next(request)
 
@@ -92,6 +98,11 @@ def build_app(d: Daemon) -> "FastAPI":
 
     for exc in (TreeError, SchedError, KeyError, ValueError, FileNotFoundError, TimeoutError):
         app.add_exception_handler(exc, user_error)
+
+    async def forbidden(_request: Request, error: Exception):
+        return JSONResponse({"error": str(error), "type": type(error).__name__}, status_code=403)
+
+    app.add_exception_handler(PermissionError, forbidden)
 
     def locked(fn, *a, **kw):
         with sched.lock:
@@ -144,7 +155,7 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.post("/nodes/mv")
     def node_mv(body: dict = Body(...)):
         return locked(service.node_mv, body["src"], body["dst"], parents=body.get("parents", False),
-                      rename_branches=body.get("rename_branches", True))
+                      rename_branches=body.get("rename_branches", True), dry_run=body.get("dry_run", False))
 
     @app.post("/nodes/rm")
     def node_rm(body: dict = Body(...)):
@@ -285,6 +296,46 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.post("/bins/import")
     def bin_import(body: dict = Body(...)):
         return service.bin_import(body["path"], body.get("label", ""))
+
+    # -------------------------------------------- leaderboard / config / files
+    @app.get("/leaderboard")
+    def board(metric: str | None = None, order: str | None = None, cls: str | None = None,
+              node: str | None = None, best_per_node: bool = False, include_incomplete: bool = False):
+        return leaderboard.build(metric=metric, order=order, cls=cls, node=node,
+                                 best_per_node=best_per_node, include_incomplete=include_incomplete)
+
+    @app.get("/config")
+    def config_get():
+        return config.config_view()
+
+    @app.put("/config")
+    def config_put(body: dict = Body(...)):
+        return locked(config.write_user_layer, body["text"])
+
+    @app.get("/files")
+    def file_read(path: str, tail: int | None = None, max_bytes: int = 256 * 1024, skip_perf: bool = False):
+        return files.read(path, tail=tail, max_bytes=min(max_bytes, 4 * 1024 * 1024), skip_perf=skip_perf)
+
+    @app.get("/files/list")
+    def file_list(path: str, depth: int = 2):
+        return files.listing(path, depth=min(depth, 6))
+
+    # --------------------------------------------------------------- UI
+    @app.get("/")
+    def index():
+        return RedirectResponse("/ui/")
+
+    @app.get("/ui")
+    @app.get("/ui/{rest:path}")
+    def ui(rest: str = ""):
+        if not (UI_DIST / "index.html").is_file():
+            return PlainTextResponse("featx UI is not built (cd featx/web && npm ci && npm run build)",
+                                     status_code=503)
+        target = (UI_DIST / rest).resolve()
+        if rest and target.is_file() and str(target).startswith(str(UI_DIST) + os.sep):
+            return FileResponse(target)
+        # client-side routes (/ui/node/..., /ui/runset/...) all load the app shell
+        return FileResponse(UI_DIST / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 

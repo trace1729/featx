@@ -763,6 +763,8 @@ class Scheduler:
         prog = [j.progress for j in task.jobs if j.state == "running" and j.progress.get("inst")]
         if prog and task.spec.get("I"):
             out["progress_pct"] = round(100 * sum(p["inst"] for p in prog) / (len(prog) * int(task.spec["I"])), 1)
+        if task.kind == "run" and task.spec.get("I"):
+            out["target_inst"] = int(task.spec["I"])
         if task.kind == "run" and task.spec.get("executor") == "perf_trigger" and task.jobs:
             out["perf_trigger"] = task.jobs[0].progress
         if jobs:

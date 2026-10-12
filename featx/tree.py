@@ -249,9 +249,10 @@ class Tree:
     def _active_tasks(self, entries: list[Entry]):
         return taskstore.active_for_nodes({e.node.id for e in entries})
 
-    def mv(self, src_ref: str, dst_rel: str, *, parents: bool = False, rename_branches: bool = True) -> dict:
+    def mv(self, src_ref: str, dst_rel: str, *, parents: bool = False, rename_branches: bool = True,
+           dry_run: bool = False) -> dict:
         """Cascade move: tree dirs, worktrees, branches. Refuses while any task under the
-        subtree is queued/running."""
+        subtree is queued/running. dry_run runs the same checks and returns the plan only."""
         dst_rel = _check_rel(dst_rel)
         with store.file_lock(config.lock_path()):
             self.scan()
@@ -266,9 +267,14 @@ class Tree:
                 ids = ", ".join(f"{t.id[:10]}({t.kind}:{t.state})" for t in active)
                 raise TreeError(f"refusing to move: active tasks under {src.rel}: {ids}")
             dst_parent_rel = dst_rel.rsplit("/", 1)[0] if "/" in dst_rel else None
+            if dst_parent_rel and dst_parent_rel not in self.by_rel and not parents:
+                raise TreeError(f"destination parent {dst_parent_rel} does not exist (use --parents)")
+            new_dir = config.tree_root() / dst_rel
+            if new_dir.exists() and not new_dir.is_symlink():
+                raise TreeError(f"destination dir exists on disk: {new_dir}")
+            if dry_run:
+                return self._mv_plan(src, sub, dst_rel, dst_parent_rel, rename_branches)
             if dst_parent_rel and dst_parent_rel not in self.by_rel:
-                if not parents:
-                    raise TreeError(f"destination parent {dst_parent_rel} does not exist (use --parents)")
                 self._add_locked(dst_parent_rel, "", [], True, None)
             new_parent = self.by_rel.get(dst_parent_rel) if dst_parent_rel else None
 
@@ -276,8 +282,6 @@ class Tree:
             old_dir, new_dir = troot / src.rel, troot / dst_rel
             if new_dir.is_symlink():
                 new_dir.unlink()
-            if new_dir.exists():
-                raise TreeError(f"destination dir exists on disk: {new_dir}")
             new_dir.parent.mkdir(parents=True, exist_ok=True)
             os.rename(old_dir, new_dir)
             os.symlink(os.path.relpath(new_dir, old_dir.parent), old_dir)
@@ -307,6 +311,24 @@ class Tree:
             store.append_jsonl(config.root() / "tree-log.jsonl", {"time": now, "op": "mv", **report})
             self.scan()
             return report
+
+    def _mv_plan(self, src: Entry, sub: list[Entry], dst_rel: str, dst_parent_rel: str | None,
+                 rename_branches: bool) -> dict:
+        from . import worktree as wt
+        plan = {"dry_run": True, "from": src.rel, "to": dst_rel, "nodes": [], "create_parents": []}
+        if dst_parent_rel and dst_parent_rel not in self.by_rel:
+            parts = dst_parent_rel.split("/")
+            plan["create_parents"] = [p for p in ("/".join(parts[:i + 1]) for i in range(len(parts)))
+                                      if p not in self.by_rel]
+        for entry in sub:
+            rel_new = dst_rel + entry.rel[len(src.rel):]
+            rec = {"from": entry.rel, "to": rel_new,
+                   "kind": kind_for_depth(rel_new.count("/") + 1),
+                   "runsets": len(self.runsets(entry))}
+            if entry.node.git:
+                rec["git"] = wt.plan_relocate(entry.node, rel_new, rename_branch=rename_branches)
+            plan["nodes"].append(rec)
+        return plan
 
     def rm(self, ref: str, *, force: bool = False, drop_worktrees: bool = False,
            drop_branches: bool = False) -> dict:

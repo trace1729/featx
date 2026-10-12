@@ -96,8 +96,9 @@ def node_update(ref: str, **fields) -> dict:
     return context.node_summary(entry)
 
 
-def node_mv(src: str, dst: str, *, parents: bool = False, rename_branches: bool = True) -> dict:
-    return Tree().mv(src, dst, parents=parents, rename_branches=rename_branches)
+def node_mv(src: str, dst: str, *, parents: bool = False, rename_branches: bool = True,
+            dry_run: bool = False) -> dict:
+    return Tree().mv(src, dst, parents=parents, rename_branches=rename_branches, dry_run=dry_run)
 
 
 def node_rm(ref: str, *, force: bool = False, drop_worktrees: bool = False, drop_branches: bool = False) -> dict:
