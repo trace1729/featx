@@ -163,10 +163,20 @@ def bincache_store(key: str, artifact: Path, manifest: dict) -> Path:
     return entry / "emu"
 
 
-def import_binary(path: Path, label: str = "") -> tuple[str, Path]:
-    """Register an existing emu (e.g. a hand-built 0928 binary) in the bincache; key = file sha."""
+def import_binary(path: Path, label: str = "", mode: str | None = None) -> tuple[str, Path]:
+    """Register an existing emu (e.g. a hand-built 0928 binary) in the bincache; key = file sha.
+    mode (trace|exec) is recorded so a run with --bin <key> follows it."""
     sha = file_sha256(path)
     key = "ext-" + sha[:16]
     if not bincache_lookup(key):
-        bincache_store(key, path, {"key": key, "imported_from": str(path), "label": label})
+        meta = {"key": key, "imported_from": str(path), "label": label}
+        if mode:
+            meta["mode"] = mode
+        bincache_store(key, path, meta)
+    elif mode:
+        mpath = bincache_entry(key) / "manifest.json"
+        manifest = store.read_json(mpath, {})
+        if manifest.get("mode") != mode:
+            manifest["mode"] = mode
+            store.write_json(mpath, manifest)
     return key, bincache_entry(key) / "emu"

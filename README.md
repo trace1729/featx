@@ -50,7 +50,7 @@ symlink so old absolute paths keep resolving.
 
 ```bash
 featx node add wpe/real/after -p -H "after-anchor pick lowers astar error" --worktree
-featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after suite=spec06-1.0
+featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after workload=spec06
 featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [overlay-0928]}}
 featx submit wpe/real/after                      # build -> run -> post, new runset
 featx tree                                       # status/ETA per node
@@ -63,8 +63,33 @@ featx node set wpe/real/after --verdict supported --evidence wpe/real/after/2026
 ```
 
 `--bin <file | bincache key | runset>` runs an existing binary without a build. Use
-`featx bin import <emu> -m label` to register one. `--point` picks points and
+`featx bin import <emu> -m label --mode trace|exec` to register one. `--point` picks points and
 `--set run.I=300000` overrides a recipe key.
+
+## Reference and presets
+
+`docs/reference.md` documents recipe keys, variables, point selection, reference forms and every
+post plugin's parameters, outputs and dependencies. The same text is available as:
+
+- `featx help` (topic list) and `featx help <topic|plugin|all>` on the CLI;
+- the `docs` MCP tool;
+- the **Docs** page of the web UI.
+
+Its plugin section is generated from the manifests: run `python -m featx.docs` after editing
+one (a test fails when it is stale).
+
+The common knobs are a few recipe keys (`featx help build`, `featx help run`):
+
+```bash
+featx submit N build --set build.tool=verilator              # gsim (default) | verilator | script
+featx submit N build run --set build.mode=exec               # trace (default) | exec; the run follows the build
+featx submit N build --set build.options.chiseldb=true       # also chiselmap, constantin, threads, flags ...
+featx recipe set N run workload=spec17 'benchmarks=[mcf]'  # spec06 | spec17 | spec26 (all points by default)
+featx submit N run --bin <emu> --point mcf_165900000000_0.031476 --set run.W=100000 --set run.I=200000
+```
+
+Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`,
+`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`).
 
 ## Web UI (leaderboard)
 
@@ -87,7 +112,7 @@ Pages:
 - **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
   problem log, cancel/relaunch/resubmit/unblock.
 - **Tasks**, **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
-  (`featx.yaml` editor, baselines, bin import).
+  (`featx.yaml` editor, baselines, bin import), **Docs** (`docs/reference.md` by topic).
 - In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
 
 Everything the UI does also has a CLI form:
@@ -160,7 +185,7 @@ hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
 | Group | Tools |
 |---|---|
 | Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
-| Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `script_write`, `script_read`, `worktree_create` |
+| Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `docs`, `script_write`, `script_read`, `worktree_create` |
 | Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel` |
 | Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
 | Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |

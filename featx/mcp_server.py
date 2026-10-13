@@ -16,7 +16,7 @@ import yaml
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import config, leaderboard as board, service
+from . import config, docs as featx_docs, leaderboard as board, service
 from .client import ApiError, Client, DaemonDown
 from .post import plugins
 from .sched.scheduler import SchedError
@@ -131,8 +131,8 @@ def recipe_get(node: str, kind: str, effective: bool = True, explain: bool = Fal
 @tool
 def recipe_set(node: str, kind: str, yaml_text: str, merge: bool = True) -> dict:
     """Write the node's own recipe layer from YAML. merge=True deep-merges into the existing layer,
-    False replaces it. Variables: ${worktree} ${node} ${runset_dir} ${point} ${W} ${I} ...;
-    post steps reference plugins (see plugins_list)."""
+    False replaces it. Keys, variables and point selection: docs("build"|"run"|"post"|
+    "variables"|"points"); post steps reference plugins (see plugins_list)."""
     data = yaml.safe_load(yaml_text) or {}
     return service.recipe_set(node, kind, data, merge=merge)
 
@@ -142,6 +142,16 @@ def plugins_list() -> dict:
     """Post-processing plugins with their manifest (cmd template, default params, outputs).
     Add new ones as YAML under $FEATX_ROOT/plugins/."""
     return plugins.available()
+
+
+@tool
+def docs(topic: str | None = None) -> Any:
+    """featx reference (docs/reference.md). No topic: the topic list. A topic (concepts, launch,
+    recipes, build, run, points, workloads, post, variables, references, plugins, worktrees,
+    baselines, a plugin name, or "all"): its Markdown."""
+    if not topic:
+        return featx_docs.index()
+    return featx_docs.topic(topic)
 
 
 @tool

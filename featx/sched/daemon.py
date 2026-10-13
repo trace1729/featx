@@ -20,7 +20,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from .. import config, files, leaderboard, service, store
+from .. import config, docs, files, leaderboard, service, store
 from ..events import Inbox
 from ..tree import Tree, TreeError
 from .classify import tail_text
@@ -295,7 +295,25 @@ def build_app(d: Daemon) -> "FastAPI":
 
     @app.post("/bins/import")
     def bin_import(body: dict = Body(...)):
-        return service.bin_import(body["path"], body.get("label", ""))
+        return service.bin_import(body["path"], body.get("label", ""), body.get("mode"))
+
+    @app.delete("/baselines/{name}")
+    def baseline_rm(name: str, force: bool = False):
+        return service.baseline_rm(name, force=force)
+
+    @app.get("/plugins")
+    def plugins_list():
+        from ..post import plugins
+        return plugins.available()
+
+    # /help, not /docs: that is FastAPI's own API page
+    @app.get("/help")
+    def docs_index():
+        return docs.index()
+
+    @app.get("/help/{topic}")
+    def docs_topic(topic: str):
+        return {"topic": topic, "text": docs.topic(topic)}
 
     # -------------------------------------------- leaderboard / config / files
     @app.get("/leaderboard")

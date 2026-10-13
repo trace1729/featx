@@ -16,7 +16,7 @@ from typing import List, Optional
 import typer
 import yaml
 
-from . import config, files, leaderboard, service, store
+from . import config, docs, files, leaderboard, service, store
 from .client import ApiError, Client, DaemonDown, daemon_alive, daemon_info
 from .sched.eta import fmt_duration
 from .tree import Tree, TreeError
@@ -32,9 +32,10 @@ base_app = typer.Typer(no_args_is_help=True, help="Named baselines (reference re
 bin_app = typer.Typer(no_args_is_help=True, help="Binary cache.")
 script_app = typer.Typer(no_args_is_help=True, help="Per-node helper scripts.")
 config_app = typer.Typer(no_args_is_help=True, help="featx.yaml (user layer over the package defaults).")
+plugin_app = typer.Typer(no_args_is_help=True, help="Post-processing plugins (manifests).")
 for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_app), ("task", task_app),
                   ("daemon", daemon_app), ("log", log_app), ("baseline", base_app), ("bin", bin_app),
-                  ("script", script_app), ("config", config_app)):
+                  ("script", script_app), ("config", config_app), ("plugin", plugin_app)):
     app.add_typer(sub, name=name)
 
 KINDS = ("build", "run", "post")
@@ -663,16 +664,69 @@ def baseline_list():
 
 @base_app.command("add")
 @guarded
-def baseline_add(name: str, root: str, description: str = typer.Option("", "-m"),
-                 binary: Optional[str] = None, collected: Optional[str] = None):
+def baseline_add(name: str = typer.Argument(..., help="name used as @baseline(NAME) / in a baselines: list"),
+                 root: str = typer.Argument(..., help="result root: a dir of <bench>_<cp>_<weight> point dirs"),
+                 description: str = typer.Option("", "-m", help="one-line description (campaign, W/I, coverage)"),
+                 binary: Optional[str] = typer.Option(None, help="the emu that produced it "
+                                                                 "(provenance; gc keeps that bincache entry)"),
+                 collected: Optional[str] = typer.Option(None, help="its collect output dir "
+                                                                    "(@baseline(NAME).collected, used by pair/diagnose)")):
+    """Add or replace a named baseline (see `featx help baselines`)."""
     out(service.baseline_add(name, root, description, binary=binary, collected=collected))
+
+
+@base_app.command("rm")
+@guarded
+def baseline_rm(name: str, force: bool = typer.Option(False, "-f", "--force",
+                                                      help="remove even while workloads / post recipes name it")):
+    """Remove a named baseline (refused while a workload or a post recipe uses it)."""
+    out(service.baseline_rm(name, force=force))
 
 
 @bin_app.command("import")
 @guarded
-def bin_import(path: str, label: str = typer.Option("", "-m")):
+def bin_import(path: str, label: str = typer.Option("", "-m", help="free-text label"),
+               mode: Optional[str] = typer.Option(None, help="trace|exec: the binary's TRACERTL_MODE; "
+                                                             "a run with --bin <key> follows it")):
     """Register an existing emu binary in the bincache (use the key with submit --bin)."""
-    out(service.bin_import(path, label))
+    out(service.bin_import(path, label, mode))
+
+
+# ================================================================== plugins
+@plugin_app.command("list")
+@guarded
+def plugin_list():
+    """Installed post plugins (featx/post/manifests and $FEATX_ROOT/plugins)."""
+    from .post import plugins
+    for name, man in sorted(plugins.available().items()):
+        desc = " ".join(str(man.get("description") or "").split())
+        typer.echo(f"{name:14s} {desc[:100]}{'...' if len(desc) > 100 else ''}")
+
+
+@plugin_app.command("show")
+@guarded
+def plugin_show(name: str, raw: bool = typer.Option(False, "--raw", help="print the manifest YAML")):
+    """A plugin's parameters, dependencies and outputs (or its manifest with --raw)."""
+    from .post import plugins
+    man = plugins.get(name)
+    if raw:
+        out(Path(man["_path"]).read_text())
+    else:
+        out(docs.plugin_markdown({name: man}, level=2))
+
+
+# ===================================================================== help
+@app.command("help")
+@guarded
+def help_cmd(topic: Optional[str] = typer.Argument(None, help="topic, plugin name, or 'all'")):
+    """Reference docs (docs/reference.md): the topic list, or one topic."""
+    if not topic:
+        typer.echo("featx help <topic>   (docs/reference.md; also MCP `docs` and the UI Docs page)\n")
+        for t in docs.index()["topics"]:
+            typer.echo(f"  {t['topic']:12s} {t['title']}")
+        typer.echo("  <plugin>     one post plugin (featx plugin list)\n  all          everything")
+        return
+    out(docs.topic(topic))
 
 
 # =================================================================== daemon

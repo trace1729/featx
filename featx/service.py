@@ -230,8 +230,37 @@ def baseline_add(name: str, root: str, description: str = "", **extra) -> dict:
     return baselines.add(name, root, description, **extra)
 
 
-def bin_import(path: str, label: str = "") -> dict:
-    key, emu = provenance.import_binary(Path(path), label)
+def baseline_rm(name: str, force: bool = False) -> dict:
+    """Remove a baseline; refused while a recipe layer names it, unless forced."""
+    if name not in baselines.load():
+        raise TreeError(f"unknown baseline {name!r}")
+    users = baseline_users(name)
+    if users and not force:
+        raise TreeError(f"baseline {name} is used by {', '.join(users)}; change them first (workloads: featx config edit) or pass --force")
+    baselines.remove(name)
+    return {"removed": name, "used_by": users}
+
+
+def baseline_users(name: str) -> list[str]:
+    """Workloads whose reference it is, and recipe layers (root / node post recipes) that
+    mention it by name."""
+    import re
+    pat = re.compile(rf"@baseline\({re.escape(name)}\)|(^|[\s\[,'\"]){re.escape(name)}($|[\s\],'\"])", re.M)
+    tree = Tree()
+    out = [f"workload:{wl}" for wl, spec in (config.settings().get("workloads") or {}).items()
+           if (spec or {}).get("reference") == name]
+    layers = [("root", config.root() / "recipes" / "post.yaml")]
+    layers += [(e.rel, e.dir / "recipes" / "post.yaml") for e in tree.by_id.values()]
+    for label, path in layers:
+        if path.is_file() and pat.search(path.read_text()):
+            out.append(label)
+    return out
+
+
+def bin_import(path: str, label: str = "", mode: str | None = None) -> dict:
+    if mode not in (None, "trace", "exec"):
+        raise TreeError(f"--mode must be trace|exec, got {mode!r}")
+    key, emu = provenance.import_binary(Path(path), label, mode)
     return {"key": key, "emu": str(emu)}
 
 
