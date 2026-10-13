@@ -6,7 +6,7 @@ analysis_dir: /nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compa
 git:
   repo: /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim
   base: main
-  branch_prefix: featx/
+  branch_prefix: ""        # node worktree branch = <prefix><node path>, e.g. wpe/overlay/smoke
   # Submodules that get their own worktree+branch (code changes land there);
   # every other submodule is shared via symlink (add-worktree-with-shared-submodules.sh).
   submodule_worktrees: [TraceRTL]

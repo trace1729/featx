@@ -154,6 +154,18 @@ def worktree_create(ref: str, **kw) -> dict:
     return {"path": entry.rel, **entry.node.git.model_dump()}
 
 
+def worktree_rename_branch(ref: str, to: str | None = None, dry_run: bool = False) -> dict:
+    tree = Tree()
+    entry = tree.get(ref)
+    with store.file_lock(config.lock_path()):
+        tree.scan()
+        entry = tree.get(entry.node.id)
+        rec = worktree.rename_branch(entry.node, to or worktree.default_branch(entry.rel), dry_run=dry_run)
+        if not dry_run and not rec.get("unchanged"):
+            tree.save(entry)
+    return rec
+
+
 def worktree_status(ref: str) -> dict:
     entry = Tree().get(ref)
     if not entry.node.git:

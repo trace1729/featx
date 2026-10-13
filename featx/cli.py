@@ -155,7 +155,7 @@ def node_set(ref: str, hypothesis: Optional[str] = typer.Option(None, "-H", "--h
 @node_app.command("mv")
 @guarded
 def node_mv(src: str, dst: str, parents: bool = typer.Option(False, "-p", "--parents"),
-            keep_branches: bool = typer.Option(False, help="do not rename featx/ branches"),
+            keep_branches: bool = typer.Option(False, help="do not rename the featx-created branches"),
             dry_run: bool = typer.Option(False, "-n", "--dry-run", help="run the checks and print the plan only")):
     """Cascade move: node dirs (+forwarding symlink), worktrees, branches. Refused while
     tasks under the subtree are active."""
@@ -238,10 +238,21 @@ def worktree_create(ref: str, base: Optional[str] = None, branch: Optional[str] 
                     path: Optional[str] = None, repo: Optional[str] = None,
                     sub: List[str] = typer.Option(None, "--sub", help="submodule worktrees (default TraceRTL)"),
                     adopt: bool = typer.Option(False, help="register an existing worktree at --path")):
-    """Create the node worktree at <wt_root>/<node path> on branch featx/<node path>."""
+    """Create the node worktree at <wt_root>/<node path> on branch <node path>
+    (git.branch_prefix + path; refused when that name clashes with an existing branch — pass --branch)."""
     kw = {"base": base, "branch": branch, "path": path, "repo": repo, "submodules": sub or None, "adopt": adopt}
     c = via_daemon()
     out(c.post("/worktrees", {"ref": ref, **kw}, timeout=900) if c else service.worktree_create(ref, **kw))
+
+
+@wt_app.command("rename-branch")
+@guarded
+def worktree_rename_branch(ref: str, to: Optional[str] = typer.Option(None, help="new name (default: the "
+                                                                          "node path, git.branch_prefix + path)"),
+                           dry_run: bool = typer.Option(False, "--dry-run")):
+    """Rename the node's featx-created branch (and its submodule worktree branches), e.g. an
+    old featx/<path> branch to <path>. Adopted user branches are refused."""
+    out(service.worktree_rename_branch(ref, to, dry_run=dry_run))
 
 
 @wt_app.command("status")

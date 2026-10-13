@@ -31,6 +31,7 @@ class SubWorktree(BaseModel):
     base: str
     branch: str
     path: str
+    managed: bool | None = None   # featx created the branch (None = recorded before the field)
 
 
 class GitInfo(BaseModel):
@@ -39,6 +40,7 @@ class GitInfo(BaseModel):
     branch: str
     worktree: str
     submodule_worktrees: dict[str, SubWorktree] = Field(default_factory=dict)
+    managed: bool | None = None   # featx created the branch; adopted worktrees are False
 
 
 class Node(BaseModel):

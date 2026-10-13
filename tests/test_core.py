@@ -221,6 +221,40 @@ def test_rm_drop_worktrees_cleans_branches_and_dirs(root, tmp_path):
     assert rep["worktrees"][0]["branches"] == {str(sup): "absent", str(sub): "deleted"}
 
 
+def test_branch_naming_ownership_and_conflicts(root, tmp_path):
+    from featx import worktree
+    from featx.model import GitInfo
+    assert worktree.default_branch("wpe/overlay/smoke") == "wpe/overlay/smoke"
+    repo = tmp_path / "r"
+    _git("init", "-q", "-b", "main", str(repo))
+    _git("commit", "-q", "--allow-empty", "-m", "base", cwd=repo)
+    _git("branch", "wpe", cwd=repo)
+    _git("branch", "x/y/z", cwd=repo)
+    assert "already exists" in worktree.branch_conflict(str(repo), "main")
+    assert "branch wpe exists" in worktree.branch_conflict(str(repo), "wpe/overlay/smoke")
+    assert "branch x/y/z exists" in worktree.branch_conflict(str(repo), "x/y")
+    assert worktree.branch_conflict(str(repo), "x/q") is None
+    assert worktree.branch_conflict(str(repo), "wpe", ignore="wpe") is None
+    g = lambda **kw: GitInfo(repo=str(repo), base="main", worktree="/w", **kw)
+    assert worktree.managed(g(branch="featx/a"))                  # pre-`managed` record, old prefix
+    assert not worktree.managed(g(branch="trace-wpe-0910"))       # pre-`managed` adopted user branch
+    assert worktree.managed(g(branch="a/b", managed=True)) and not worktree.managed(g(branch="a/b", managed=False))
+    # a move whose new branch name clashes keeps the old branch instead of failing
+    e = Tree().add("wpe2", parents=True)
+    e.node.git = g(branch="featx/old", managed=None)
+    _git("branch", "featx/old", cwd=repo)
+    assert "branch_kept" in worktree.plan_relocate(e.node, "wpe/overlay")
+    assert worktree.plan_relocate(e.node, "fresh/name")["branch"]["to"] == "fresh/name"
+    # an old featx/<path> branch can be renamed to the current default (the node path)
+    store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+    assert service.worktree_rename_branch("wpe2", dry_run=True)["to"] == "wpe2"
+    assert service.worktree_rename_branch("wpe2") == {"from": "featx/old", "to": "wpe2", "submodules": []}
+    assert Tree().get("wpe2").node.git.branch == "wpe2" and Tree().get("wpe2").node.git.managed
+    assert worktree.branch_conflict(str(repo), "wpe2") is not None
+    with pytest.raises(TreeError, match="already exists"):
+        service.worktree_rename_branch("wpe2", to="main")
+
+
 def test_bincache_key_scripts_by_content(root, tmp_path):
     state = {"super": {"head": "abc"}}
     plain = {"type": "script", "script": "make"}

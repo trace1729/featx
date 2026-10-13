@@ -185,13 +185,13 @@ def test_mv_dry_run_matches_real_move(root, tmp_path):
         ("cat/feat", "other/renamed", "feature", 0), ("cat/feat/sub", "other/renamed/sub", "subfeature", 1)]
     git_plan = plan["nodes"][0]["git"]
     assert git_plan["worktree"]["to"] == str(config.wt_root() / "other" / "renamed")
-    assert git_plan["branch"]["to"] == "featx/other/renamed"
+    assert git_plan["branch"]["to"] == "other/renamed"
     # nothing moved, nothing renamed
     assert (_snapshot(config.tree_root()), _snapshot(config.wt_root())) == before
     assert "other" not in Tree().by_rel
     branches = subprocess.run(["git", "-C", str(repo), "branch", "--format=%(refname:short)"],
                               capture_output=True, text=True).stdout.split()
-    assert "featx/cat/feat" in branches and "featx/other/renamed" not in branches
+    assert "featx/cat/feat" in branches and "other/renamed" not in branches
 
     real = Tree().mv("cat/feat", "other/renamed", parents=True)
     assert [(n["from"], n["to"]) for n in real["nodes"]] == [(n["from"], n["to"]) for n in plan["nodes"]]

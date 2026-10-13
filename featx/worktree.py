@@ -1,4 +1,9 @@
-"""Worktrees follow the tree: <wt_root>/<node path>, branch featx/<node path>.
+"""Worktrees follow the tree: <wt_root>/<node path>, branch <git.branch_prefix><node path>
+(prefix "" by default, so node wpe/overlay/smoke works on branch wpe/overlay/smoke).
+
+Only branches featx created (`managed`) are renamed by `node mv` and deleted by
+`node rm --drop-worktrees`; adopted worktrees keep their user branch. Records written
+before `managed` existed count as featx's when they carry the old "featx/" prefix.
 
 Creation goes through util/add-worktree-with-shared-submodules.sh (submodules shared by
 symlink). Submodules listed in settings git.submodule_worktrees (default TraceRTL) are
@@ -18,8 +23,37 @@ from .model import GitInfo, Node, SubWorktree
 from .tree import Entry, Tree, TreeError, run_git
 
 
+LEGACY_PREFIX = "featx/"
+
+
 def default_branch(rel: str) -> str:
-    return config.settings()["git"].get("branch_prefix", "featx/") + rel
+    return (config.settings()["git"].get("branch_prefix") or "") + rel
+
+
+def managed(git) -> bool:
+    """Did featx create this (GitInfo / SubWorktree) branch?"""
+    if git.managed is not None:
+        return git.managed
+    prefix = config.settings()["git"].get("branch_prefix") or ""
+    return git.branch.startswith(LEGACY_PREFIX) or bool(prefix and git.branch.startswith(prefix))
+
+
+def branch_conflict(repo: str, branch: str, ignore: str | None = None) -> str | None:
+    """Why `branch` can't be created in repo: it exists, or a branch is a path prefix of it
+    (or under it) — git can't hold refs a and a/b at once."""
+    names = set(run_git(["-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                        check=False).split())
+    names.discard(ignore or "")
+    if branch in names:
+        return f"branch {branch} already exists in {repo}"
+    parts = branch.split("/")
+    for i in range(1, len(parts)):
+        if "/".join(parts[:i]) in names:
+            return f"branch {'/'.join(parts[:i])} exists in {repo}, so {branch} can't be created"
+    under = sorted(n for n in names if n.startswith(branch + "/"))
+    if under:
+        return f"branch {under[0]} exists in {repo}, so {branch} can't be created"
+    return None
 
 
 def default_path(rel: str) -> Path:
@@ -50,21 +84,26 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
         if not wt_path.is_dir():
             raise TreeError(f"adopt: {wt_path} does not exist")
         branch = run_git(["-C", str(wt_path), "rev-parse", "--abbrev-ref", "HEAD"])
-        info = GitInfo(repo=repo, base=base, branch=branch, worktree=str(wt_path))
+        info = GitInfo(repo=repo, base=base, branch=branch, worktree=str(wt_path), managed=False)
         for sub in submodules:
             sp = wt_path / sub
             if sp.is_dir() and not sp.is_symlink() and (sp / ".git").exists():
                 info.submodule_worktrees[sub] = SubWorktree(
                     repo=str(Path(repo) / sub), base=sub_base.get(sub, ""),
-                    branch=run_git(["-C", str(sp), "rev-parse", "--abbrev-ref", "HEAD"]), path=str(sp))
+                    branch=run_git(["-C", str(sp), "rev-parse", "--abbrev-ref", "HEAD"]), path=str(sp),
+                    managed=False)
     else:
+        for r in [repo] + [str(Path(repo) / s) for s in submodules]:
+            why = branch_conflict(r, branch) if (Path(r) / ".git").exists() else None
+            if why:
+                raise TreeError(f"{why}; pass --branch <name>")
         wt_path.parent.mkdir(parents=True, exist_ok=True)
         proc = subprocess.run(["bash", str(_script()), repo, base, branch, "--path", str(wt_path)],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
         if proc.returncode != 0:
             raise TreeError(f"add-worktree failed: {proc.stderr.strip() or proc.stdout.strip()}")
         created = Path(proc.stdout.strip().splitlines()[-1])
-        info = GitInfo(repo=repo, base=base, branch=branch, worktree=str(created))
+        info = GitInfo(repo=repo, base=base, branch=branch, worktree=str(created), managed=True)
         for sub in submodules:
             info.submodule_worktrees[sub] = _sub_worktree(repo, base, created, sub, branch, sub_base.get(sub))
 
@@ -90,7 +129,7 @@ def _sub_worktree(repo: str, base: str, wt: Path, sub: str, branch: str, sub_bas
     elif dst.is_dir() and not any(dst.iterdir()):
         dst.rmdir()
     run_git(["-C", str(sub_repo), "worktree", "add", "-b", branch, str(dst), sub_base])
-    return SubWorktree(repo=str(sub_repo), base=sub_base, branch=branch, path=str(dst))
+    return SubWorktree(repo=str(sub_repo), base=sub_base, branch=branch, path=str(dst), managed=True)
 
 
 def plan_relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> dict:
@@ -106,12 +145,24 @@ def plan_relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> di
             rec["error"] = f"worktree destination exists: {new}"
     else:
         rec["worktree_kept"] = str(old)
-    prefix = config.settings()["git"].get("branch_prefix", "featx/")
     new_branch = default_branch(rel_new)
-    if rename_branch and git.branch.startswith(prefix) and git.branch != new_branch:
-        rec["branch"] = {"from": git.branch, "to": new_branch,
-                         "submodules": [n for n, s in git.submodule_worktrees.items() if s.branch.startswith(prefix)]}
+    if rename_branch and managed(git) and git.branch != new_branch:
+        why = _rename_conflict(git, new_branch)
+        if why:
+            rec["branch_kept"] = f"{git.branch} ({why})"
+        else:
+            rec["branch"] = {"from": git.branch, "to": new_branch,
+                             "submodules": [n for n, s in git.submodule_worktrees.items() if managed(s)]}
     return rec
+
+
+def _rename_conflict(git, new_branch: str) -> str | None:
+    for repo, old in [(git.repo, git.branch)] + [(s.repo, s.branch) for s in git.submodule_worktrees.values()
+                                                 if managed(s)]:
+        why = branch_conflict(repo, new_branch, ignore=old)
+        if why:
+            return why
+    return None
 
 
 def _at_default(path: Path) -> bool:
@@ -143,18 +194,46 @@ def relocate(node: Node, rel_new: str, *, rename_branch: bool = True) -> dict:
             sub.path = str(sub_new)
         git.worktree = str(new)
         rec["worktree"] = {"from": str(old), "to": str(new)}
-    if rename_branch:
-        prefix = config.settings()["git"].get("branch_prefix", "featx/")
-        new_branch = default_branch(rel_new)
-        if git.branch.startswith(prefix) and git.branch != new_branch:
-            run_git(["-C", git.repo, "branch", "-m", git.branch, new_branch])
-            rec["branch"] = {"from": git.branch, "to": new_branch}
-            git.branch = new_branch
-            for sub in git.submodule_worktrees.values():
-                if sub.branch.startswith(prefix):
-                    run_git(["-C", sub.repo, "branch", "-m", sub.branch, new_branch])
-                    sub.branch = new_branch
+    new_branch = default_branch(rel_new)
+    if rename_branch and managed(git) and git.branch != new_branch:
+        why = _rename_conflict(git, new_branch)
+        if why:
+            # The move itself is fine; only the branch keeps its old name.
+            rec["branch_kept"] = f"{git.branch} ({why})"
+        else:
+            rec["branch"] = _rename(git, new_branch)
     return rec
+
+
+def _rename(git, new_branch: str) -> dict:
+    rec = {"from": git.branch, "to": new_branch, "submodules": []}
+    run_git(["-C", git.repo, "branch", "-m", git.branch, new_branch])
+    git.managed, git.branch = True, new_branch
+    for name, sub in git.submodule_worktrees.items():
+        if managed(sub):
+            run_git(["-C", sub.repo, "branch", "-m", sub.branch, new_branch])
+            sub.managed, sub.branch = True, new_branch
+            rec["submodules"].append(name)
+    return rec
+
+
+def rename_branch(node: Node, new_branch: str, *, dry_run: bool = False) -> dict:
+    """Rename a node's featx-created branch (superproject + managed submodule worktrees),
+    e.g. a pre-0.x featx/<path> branch to the current default name."""
+    git = node.git
+    if git is None:
+        raise TreeError(f"{node.name} has no worktree")
+    if not managed(git):
+        raise TreeError(f"branch {git.branch} was adopted, not created by featx; rename it with git")
+    if git.branch == new_branch:
+        return {"from": git.branch, "to": new_branch, "unchanged": True}
+    why = _rename_conflict(git, new_branch)
+    if why:
+        raise TreeError(why)
+    if dry_run:
+        return {"from": git.branch, "to": new_branch,
+                "submodules": [n for n, s in git.submodule_worktrees.items() if managed(s)]}
+    return _rename(git, new_branch)
 
 
 def _drop_branch(repo: str, branch: str, base: str, force: bool) -> str:
@@ -211,12 +290,11 @@ def remove(node: Node, delete_branch: bool = False, force_branch: bool = False) 
     for sub in git.submodule_worktrees.values():
         run_git(["-C", sub.repo, "worktree", "prune"], check=False)
     if delete_branch:
-        prefix = config.settings()["git"].get("branch_prefix", "featx/")
         branches = {}
-        if git.branch.startswith(prefix):     # adopted worktrees may sit on a user branch
+        if managed(git):     # adopted worktrees sit on a user branch: never deleted
             branches[git.repo] = _drop_branch(git.repo, git.branch, git.base, force_branch)
         for sub in git.submodule_worktrees.values():
-            if sub.branch.startswith(prefix):
+            if managed(sub):
                 branches[sub.repo] = _drop_branch(sub.repo, sub.branch, sub.base, force_branch)
         out["branches"] = branches
         old = [Path(m["git"]["worktree"]["from"]) for m in node.moves

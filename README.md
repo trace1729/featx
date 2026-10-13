@@ -7,7 +7,7 @@ read context, submit, wait for failures, log the analysis, relaunch.
 
 - Code: `toolsets/featx` (Python 3.12, uv venv in `.venv`)
 - Data: `/nfs/share/gkc/featx` (`$FEATX_ROOT`)
-- Worktrees: `/nfs/home/gongkaichen/tracertl/featx-wt/<category>/<feature>/<sub>` (branch `featx/<path>`)
+- Worktrees: `/nfs/home/gongkaichen/tracertl/featx-wt/<category>/<feature>/<sub>` (branch `<path>`, e.g. `wpe/overlay/smoke`; `git.branch_prefix` adds a prefix)
 
 ## Install
 

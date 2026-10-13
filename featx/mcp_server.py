@@ -97,7 +97,7 @@ def node_context(node: str, max_runsets: int = 3) -> dict:
 def node_create(path: str, hypothesis: str = "", tags: list[str] | None = None, parents: bool = True,
                 worktree: bool = False, base: str | None = None) -> dict:
     """Create a node at category/feature/subfeature (parents=True creates missing ancestors).
-    worktree=True also creates its git worktree (branch featx/<path>) from `base`."""
+    worktree=True also creates its git worktree (branch <path>) from `base`."""
     return service.node_add(path, hypothesis=hypothesis, tags=tags, parents=parents, worktree_create=worktree,
                             base=base)
 
