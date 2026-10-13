@@ -93,7 +93,7 @@ describe("App", () => {
   it("keeps a single node header when leaving the scripts tab", async () => {
     setToken("t0k");
     renderAt("/node/wpe?tab=scripts");
-    await screen.findByText(/recipes reach them/);
+    await screen.findByText(/Child nodes inherit them/);
     fireEvent.click(screen.getByRole("button", { name: "worktree" }));
     await screen.findByRole("button", { name: "Create worktree…" });
     expect(document.querySelectorAll(".crumbs").length).toBe(1);

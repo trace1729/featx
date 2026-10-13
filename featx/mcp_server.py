@@ -146,7 +146,8 @@ def plugins_list() -> dict:
 
 @tool
 def script_write(node: str, name: str, content: str, executable: bool = True) -> dict:
-    """Store a helper script under <node>/scripts/ (usable in recipes as ${scripts}/<name>)."""
+    """Store a helper script under <node>/scripts/. Build/run/post recipes call it as
+    ${scripts}/<name> (descendants inherit it; a post step can run it via `cmd:`)."""
     return service.script_write(node, name, content, executable)
 
 

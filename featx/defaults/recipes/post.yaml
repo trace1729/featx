@@ -1,3 +1,5 @@
 # Post-processing steps, keyed by step name (mergeable across the tree; `name: null` drops
 # an inherited step). Each: {plugin: <manifest name>, with: {...}, after: [step], baselines: [...]}
+# or an inline step: {cmd: <bash; must leave summary.json in ${out}>, with: {...}, after: [...]}
+# (${scripts}/NAME = the node's helper scripts, inherited from ancestors).
 steps: {}

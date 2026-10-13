@@ -103,6 +103,7 @@ class Scheduler:
                 rdir = entry.dir / rs.name
             else:
                 rs, rdir = tree.new_runset(entry, purpose=purpose, derived_from=derived_from)
+            recipes.snapshot_scripts(tree, entry, rdir)
             ctx = recipes.base_context(tree, entry, rdir, rs.name)
             emu_override = None
             if bin_ref and "run" in kinds:
@@ -204,7 +205,7 @@ class Scheduler:
             if not steps:
                 raise SchedError("post recipe has no steps")
             for name, st in steps.items():
-                plugins.get(st.get("plugin", name))
+                plugins.manifest(name, st)
 
     # ========================================================== materialize
     def _deps_state(self, task: Task) -> str:
@@ -233,9 +234,7 @@ class Scheduler:
         spec = task.spec
         if task.kind == "build":
             entry = tree.get(task.node_id)
-            state = provenance.worktree_state(spec["workdir"]) if (Path(spec["workdir"]) / ".git").exists() else {}
-            key = provenance.bincache_key(state, spec)
-            task.outputs["bincache_key"] = key
+            key = task.outputs["bincache_key"] = self._build_key(task, rdir)
             hit = provenance.bincache_lookup(key) if spec.get("cache", True) else None
             if hit:
                 task.outputs["emu"] = str(hit)
@@ -266,10 +265,16 @@ class Scheduler:
             steps = spec.get("steps") or {}
             task.jobs = []
             for name, st in steps.items():
-                plugins.get(st.get("plugin", name))
+                plugins.manifest(name, st)
                 task.jobs.append(Job(name=name, rel=f"post/{name}", cores=1, mem_gb=4, local=True,
                                      vars={"after": plugins.step_after(steps, name)}))
         task.state, task.started = "running", _now()
+
+    @staticmethod
+    def _build_key(task: Task, rdir: Path) -> str:
+        spec = task.spec
+        state = provenance.worktree_state(spec["workdir"]) if (Path(spec["workdir"]) / ".git").exists() else {}
+        return provenance.bincache_key(state, spec, rdir / "scripts")
 
     def _finish_build(self, tree: Tree, task: Task, emu: Path, cached: bool) -> None:
         entry = tree.get(task.node_id)
@@ -684,6 +689,11 @@ class Scheduler:
                                      f"(featx log append {self._rel(tree, task)}/{task.runset_name} ...)")
             if design or (task.state == "failed" and not task.jobs):
                 task.design_relaunches += 1
+            recipes.snapshot_scripts(tree, tree.get(task.node_id), rdir)
+            if task.kind == "build" and targets:
+                # The fix being relaunched (worktree edit or script) changes what gets built:
+                # store the new binary under its own key, not the failed source's key.
+                task.outputs["bincache_key"] = self._build_key(task, rdir)
             for job in targets:
                 job.state, job.failure, job.rc, job.host = "queued", None, None, None
             if not task.jobs:

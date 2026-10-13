@@ -11,7 +11,7 @@ with:
   top_n: 10
   repo_root: /nfs/home/gongkaichen/tracertl/OpenXiangshan
 cmd: |
-  ref=$(${python} ${scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
   ${python} ${tools}/diagnose_top_ipc_gaps.py --trace ${trace} --execution "$ref" --suite ${suite} \
     -N ${top_n} -o ${out} --repo-root ${repo_root} > ${out}/diagnose.stdout
-  ${python} ${scripts}/csv_summary.py ${out}/ranking.csv ${out}/summary.json --prefix ranking
+  ${python} ${plugin.scripts}/csv_summary.py ${out}/ranking.csv ${out}/summary.json --prefix ranking

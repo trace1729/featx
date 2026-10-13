@@ -111,10 +111,25 @@ def _strip_volatile(state: dict) -> dict:
             "submodules": {k: clean(v) for k, v in sorted(state.get("submodules", {}).items())}}
 
 
-def bincache_key(state: dict, build_recipe: dict) -> str:
+def scripts_sha(scripts_dir: Path) -> str:
+    h = hashlib.sha256()
+    for p in sorted(Path(scripts_dir).iterdir()) if Path(scripts_dir).is_dir() else []:
+        if p.is_file() and not p.name.startswith("."):
+            h.update(p.name.encode() + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()[:20]
+
+
+def bincache_key(state: dict, build_recipe: dict, scripts_dir: Path | None = None) -> str:
     recipe = {k: v for k, v in build_recipe.items()
               if k not in ("host", "cores", "mem_gb", "timeout_hours", "workdir", "cache")}
-    blob = json.dumps({"src": _strip_volatile(state), "recipe": recipe}, sort_keys=True, default=str)
+    key = {"src": _strip_volatile(state), "recipe": recipe}
+    # ${scripts} is a per-runset snapshot dir: key on the scripts' content, not that path, so
+    # identical builds still hit the cache. Builds that don't use ${scripts} keep their old key.
+    text = json.dumps(recipe, sort_keys=True, default=str)
+    if scripts_dir is not None and str(scripts_dir) in text:
+        key["recipe"] = json.loads(text.replace(str(scripts_dir), "${scripts}"))
+        key["scripts"] = scripts_sha(scripts_dir)
+    blob = json.dumps(key, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:20]
 
 

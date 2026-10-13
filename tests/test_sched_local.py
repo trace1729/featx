@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from featx import service, store
+from featx import recipes, service, store
 from featx.events import Inbox
 from featx.sched import executor
 from featx.sched.scheduler import SchedError, Scheduler
@@ -162,3 +162,78 @@ def test_heartbeat_death_infra_retry(root, fake_emu):
     st = executor.read_state(jdir, s.tasks[tid].jobs[0].attempt)
     assert executor.alive_on_host("localhost", st["pid"]) is False
     assert not session_procs(st["pid"])          # the emu went too
+
+
+def test_scripts_inherited_in_build_run_post(root, fake_emu, tmp_path):
+    """${scripts} = the runset's copy of inherited node scripts, in build, run and inline post steps."""
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"], steps={
+        "pk": {"plugin": "perf-keys", "baselines": []},      # built-in helpers moved to ${plugin.scripts}
+        "st": {"cmd": "bash ${scripts}/stats.sh ${out}", "after": ["pk"]},
+    })
+    (tmp_path / "wd").mkdir()
+    service.recipe_set("t/sched/x", "build", {"type": "script", "workdir": str(tmp_path / "wd"), "cores": 1,
+                                              "mem_gb": 1, "script": "bash ${scripts}/build.sh"})
+    recipes.patch_own(Tree().get("t/sched/x"), "run", {"args": "$(bash ${scripts}/args.sh)"})
+    # parent scripts reach the child; the child's own copy of a name wins
+    service.script_write("t/sched", "build.sh", f"mkdir -p build && cp {emu} build/emu\n")
+    service.script_write("t/sched", "stats.sh", 'echo \'{"value": 0}\' > "$1/summary.json"\n')
+    service.script_write("t/sched/x", "stats.sh", 'echo \'{"value": 1}\' > "$1/summary.json"\n')
+    service.script_write("t/sched/x", "args.sh", "echo --fake-flag\n")
+    s = sched()
+    res = s.submit("t/sched/x", ["build", "run", "post"])
+    rdir = Path(res["runset_dir"])
+    b_id, r_id, p_id = (t["id"] for t in res["tasks"])
+    assert s.tasks[b_id].spec["script"] == f"bash {rdir}/scripts/build.sh"
+    assert f"bash {rdir}/scripts/args.sh" in s.tasks[r_id].spec["command"]
+    assert sorted(p.name for p in (rdir / "scripts").iterdir()) == ["args.sh", "build.sh", "stats.sh"]
+    run_until(s, lambda: s.tasks[p_id].state in ("succeeded", "failed"))
+    for t in (b_id, r_id, p_id):
+        assert s.tasks[t].state == "succeeded", (s.tasks[t].failure, [j.failure for j in s.tasks[t].jobs])
+    post = service.result_get(res["runset"])["post"]
+    assert post["st"]["value"] == 1 and post["pk"]["self.finished"] == 1
+    assert not s.tasks[b_id].outputs.get("cache_hit")
+
+    # same scripts in another runset -> cache hit; edited build script -> new key
+    again = s.submit("t/sched/x", ["build"])
+    t2 = s.tasks[again["tasks"][0]["id"]]
+    run_until(s, lambda: t2.state in ("succeeded", "failed"))
+    assert t2.outputs.get("cache_hit") and t2.outputs["bincache_key"] == s.tasks[b_id].outputs["bincache_key"]
+    service.script_write("t/sched", "build.sh", f"# v2\nmkdir -p build && cp {emu} build/emu\n")
+    edited = s.submit("t/sched/x", ["build"])
+    t3 = s.tasks[edited["tasks"][0]["id"]]
+    s.tick()
+    assert t3.outputs["bincache_key"] != t2.outputs["bincache_key"] and not t3.outputs.get("cache_hit")
+    run_until(s, lambda: t3.state in ("succeeded", "failed"))
+
+
+def test_relaunch_refreshes_scripts_and_build_key(root, fake_emu, tmp_path):
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"], steps={"st": {"cmd": "bash ${scripts}/stats.sh ${out}"}})
+    (tmp_path / "wd").mkdir()
+    service.recipe_set("t/sched/x", "build", {"type": "script", "workdir": str(tmp_path / "wd"), "cores": 1,
+                                              "mem_gb": 1, "script": "bash ${scripts}/build.sh"})
+    service.script_write("t/sched/x", "build.sh", "echo 'foo.cpp:1:1: error: broken' >&2; exit 1\n")
+    service.script_write("t/sched/x", "stats.sh", "exit 1\n")
+    s = sched()
+    res = s.submit("t/sched/x", ["build"])
+    b = s.tasks[res["tasks"][0]["id"]]
+    run_until(s, lambda: b.state == "failed")
+    bad_key = b.outputs["bincache_key"]
+    service.script_write("t/sched/x", "build.sh", f"mkdir -p build && cp {emu} build/emu\n")
+    service.problem_log_append(res["runset"], problem="build.sh broken", solution="fixed it")
+    s.relaunch(b.id)
+    run_until(s, lambda: b.state in ("succeeded", "failed"))
+    assert b.state == "succeeded", [j.failure for j in b.jobs]
+    # the fixed binary is cached under the fixed scripts' key, never under the failed one
+    assert b.outputs["bincache_key"] != bad_key
+    assert Path(b.outputs["emu"]).parent.name == b.outputs["bincache_key"]
+
+    res = s.submit("t/sched/x", ["post"])
+    p = s.tasks[res["tasks"][0]["id"]]
+    run_until(s, lambda: p.state == "failed")
+    service.script_write("t/sched/x", "stats.sh", 'echo \'{"value": 2}\' > "$1/summary.json"\n')
+    service.problem_log_append(res["runset"], problem="stats.sh exit 1", solution="write summary")
+    s.relaunch(p.id)
+    run_until(s, lambda: p.state in ("succeeded", "failed"))
+    assert p.state == "succeeded" and service.result_get(res["runset"])["post"]["st"]["value"] == 2

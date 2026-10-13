@@ -11,7 +11,9 @@ syntax like ${HOME} or ${x%%=*} passes through untouched.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 from pathlib import Path
 
 import yaml
@@ -112,11 +114,42 @@ def base_context(tree: Tree, entry: Entry, runset_dir: Path | None = None, runse
         ctx["branch"] = entry.node.git.branch
         for name, sub in entry.node.git.submodule_worktrees.items():
             ctx[f"sub.{name}"] = sub.path
+    # Outside a runset ${scripts} is the node's own dir (previews); tasks get the snapshot.
+    ctx["scripts"] = str(entry.dir / "scripts")
     if runset_dir is not None:
         ctx["runset.dir"] = str(runset_dir)
         ctx["runset.name"] = runset_name or runset_dir.name
         ctx["bin"] = str(runset_dir / "bin" / "emu")
+        ctx["scripts"] = str(runset_dir / "scripts")
     return ctx
+
+
+def script_layers(tree: Tree, entry: Entry) -> list[Path]:
+    """Scripts dirs in inheritance order (root, ancestors, node); later wins per name."""
+    return [config.root() / "scripts"] + [e.dir / "scripts" for e in tree.ancestors(entry) + [entry]]
+
+
+def snapshot_scripts(tree: Tree, entry: Entry, runset_dir: Path) -> Path:
+    """Copy the inherited scripts into <runset>/scripts (${scripts} of the runset's tasks).
+
+    Called on submit and on relaunch, so a script fix is picked up like a worktree fix. Files
+    are replaced by rename: a job already running an old copy keeps reading it."""
+    dest = runset_dir / "scripts"
+    merged: dict[str, Path] = {}
+    for d in script_layers(tree, entry):
+        if d.is_dir():
+            for p in sorted(d.iterdir()):
+                if p.is_file():
+                    merged[p.name] = p
+    dest.mkdir(parents=True, exist_ok=True)
+    for stale in dest.iterdir():
+        if stale.is_file() and stale.name not in merged:
+            stale.unlink()
+    for name, src in merged.items():
+        tmp = dest / f".{name}.tmp"
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dest / name)
+    return dest
 
 
 def explain(tree: Tree, entry: Entry, kind: str) -> str:

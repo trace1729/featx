@@ -231,7 +231,11 @@ function ScriptsTab({ ctx }: { ctx: NodeContext }) {
     });
   return (
     <div>
-      <p className="muted small mono">{ctx.scripts_dir} · recipes reach them as ${"{scripts}"}/NAME</p>
+      <p className="muted small">
+        Saved in <span className="mono">{ctx.scripts_dir}</span>. Build, run and post recipes call them as{" "}
+        <span className="mono">{"${scripts}"}/NAME</span> (e.g. a post step <span className="mono">cmd: bash {"${scripts}"}/stats.sh {"${run} ${out}"}</span>).
+        Child nodes inherit them; each submit copies them into the runset.
+      </p>
       <div className="chips">
         {ctx.scripts.map((s) => (
           <button key={s} className={`chip ${s === sel ? "active" : ""}`} onClick={() => setSel(s)}>

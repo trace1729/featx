@@ -11,7 +11,7 @@ with:
   suite: spec06
   topdown_config: /nfs/home/gongkaichen/tracertl/OpenXiangshan/scripts/top-down/configs.py
 cmd: |
-  ref=$(${python} ${scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
   ${python} ${tools}/compare_gsim_spec_points.py --trace ${trace} --execution "$ref" --suite ${suite} \
     -o ${out} --topdown-config ${topdown_config} > ${out}/compare.stdout
 summary_from: suite.json

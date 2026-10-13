@@ -204,3 +204,34 @@ featx/web/src/pages/Node.tsx：Header 的 key 改为 `header:${ctx.node.id}`，S
 key（Runset.tsx 的 FileView/LogTail），均无兄弟冲突。featx/web/src/App.test.tsx：新增用例，打开节点的
 scripts 标签后切到 worktree，断言 .crumbs 只有 1 个；修复前该用例失败（expected 2 to be 1）并打印上述
 重复 key 警告，修复后通过且警告消失。
+
+## 2026-10-13 16:00  ${scripts} 在 build/run 中不展开、在 post 中指向错误目录；post 无法调用节点脚本；重启构建缓存键过期
+
+问题与解决方案总结:
+UI scripts 标签、README 和 MCP script_write 都说节点脚本在 recipe 里写作 ${scripts}/NAME，但实际上
+recipes.base_context 没有 scripts 变量：build/run recipe 里的 ${scripts} 原样留下，到 bash 时被当作未设置的
+shell 变量展开为空，命令变成 /NAME 而失败（用 smoke 节点代入验证：${scripts}/prep.sh 未展开，
+${node.dir}/scripts/prep.sh 正常）。post 中 ${scripts} 由 plugins.render 设为 featx/post/scripts（内置插件的
+辅助脚本），不是节点脚本；且 post 步骤只能引用插件清单，没有地方写自定义命令，节点脚本在 post 中完全不可用。
+另外 recipe 会继承，即使 ${scripts} 指向节点自己的目录，祖先 recipe 里引用的祖先脚本在子节点上也找不到。
+修复方案：每次提交时把根目录 scripts/、各祖先、节点自身的脚本按继承顺序（后者同名覆盖）复制到
+<runset>/scripts/，${scripts} 在 build/run/post 中都指向这份快照；重启（relaunch）时刷新快照，使脚本修复
+与 worktree 代码修复一样被重启拾取；内置插件辅助目录改名为 ${plugin.scripts}；post 步骤允许写内联 cmd:。
+快照路径每个 runset 不同，若直接进入构建缓存键会让引用脚本的构建永远不命中缓存，因此缓存键对脚本内容
+取哈希、把快照路径还原成 ${scripts}；不引用 ${scripts} 的构建键与原来完全相同，已有缓存继续有效。
+排查时发现一个已有问题：构建缓存键只在首次物化时计算，失败后修复代码再 relaunch，新二进制会以失败时
+源码状态的键存入 bincache（后续同一失败源码的构建会命中这个修复后的二进制）；改为 relaunch 构建时重算键。
+
+代码修改说明:
+featx/recipes.py：base_context 增加 scripts（有 runset 时为 <runset>/scripts，否则为节点自身目录）；新增
+script_layers 与 snapshot_scripts（按层合并、删除快照中已不存在的旧文件、先写临时文件再 os.replace，
+正在运行的旧副本不受影响）。featx/provenance.py：新增 scripts_sha；bincache_key 增加 scripts_dir 参数，
+仅当 recipe 文本中出现该路径时把它替换为 ${scripts} 并加入脚本内容哈希。featx/sched/scheduler.py：submit
+在创建/复用 runset 后调用 snapshot_scripts；新增 _build_key，物化构建时使用；relaunch 刷新快照，构建任务
+重算 bincache_key；post 校验与物化改用 plugins.manifest。featx/post/plugins.py：新增 manifest(step_name, step)，
+步骤含 cmd 时生成内联清单（与 plugin 同时出现则报错），step_after/render 使用它；render 中内置目录变量改为
+plugin.scripts，${scripts} 来自 base_context。post/manifests/*.yaml 中 ${scripts}/ 改为 ${plugin.scripts}/。
+UI 提示、README、MCP script_write 说明、defaults/recipes/post.yaml 注释同步更新。测试：继承脚本在 build/run/
+内联 post 中生效且子节点同名覆盖；同脚本跨 runset 命中缓存、改脚本后键变化；relaunch 后脚本修复生效、
+修复后的构建键不同于失败键（去掉重算时该用例失败）；快照分层与清理；bincache_key 不引用脚本时键不变。
+用新代码对生产 smoke 节点 20261012-2 渲染 perf-keys 步骤，无未展开变量，重跑结果与已存 summary.json 完全一致。

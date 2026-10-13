@@ -13,5 +13,5 @@ with:
   block: 2                     # PERF block (2 = formal window after warmup)
   keys: ""                     # optional YAML file with extra keys: [[name, module.suffix, counter], ...]
 cmd: |
-  ${python} ${scripts}/perf_keys.py --runs ${baselines} self=${self} --ref-first --points ${points} \
+  ${python} ${plugin.scripts}/perf_keys.py --runs ${baselines} self=${self} --ref-first --points ${points} \
     --block ${block} --keys "${keys}" -o ${out}

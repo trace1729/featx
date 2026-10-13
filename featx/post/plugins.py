@@ -8,10 +8,14 @@ Manifest (featx/post/manifests/<name>.yaml, overridable in $FEATX_ROOT/plugins/<
   cmd:     bash template; must leave summary.json (flat metrics) in ${out} — or name a
            JSON file with `summary_from:` that featx flattens into summary.json.
 
+A recipe step can also skip the manifest and give its own `cmd:` (plus optional `with:`,
+`after:`, `summary_from:`), e.g. to call a node helper script: cmd: bash ${scripts}/stats.sh ${run} ${out}
+
 Variables: everything from recipes.base_context plus
   ${out} step output dir, ${run} runset run dir (point dirs), ${points_config} collector JSON
   of this runset's points, ${post.<step>} other step dirs, ${python} interpreter for scripts,
-  ${scripts} featx/post/scripts, and every `with:` key.
+  ${plugin.scripts} featx/post/scripts (the built-in plugins' helpers), and every `with:` key.
+  ${scripts} is the runset's snapshot of the node's helper scripts, as in build/run.
 """
 
 from __future__ import annotations
@@ -64,11 +68,21 @@ def get(name: str) -> dict:
     return found
 
 
+def manifest(step_name: str, step: dict | None) -> dict:
+    """The manifest a recipe step runs: its own inline `cmd:` or the named plugin."""
+    step = step or {}
+    if step.get("cmd") is not None:
+        if step.get("plugin"):
+            raise ValueError(f"post step {step_name!r}: set either plugin or cmd, not both")
+        return {"name": step_name, "cmd": str(step["cmd"]), "summary_from": step.get("summary_from")}
+    return get(step.get("plugin", step_name))
+
+
 def step_after(steps: dict, name: str) -> list[str]:
     st = steps[name] or {}
     deps = st.get("after")
     if deps is None:
-        deps = get(st.get("plugin", name)).get("after") or []
+        deps = manifest(name, st).get("after") or []
     return [d for d in deps if d in steps and d != name]
 
 
@@ -99,7 +113,7 @@ def _labelled(ref) -> tuple[str, str]:
 def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Path) -> tuple[str, dict]:
     """Return (bash command, env) for one post step."""
     step = step or {}
-    man = get(step.get("plugin", step_name))
+    man = manifest(step_name, step)
     entry = tree.get(task.node_id)
     ctx = recipes.base_context(tree, entry, runset_dir, task.runset_name)
     ctx.update({
@@ -107,7 +121,7 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
         "run": str(runset_dir / "run"),
         "points_config": str(runset_dir / "run" / "points.json"),
         "python": "python3",
-        "scripts": str(SCRIPTS_DIR),
+        "plugin.scripts": str(SCRIPTS_DIR),
         "step": step_name,
     })
     for name in (task.spec.get("steps") or {}):

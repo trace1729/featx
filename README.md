@@ -39,7 +39,7 @@ $FEATX_ROOT/
     recipes/{build,run,post}.yaml   own layer; inherited + deep-merged from ancestors
     scripts/                 helper scripts (${scripts}/name in recipes)
     <YYYYMMDD-n>/            runset: experiment.yaml (provenance, recipe snapshot, bin),
-                             problem-analysis.log, bin/emu, build/, run/<point>/, post/<step>/
+                             problem-analysis.log, bin/emu, scripts/, build/, run/<point>/, post/<step>/
 ```
 
 Runsets are sealed once all their tasks succeed. A rerun after a fix is a new derived runset
@@ -133,6 +133,27 @@ code change. Each has a `cmd` template and default parameters (`with`), and must
 - `collect`, `pair`, `diagnose`, `branch-mpki`: wrap `microarch/spec_trace_compare/03_analysis`.
 
 `featx compare <runset|baseline>...` runs `perf-keys` ad hoc.
+
+A step can also run its own command instead of a plugin, for example to call a node script:
+
+```yaml
+steps:
+  stats: {cmd: "bash ${scripts}/stats.sh ${run} ${out}", after: [pk]}   # must leave ${out}/summary.json
+```
+
+## Helper scripts
+
+Scripts saved on a node (UI scripts tab, `featx script write`, MCP `script_write`) live in
+`<node>/scripts/`. They are inherited like recipes: on submit, featx copies `$FEATX_ROOT/scripts`,
+then each ancestor's scripts, then the node's own into `<runset>/scripts/` (a later layer wins
+on a name clash). `${scripts}` in build, run and post recipes is that copy. So:
+
+- an inherited recipe still finds its parent's script;
+- the runset keeps the exact scripts it ran;
+- a relaunch refreshes the copy, so a script fix is picked up like a worktree fix.
+
+A build that uses `${scripts}` is cached by the scripts' content, so an unchanged rebuild still
+hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
 
 ## MCP tools
 

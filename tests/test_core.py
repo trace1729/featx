@@ -219,3 +219,41 @@ def test_rm_drop_worktrees_cleans_branches_and_dirs(root, tmp_path):
     store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
     rep = service.node_rm("b", force=True, drop_worktrees=True, drop_branches=True)
     assert rep["worktrees"][0]["branches"] == {str(sup): "absent", str(sub): "deleted"}
+
+
+def test_bincache_key_scripts_by_content(root, tmp_path):
+    state = {"super": {"head": "abc"}}
+    plain = {"type": "script", "script": "make"}
+    assert provenance.bincache_key(state, plain, tmp_path / "rs1" / "scripts") == provenance.bincache_key(state, plain)
+    for rs in ("rs1", "rs2"):
+        (tmp_path / rs / "scripts").mkdir(parents=True)
+        (tmp_path / rs / "scripts" / "b.sh").write_text("make\n")
+    k1 = provenance.bincache_key(state, {"type": "script", "script": f"bash {tmp_path}/rs1/scripts/b.sh"},
+                                 tmp_path / "rs1" / "scripts")
+    k2 = provenance.bincache_key(state, {"type": "script", "script": f"bash {tmp_path}/rs2/scripts/b.sh"},
+                                 tmp_path / "rs2" / "scripts")
+    assert k1 == k2
+    (tmp_path / "rs2" / "scripts" / "b.sh").write_text("make -j\n")
+    assert provenance.bincache_key(state, {"type": "script", "script": f"bash {tmp_path}/rs2/scripts/b.sh"},
+                                   tmp_path / "rs2" / "scripts") != k1
+
+
+def test_snapshot_scripts_layers_and_prunes(root, tmp_path):
+    from featx import recipes, service
+    tree = Tree()
+    tree.add("a/b", parents=True)
+    (root / "scripts").mkdir()
+    (root / "scripts" / "common.sh").write_text("root")
+    service.script_write("a", "x.sh", "parent")
+    service.script_write("a/b", "x.sh", "child")
+    tree = Tree()
+    entry = tree.get("a/b")
+    dest = recipes.snapshot_scripts(tree, entry, tmp_path / "rs")
+    assert {p.name: p.read_text() for p in dest.iterdir()} == {"common.sh": "root", "x.sh": "child"}
+    assert recipes.base_context(tree, entry, tmp_path / "rs")["scripts"] == str(dest)
+    (entry.dir / "scripts" / "x.sh").unlink()
+    recipes.snapshot_scripts(tree, entry, tmp_path / "rs")
+    assert (dest / "x.sh").read_text() == "parent"
+    (root / "scripts" / "common.sh").unlink()
+    recipes.snapshot_scripts(tree, entry, tmp_path / "rs")
+    assert sorted(p.name for p in dest.iterdir()) == ["x.sh"]
