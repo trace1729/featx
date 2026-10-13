@@ -242,8 +242,9 @@ UI 提示、README、MCP script_write 说明、defaults/recipes/post.yaml 注释
 接入 build.tool/mode/options 预设时发现两个问题。
 (1) scheduler.submit 先调用 tree.new_runset 建好 <YYYYMMDD-n>/ 目录，再逐个 kind 生成并 _validate 任务；
 校验失败（例如节点没有 worktree、workload 未知、run.mode 与构建 mode 不符）时异常直接抛出，空目录留在树里，
-节点 runsets 列表多出一个没有任务的 runset，下一次提交的序号也被占掉（在开发守护进程上用一个无 worktree 的节点
-提交 build 复现：报错后 ls 节点目录可见新 runset）。修复：新建的 runset 在任务生成/校验失败时删除；复用已有
+节点 runsets 列表多出一个没有任务的 runset，下一次提交的序号也被占掉（用 master 代码对一个无 worktree 的节点
+直接调用 Scheduler.submit(node, ["build"]) 复现：报 "build workdir ${worktree} missing" 后节点目录下留有
+20261013-1/；同一用例换成修复后的代码只剩 node.yaml）。修复：新建的 runset 在任务生成/校验失败时删除；复用已有
 runset（--runset）时不删。
 (2) bincache 键是对整个 build recipe 取哈希。新增的 tool/mode/options 预设键和 verilator: 小节会进入所有构建的
 recipe，导致没有改动任何东西的 gsim 构建换了键，既有缓存二进制全部不命中而重新编译。修复：键只取“降低后”
@@ -280,9 +281,9 @@ featx/cli.py、service.py、mcp_server.py 增加 rename-branch。
 
 问题与解决方案总结:
 (1) 给 UI 提供 docs/reference.md 时最初用 GET /docs，但 FastAPI 默认在 /docs 挂了 Swagger 页面，请求返回的是
-HTML 而不是 JSON（TestClient 中验证到 content-type text/html）。改为 /help 和 /help/{topic}，与 CLI 的
+HTML 而不是 JSON（test_docs 中 TestClient GET /docs 的 .json() 报 JSONDecodeError，响应体是 SwaggerUIBundle 页面）。改为 /help 和 /help/{topic}，与 CLI 的
 featx help 同名。(2) MCP recipe_set 的 docstring 列出的变量 ${node} ${runset_dir} ${point} 与 recipes.base_context
-实际提供的不一致（实际是 ${node.dir}、${runset}、${point.name} 等），模型照着写会得到未展开的变量；改为指向
+实际提供的不一致（recipes.base_context 实际是 ${node.dir}、${node.path}、${runset.dir}、${runset.name}，点变量为 ${point.name} 等），模型照着写会得到未展开的变量；改为指向
 docs 工具的 variables/references 话题，以 reference.md 为唯一来源。(3) 写文档时最初把 --point 写成“在 recipe 的
 点集合中再筛选”，核对 scheduler 发现 --point 会直接替换 points/points_file/suite（之后 benchmarks 仍会过滤），
 文档已按代码改正，并改用 manifest 中真实存在的点名作为示例。
