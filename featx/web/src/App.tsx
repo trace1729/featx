@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api, getToken, onTokenChange, setToken } from "./api";
 import { TreePanel } from "./components/TreePanel";
+import { DocsPage } from "./pages/Docs";
 import { EventsPage } from "./pages/Events";
 import { LeaderboardPage } from "./pages/Leaderboard";
 import { LoginPage } from "./pages/Login";
@@ -30,6 +31,7 @@ function TopBar() {
         <NavLink to="/events">Events{s && s.unacked_events > 0 ? ` (${s.unacked_events})` : ""}</NavLink>
         <NavLink to="/storage">Storage</NavLink>
         <NavLink to="/settings">Settings</NavLink>
+        <NavLink to="/docs">Docs</NavLink>
       </nav>
       <span className="spacer" />
       {status.error && <span className="badge failed">daemon unreachable</span>}
@@ -81,6 +83,7 @@ export function App() {
             <Route path="/events" element={<EventsPage />} />
             <Route path="/storage" element={<StoragePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/docs/*" element={<DocsPage />} />
             <Route path="*" element={<div className="muted">no such page</div>} />
           </Routes>
         </div>

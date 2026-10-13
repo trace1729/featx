@@ -19,6 +19,10 @@ const FIXTURES: Record<string, unknown> = {
     dir: "/r/tree/wpe", ancestors: [], children: [], notes: "", git: null, recipes: {}, own_recipes: {},
     scripts_dir: "/r/tree/wpe/scripts", scripts: [], runsets: [], runset_count: 0,
   },
+  "/config": { path: "/r/featx.yaml", user_text: "", user: {}, defaults_text: "", restart_keys: [],
+    effective: { workloads: { spec06: { description: "SPEC06" }, spec17: { description: "SPEC17" } } } },
+  "/help": { path: "/featx/docs/reference.md", topics: [{ topic: "concepts", title: "Nodes" }, { topic: "run", title: "Run recipe keys" }] },
+  "/help/run": { topic: "run", text: "## run — Run recipe keys\n\n| key | default |\n|---|---|\n| `mode` | `null` |\n" },
   "/leaderboard": {
     metric: "pk.self.mean_abs_err_pct",
     order: "asc",
@@ -97,5 +101,24 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "worktree" }));
     await screen.findByRole("button", { name: "Create worktree…" });
     expect(document.querySelectorAll(".crumbs").length).toBe(1);
+  });
+
+  it("turns the submit presets into overrides and the CLI line", async () => {
+    setToken("t0k");
+    renderAt("/node/wpe?tab=submit");
+    await screen.findByText("spec17 — SPEC17");
+    const select = (option: string) => screen.getAllByRole("combobox").find((el) => el.textContent?.includes(option))!;
+    fireEvent.change(select("exec"), { target: { value: "exec" } });
+    const workload = select("spec17");
+    fireEvent.change(workload, { target: { value: "spec17" } });
+    expect(await screen.findByText(/--set build.mode=exec --set run.mode=exec --set run.workload=spec17/, { selector: "span" })).toBeTruthy();
+  });
+
+  it("shows a docs topic", async () => {
+    setToken("t0k");
+    renderAt("/docs/run");
+    expect(await screen.findByRole("heading", { name: "run — Run recipe keys" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "concepts" })).toBeTruthy();
+    expect(document.querySelector(".docs-body table")).toBeTruthy();
   });
 });

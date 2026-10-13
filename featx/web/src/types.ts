@@ -256,3 +256,13 @@ export interface GcReport {
 }
 
 export type Baselines = Record<string, { root: string; description?: string; binary?: string }>;
+
+export interface DocsIndex {
+  path: string;
+  topics: { topic: string; title: string }[];
+}
+
+export interface DocsTopic {
+  topic: string;
+  text: string;
+}

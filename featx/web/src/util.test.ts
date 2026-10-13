@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { TreeRow } from "./types";
-import { buildTree, countsText, fmtBytes, fmtCount, fmtDuration, fmtValue, metricLabel, parseCsv, parseOverrides, splitRunset } from "./util";
+import {
+  NO_PRESETS,
+  buildTree,
+  countsText,
+  deepMerge,
+  fmtBytes,
+  fmtCount,
+  fmtDuration,
+  fmtValue,
+  metricLabel,
+  parseCsv,
+  parseOverrides,
+  presetOverrides,
+  setFlags,
+  splitRunset,
+} from "./util";
 
 const row = (path: string): TreeRow => ({
   id: path,
@@ -80,5 +95,22 @@ describe("parseOverrides", () => {
   it("rejects lines without a kind or =", () => {
     expect(() => parseOverrides("W=1")).toThrow(/build\., run\. or post\./);
     expect(() => parseOverrides("run.W")).toThrow(/bad override/);
+  });
+});
+
+describe("presetOverrides", () => {
+  it("maps presets to the selected stages only", () => {
+    const q = { ...NO_PRESETS, tool: "verilator", mode: "exec", chiseldb: "on", chiselmap: "off", workload: "spec17", W: "1_000_000" };
+    expect(presetOverrides(q, ["build", "run"])).toEqual({
+      build: { tool: "verilator", mode: "exec", options: { chiseldb: true, chiselmap: false } },
+      run: { mode: "exec", workload: "spec17", W: 1000000 },
+    });
+    expect(presetOverrides(q, ["run"])).toEqual({ run: { mode: "exec", workload: "spec17", W: 1000000 } });
+    expect(presetOverrides(NO_PRESETS, ["build", "run", "post"])).toEqual({});
+  });
+  it("lets the typed overrides win and renders --set flags", () => {
+    const merged = deepMerge({ run: { W: 1, workload: "spec06" } }, parseOverrides("run.W=5\nrun.points=[a_1_0.1]"));
+    expect(merged).toEqual({ run: { W: 5, workload: "spec06", points: ["a_1_0.1"] } });
+    expect(setFlags(merged)).toEqual(["--set run.W=5", "--set run.workload=spec06", "--set 'run.points=[\"a_1_0.1\"]'"]);
   });
 });

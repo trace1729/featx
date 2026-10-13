@@ -157,3 +157,68 @@ export const STATE_ORDER = ["running", "launching", "queued", "failed", "cancell
 export function countsText(counts: Record<string, number>): string {
   return STATE_ORDER.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`).join(" · ");
 }
+
+/** Submit-form presets ("" = inherit the recipe's value). */
+export interface QuickPresets {
+  tool: string;
+  mode: string;
+  chiseldb: string;
+  chiselmap: string;
+  workload: string;
+  W: string;
+  I: string;
+}
+
+export const NO_PRESETS: QuickPresets = { tool: "", mode: "", chiseldb: "", chiselmap: "", workload: "", W: "", I: "" };
+
+/** Presets -> recipe overrides for the selected stages. The mode goes to the build when it is
+ * built in this submit (the run follows it), and to the run as well so a --bin run checks it. */
+export function presetOverrides(q: QuickPresets, kinds: string[]): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  const put = (kind: string, path: string[], value: unknown) => {
+    if (!kinds.includes(kind)) return;
+    let cur = (out[kind] ??= {});
+    for (const p of path.slice(0, -1)) cur = (cur[p] ??= {}) as Record<string, unknown>;
+    cur[path[path.length - 1]] = value;
+  };
+  if (q.tool) put("build", ["tool"], q.tool);
+  if (q.mode) {
+    put("build", ["mode"], q.mode);
+    put("run", ["mode"], q.mode);
+  }
+  for (const opt of ["chiseldb", "chiselmap"] as const) {
+    if (q[opt]) put("build", ["options", opt], q[opt] === "on");
+  }
+  if (q.workload) put("run", ["workload"], q.workload);
+  for (const key of ["W", "I"] as const) {
+    const v = q[key].replace(/[_,]/g, "").trim();
+    if (v) put("run", [key], /^\d+$/.test(v) ? Number(v) : v);
+  }
+  return out;
+}
+
+/** Recursive merge (later wins; arrays and scalars replace), as featx merges recipe layers. */
+export function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    const prev = out[k];
+    const isObj = (x: unknown) => typeof x === "object" && x !== null && !Array.isArray(x);
+    out[k] = isObj(prev) && isObj(v) ? deepMerge(prev as Record<string, unknown>, v as Record<string, unknown>) : v;
+  }
+  return out;
+}
+
+/** Overrides -> the equivalent `featx submit --set kind.key=value` flags. */
+export function setFlags(overrides: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const walk = (prefix: string, v: unknown) => {
+    if (typeof v === "object" && v !== null && !Array.isArray(v) && Object.keys(v).length) {
+      for (const [k, x] of Object.entries(v)) walk(prefix ? `${prefix}.${k}` : k, x);
+    } else {
+      const text = typeof v === "string" ? v : JSON.stringify(v);
+      out.push(`--set ${/[\s"'$\\[\]{}]/.test(`${prefix}=${text}`) ? `'${prefix}=${text}'` : `${prefix}=${text}`}`);
+    }
+  };
+  walk("", overrides);
+  return out;
+}

@@ -69,7 +69,16 @@ function BaselinesCard() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["baselines"], queryFn: () => api.get<Baselines>("/baselines") });
   const [form, setForm] = useState({ name: "", root: "", description: "", binary: "" });
+  const [blocked, setBlocked] = useState<string | null>(null);
   const act = useAction();
+  const rm = useAction();
+  const remove = (name: string, force = false) =>
+    rm.run(async () => {
+      setBlocked(name);
+      await api.del(`/baselines/${encodeURIComponent(name)}`, { force });
+      setBlocked(null);
+      await qc.invalidateQueries({ queryKey: ["baselines"] });
+    });
   const add = () =>
     act.run(async () => {
       await api.post("/baselines", { ...form, binary: form.binary || undefined });
@@ -88,6 +97,7 @@ function BaselinesCard() {
             <th>name</th>
             <th>result root</th>
             <th>description</th>
+            <th />
           </tr>
         </thead>
         <tbody>
@@ -99,6 +109,16 @@ function BaselinesCard() {
                 {b.binary && <div className="muted">bin {b.binary}</div>}
               </td>
               <td>{b.description}</td>
+              <td>
+                <button className="link" disabled={rm.busy} onClick={() => remove(name)} title="refused while a workload or a post recipe uses it">
+                  remove
+                </button>
+                {blocked === name && !!rm.error && !rm.busy && (
+                  <button className="link danger" onClick={() => remove(name, true)}>
+                    remove anyway
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -113,6 +133,7 @@ function BaselinesCard() {
         </button>
       </div>
       <ErrorBox error={act.error} />
+      <ErrorBox error={rm.error} />
     </div>
   );
 }
@@ -120,6 +141,7 @@ function BaselinesCard() {
 function BinImportCard() {
   const [path, setPath] = useState("");
   const [label, setLabel] = useState("");
+  const [mode, setMode] = useState("");
   const [res, setRes] = useState<{ key: string; emu: string } | null>(null);
   const act = useAction();
   return (
@@ -127,7 +149,12 @@ function BinImportCard() {
       <div className="row">
         <input type="text" className="mono" placeholder="/abs/path/to/emu" style={{ width: 460 }} value={path} onChange={(e) => setPath(e.target.value)} />
         <input type="text" placeholder="label" style={{ width: 200 }} value={label} onChange={(e) => setLabel(e.target.value)} />
-        <button disabled={!path || act.busy} onClick={() => act.run(async () => setRes(await api.post("/bins/import", { path, label })))}>
+        <select value={mode} onChange={(e) => setMode(e.target.value)} title="the binary's TRACERTL_MODE; a run with --bin <key> follows it">
+          <option value="">mode: unknown</option>
+          <option value="trace">trace</option>
+          <option value="exec">exec</option>
+        </select>
+        <button disabled={!path || act.busy} onClick={() => act.run(async () => setRes(await api.post("/bins/import", { path, label, mode: mode || undefined })))}>
           {act.busy ? "Copying…" : "Import"}
         </button>
       </div>

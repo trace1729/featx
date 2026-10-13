@@ -7,8 +7,9 @@ import { AddNodeDialog, MoveDialog, RemoveDialog } from "../components/NodeDialo
 import { Markdown } from "../components/FileViewer";
 import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { NodeContext, RunsetSummary } from "../types";
-import { fmtTime, fmtValue, metricLabel, parseCsv, parseOverrides } from "../util";
+import type { ConfigView, NodeContext, RunsetSummary } from "../types";
+import { NO_PRESETS, deepMerge, fmtTime, fmtValue, metricLabel, parseCsv, parseOverrides, presetOverrides, setFlags } from "../util";
+import type { QuickPresets } from "../util";
 
 const VERDICTS = ["open", "supported", "refuted", "inconclusive"];
 const STATUSES = ["active", "parked", "done", "abandoned"];
@@ -92,13 +93,35 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
   const [postSteps, setPostSteps] = useState("");
   const [overrides, setOverrides] = useState("");
   const [purpose, setPurpose] = useState("");
+  const [quick, setQuick] = useState<QuickPresets>(NO_PRESETS);
+  const config = useQuery({ queryKey: ["config"], queryFn: () => api.get<ConfigView>("/config"), staleTime: 60000 });
+  const workloads = Object.entries((config.data?.effective.workloads ?? {}) as Record<string, { description?: string }>);
   let parsed: Record<string, unknown> = {};
   let parseError: string | null = null;
   try {
-    parsed = parseOverrides(overrides);
+    // the typed overrides win over the selectors
+    parsed = deepMerge(presetOverrides(quick, kinds), parseOverrides(overrides));
   } catch (e) {
     parseError = (e as Error).message;
   }
+  const build = ctx.recipes.build ?? {};
+  const run = ctx.recipes.run ?? {};
+  const opts = (build.options ?? {}) as Record<string, unknown>;
+  const current = (v: unknown) => `inherit (${v === undefined || v === null ? "unset" : String(v)})`;
+  const pick = (key: keyof QuickPresets, choices: [string, string][], now: unknown, title?: string) => (
+    <select value={quick[key]} title={title} onChange={(e) => setQuick({ ...quick, [key]: e.target.value })}>
+      <option value="">{current(now)}</option>
+      {choices.map(([v, label]) => (
+        <option key={v} value={v}>
+          {label}
+        </option>
+      ))}
+    </select>
+  );
+  const onOff: [string, string][] = [
+    ["on", "on"],
+    ["off", "off"],
+  ];
   const list = (s: string) => parseCsv(s.replace(/\s+/g, ","))[0]?.filter(Boolean) ?? [];
   const submit = () =>
     act.run(async () => {
@@ -125,6 +148,34 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         ))}
         {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">without build the run recipe's emu (or --bin) is used</span>}
       </div>
+      <label>build</label>
+      <div className="row">
+        <span className="muted small">tool</span>
+        {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
+        <span className="muted small">mode</span>
+        {pick("mode", [["trace", "trace"], ["exec", "exec"]], build.mode, "TRACERTL_MODE; the run follows the build")}
+        <span className="muted small">chiseldb</span>
+        {pick("chiseldb", onOff, opts.chiseldb)}
+        <span className="muted small">chiselmap</span>
+        {pick("chiselmap", onOff, opts.chiselmap, "WITH_CHISELMAP=1 (placeholder: no Makefile reads it yet)")}
+      </div>
+      <label>run</label>
+      <div className="row">
+        <span className="muted small">workload</span>
+        {pick(
+          "workload",
+          workloads.map(([name, w]) => [name, w.description ? `${name} — ${w.description}` : name]),
+          run.workload,
+          "all its points unless points / benchmarks narrow them",
+        )}
+        <span className="muted small">W</span>
+        <input type="text" className="mono narrow" value={quick.W} onChange={(e) => setQuick({ ...quick, W: e.target.value })} placeholder={String(run.W ?? "")} />
+        <span className="muted small">I</span>
+        <input type="text" className="mono narrow" value={quick.I} onChange={(e) => setQuick({ ...quick, I: e.target.value })} placeholder={String(run.I ?? "")} />
+        <Link className="small" to="/docs/run">
+          keys
+        </Link>
+      </div>
       <label>purpose</label>
       <input type="text" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="what this runset is meant to show" />
       <label>binary</label>
@@ -143,7 +194,14 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         <button className="primary" disabled={act.busy || !!parseError || !kinds.length} onClick={submit}>
           Submit
         </button>
-        <span className="muted small"> same as: featx submit {ctx.node.path} {KINDS.filter((k) => kinds.includes(k)).join(" ")}</span>
+        <span className="muted small mono">
+          {" "}
+          same as: featx submit {ctx.node.path} {KINDS.filter((k) => kinds.includes(k)).join(" ")}
+          {bin && ` --bin ${bin}`}
+          {points.trim() && list(points).map((p) => ` --point ${p}`).join("")}
+          {postSteps.trim() && list(postSteps).map((p) => ` --step ${p}`).join("")}
+          {!parseError && setFlags(parsed).map((f) => ` ${f}`).join("")}
+        </span>
         <ErrorBox error={act.error} />
       </div>
     </div>

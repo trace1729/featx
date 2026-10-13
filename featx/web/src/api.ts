@@ -60,6 +60,7 @@ export const api = {
   get: <T>(path: string, params?: Params, signal?: AbortSignal) => request<T>("GET", path + query(params), undefined, signal),
   post: <T>(path: string, body: unknown = {}) => request<T>("POST", path, body),
   put: <T>(path: string, body: unknown = {}) => request<T>("PUT", path, body),
+  del: <T>(path: string, params?: Params) => request<T>("DELETE", path + query(params)),
 };
 
 /** Check a token without storing it (login form). */

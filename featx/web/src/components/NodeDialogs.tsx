@@ -145,7 +145,7 @@ export function MoveDialog({ src, initialDst, onClose, onDone }: { src: string; 
             <input type="checkbox" checked={parents} onChange={(e) => setParents(e.target.checked)} /> create missing parents
           </label>
           <label>
-            <input type="checkbox" checked={rename} onChange={(e) => setRename(e.target.checked)} /> rename featx branches
+            <input type="checkbox" checked={rename} onChange={(e) => setRename(e.target.checked)} /> rename the branches featx created
           </label>
         </span>
       </div>
@@ -182,7 +182,7 @@ export function RemoveDialog({ path, onClose, onDone }: { path: string; onClose:
       <p>
         <label>
           <input type="checkbox" checked={dropWt} onChange={(e) => setDropWt(e.target.checked)} /> also delete the worktrees (uncommitted diffs are saved as
-          patches) and featx branches without own commits
+          patches) and the branches featx created that have no own commits
         </label>
       </p>
       <p>
