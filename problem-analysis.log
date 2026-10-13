@@ -182,3 +182,25 @@ Create 仍 POST /worktrees 并 invalidate 节点查询，成功后关闭）；Wo
 repo、base。featx/web/src/App.test.tsx：新增用例，打开 git 为 null 的节点的 worktree 标签，断言点击按钮
 前没有 repo 输入框、点击后出现，且全程没有非 GET 请求。dev daemon 上 Playwright 验证：标签页 0 个写请求，
 对话框在临时仓库上创建 worktree 成功，repo / base 显示为 <repo> @ main，头部 verdict/status 同处一行。
+
+## 2026-10-13 15:40  切换标签后节点头部重复出现（上一条 worktree 修复误判了用户所说的“新条目”）
+
+问题与解决方案总结:
+上一条修复上线后用户反馈问题依旧，并给出截图：节点页上整块头部（面包屑、Add child/Move/Remove、
+hypothesis/verdict/evidence 表单）出现了两份，且随机出现，先点 scripts 标签再点其他标签即可触发。
+上一条把“新条目”理解成了 worktree 表单，是误判；之前的 Playwright 只点了 worktree 标签，没有覆盖
+scripts→其他标签的顺序，所以没复现。重新用 Playwright 在生产 UI 上按标签序列点击并统计 .crumbs 个数，
+runsets→worktree→scripts→worktree 之后变为 2，此后一直保持 2，直到换节点才恢复。根因：NodePage 中
+Header 与 ScriptsTab 是同一父元素下的兄弟节点，却都用 key={ctx.node.id}。React 要求兄弟 key 唯一，
+重复 key 时协调结果未定义；ScriptsTab 卸载时 React 按 key 匹配错位，旧的 Header DOM 没被移除，于是
+留下一份孤立的头部。开发构建会给出 “Encountered two children with the same key, `1` … may cause
+children to be duplicated” 警告，生产构建不报，所以单测和此前的检查都没发现。修复方案：两个 key 加上
+不同前缀，保留“切换节点时重置组件状态”的原意。
+
+代码修改说明:
+featx/web/src/pages/Node.tsx：Header 的 key 改为 `header:${ctx.node.id}`，ScriptsTab 的 key 改为
+`scripts:${ctx.node.id}`；兄弟 key 不再冲突，React 卸载 ScriptsTab 时只移除它自己的 DOM，Header 始终只有
+一个实例；换节点时 key 仍随 node.id 变化，两个组件照旧重新挂载、清空本地状态。全仓库检查过其余非列表
+key（Runset.tsx 的 FileView/LogTail），均无兄弟冲突。featx/web/src/App.test.tsx：新增用例，打开节点的
+scripts 标签后切到 worktree，断言 .crumbs 只有 1 个；修复前该用例失败（expected 2 to be 1）并打印上述
+重复 key 警告，修复后通过且警告消失。

@@ -89,4 +89,13 @@ describe("App", () => {
     const calls = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls;
     expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
   });
+
+  it("keeps a single node header when leaving the scripts tab", async () => {
+    setToken("t0k");
+    renderAt("/node/wpe?tab=scripts");
+    await screen.findByText(/recipes reach them/);
+    fireEvent.click(screen.getByRole("button", { name: "worktree" }));
+    await screen.findByRole("button", { name: "Create worktree…" });
+    expect(document.querySelectorAll(".crumbs").length).toBe(1);
+  });
 });

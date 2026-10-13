@@ -487,12 +487,13 @@ export function NodePage() {
   return (
     <div>
       {notice && <div className="okbox mono small">{notice}</div>}
-      <Header key={ctx.node.id} ctx={ctx} />
+      {/* sibling keys must differ: a shared key made React leave a stale Header behind when ScriptsTab unmounted */}
+      <Header key={`header:${ctx.node.id}`} ctx={ctx} />
       <Tabs tabs={TABS} value={tab} onChange={(t) => setSp({ tab: t }, { replace: true })} />
       {tab === "runsets" && <RunsetsTab ctx={ctx} />}
       {tab === "submit" && <SubmitTab ctx={ctx} />}
       {tab === "recipes" && <RecipesTab ctx={ctx} />}
-      {tab === "scripts" && <ScriptsTab key={ctx.node.id} ctx={ctx} />}
+      {tab === "scripts" && <ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} />}
       {tab === "worktree" && <WorktreeTab ctx={ctx} />}
       {tab === "notes" && (ctx.notes ? <Markdown text={ctx.notes} /> : <div className="muted">no notes.md in {ctx.dir}</div>)}
       {ctx.children.length > 0 && (
