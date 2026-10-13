@@ -30,11 +30,12 @@ def root(tmp_path, monkeypatch):
 
 
 FAKE_EMU = r'''#!/usr/bin/env bash
-# fake emu: behaviour chosen by the bench name in the trace path
+# fake emu: behaviour chosen by the bench name in the trace (or exec checkpoint) path
+echo "$*" > argv.txt
 trace=; W=0; I=0
 while (($#)); do
   case "$1" in
-    --tracertl-file) trace=$2; shift 2 ;;
+    --tracertl-file|-i) trace=$2; shift 2 ;;
     -W) W=$2; shift 2 ;;
     -I) I=$2; shift 2 ;;
     *) shift ;;

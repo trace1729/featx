@@ -4,9 +4,17 @@ description: >-
 after: [collect]
 with:
   trace: ${post.collect}/points.csv
-  reference: "@baseline(exec-0903)"
+  reference: "@baseline(${workload.reference})"
   config: ${points_config}
-  suite: spec06
+  suite: ${workload.label}
+params:
+  trace: this runset's collected points.csv
+  reference: reference (default the workload's reference baseline)
+  config: points (default this runset's points)
+  suite: label (default the run's workload label)
+outputs:
+  branch_type_mpki.csv: per-point MPKI per branch type, trace vs reference
+  summary.json: mpki.rows, mpki.mean.<numeric column>
 cmd: |
   ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
   ${python} ${tools}/extract_branch_type_mpki.py --trace ${trace} --execution "$ref" --suite ${suite} \

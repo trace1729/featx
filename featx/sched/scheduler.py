@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
 import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .. import config, jobs as jobgen, points as ptmod, problemlog, provenance, recipes, store, taskstore
+from .. import config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
 from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Task
 from ..tree import Tree, TreeError
 from . import classify, eta, executor
@@ -101,36 +102,19 @@ class Scheduler:
                     raise SchedError(f"runset {rs.name} is sealed (immutable); submit without --runset "
                                      f"to create a new one (use derived_from to link)")
                 rdir = entry.dir / rs.name
+                created_rs = False
             else:
                 rs, rdir = tree.new_runset(entry, purpose=purpose, derived_from=derived_from)
-            recipes.snapshot_scripts(tree, entry, rdir)
-            ctx = recipes.base_context(tree, entry, rdir, rs.name)
-            emu_override = None
-            if bin_ref and "run" in kinds:
-                # Resolve before substitution: `command` embeds ${emu}, so a late spec["emu"]
-                # assignment would leave the command pointing at the recipe's emu.
-                emu_override = self._resolve_bin(tree, bin_ref)
-            created: list[Task] = []
-            prev: Task | None = None
-            for kind in kinds:
-                ov = overrides.get(kind)
-                if kind == "run" and emu_override:
-                    ov = {**(ov or {}), "emu": emu_override}
-                spec = recipes.effective(tree, entry, kind, ov)
-                spec = recipes.substitute(spec, {**ctx, **recipes.scalar_vars(spec)})
-                if kind == "run":
-                    if only_points:
-                        spec["points"], spec["points_file"], spec["suite"] = list(only_points), None, None
-                if kind == "post" and post_steps:
-                    spec["steps"] = {k: v for k, v in (spec.get("steps") or {}).items() if k in post_steps}
-                deps = list(after or []) if prev is None else [prev.id]
-                task = Task(id=store.new_id(), kind=kind, name=f"{kind}", node_id=entry.node.id,
-                            runset_id=rs.id, runset_name=rs.name, after=deps, spec=spec,
-                            created=store.now_iso(),
-                            max_design_relaunches=config.settings()["retry"]["max_design_relaunches"])
-                self._validate(tree, entry, task, prev)
-                created.append(task)
-                prev = task
+                created_rs = True
+            try:
+                created = self._submit_tasks(tree, entry, rs, rdir, kinds, overrides, bin_ref, after,
+                                             only_points, post_steps)
+            except Exception:
+                # A submit that fails validation must not leave an empty runset behind.
+                if created_rs:
+                    shutil.rmtree(rdir, ignore_errors=True)
+                raise
+            emu_override = next((t.spec["emu"] for t in created if t.kind == "run"), None) if bin_ref else None
             for task in created:
                 rs.recipes[task.kind] = task.spec
                 rs.tasks.append(task.id)
@@ -157,6 +141,63 @@ class Scheduler:
             return {"runset": f"{entry.rel}/{rs.name}", "runset_dir": str(rdir),
                     "tasks": [{"id": t.id, "kind": t.kind, "after": t.after} for t in created]}
 
+    def _submit_tasks(self, tree: Tree, entry, rs, rdir: Path, kinds: list[str], overrides: dict,
+                      bin_ref: str | None, after: list[str] | None, only_points: list[str] | None,
+                      post_steps: list[str] | None) -> list[Task]:
+        """Effective, substituted and lowered (presets) specs of the new tasks, validated."""
+        recipes.snapshot_scripts(tree, entry, rdir)
+        ctx = recipes.base_context(tree, entry, rdir, rs.name)
+        emu_override = bin_mode = None
+        if bin_ref and "run" in kinds:
+            # Resolve before substitution: `command` embeds ${emu}, so a late spec["emu"]
+            # assignment would leave the command pointing at the recipe's emu.
+            emu_override = self._resolve_bin(tree, bin_ref)
+            bin_mode = self._bin_mode(tree, bin_ref, emu_override)
+        created: list[Task] = []
+        prev: Task | None = None
+        for kind in kinds:
+            ov = overrides.get(kind)
+            if kind == "run" and emu_override:
+                ov = {**(ov or {}), "emu": emu_override}
+            try:
+                spec = recipes.effective(tree, entry, kind, ov)
+                spec = recipes.substitute(spec, {**ctx, **recipes.scalar_vars(spec)})
+                if kind == "build":
+                    spec = presets.lower_build(spec)
+                if kind == "run":
+                    if only_points:
+                        spec["points"], spec["points_file"], spec["suite"] = list(only_points), None, None
+                    built = prev.spec if prev is not None and prev.kind == "build" else \
+                        ({"mode": bin_mode} if bin_mode else None)
+                    spec = presets.lower_run(spec, built)
+            except presets.PresetError as error:
+                raise SchedError(str(error)) from None
+            if kind == "post" and post_steps:
+                spec["steps"] = {k: v for k, v in (spec.get("steps") or {}).items() if k in post_steps}
+            deps = list(after or []) if prev is None else [prev.id]
+            task = Task(id=store.new_id(), kind=kind, name=f"{kind}", node_id=entry.node.id,
+                        runset_id=rs.id, runset_name=rs.name, after=deps, spec=spec,
+                        created=store.now_iso(),
+                        max_design_relaunches=config.settings()["retry"]["max_design_relaunches"])
+            try:
+                self._validate(tree, entry, task, prev)
+            except presets.PresetError as error:
+                raise SchedError(str(error)) from None
+            created.append(task)
+            prev = task
+        return created
+
+    @staticmethod
+    def _bin_mode(tree: Tree, ref: str, emu: str) -> str | None:
+        """trace|exec of a --bin binary: its runset's build recipe, else its bincache manifest."""
+        try:
+            _, rs = tree.find_runset(ref)
+            if rs.recipes.get("build"):
+                return presets.build_mode(rs.recipes["build"])
+        except (TreeError, presets.PresetError):
+            pass
+        return store.read_json(Path(emu).parent / "manifest.json", {}).get("mode")
+
     def _resolve_bin(self, tree: Tree, ref: str) -> str:
         p = Path(ref)
         if p.is_file():
@@ -175,8 +216,8 @@ class Scheduler:
     def _validate(self, tree: Tree, entry, task: Task, prev: Task | None) -> None:
         spec = task.spec
         if task.kind == "build":
-            if spec.get("type") not in ("gsim-two-step", "script"):
-                raise SchedError(f"build.type must be gsim-two-step|script, got {spec.get('type')}")
+            if spec.get("type") not in ("gsim-two-step", "verilator", "script"):
+                raise SchedError(f"build.tool must be gsim|verilator|script, got {spec.get('tool', spec.get('type'))}")
             if not Path(spec["workdir"]).is_dir():
                 raise SchedError(f"build workdir {spec['workdir']} missing (create the node worktree first: "
                                  f"featx worktree create {entry.rel})")
@@ -274,7 +315,7 @@ class Scheduler:
     def _build_key(task: Task, rdir: Path) -> str:
         spec = task.spec
         state = provenance.worktree_state(spec["workdir"]) if (Path(spec["workdir"]) / ".git").exists() else {}
-        return provenance.bincache_key(state, spec, rdir / "scripts")
+        return provenance.bincache_key(state, presets.key_recipe(spec), rdir / "scripts")
 
     def _finish_build(self, tree: Tree, task: Task, emu: Path, cached: bool) -> None:
         entry = tree.get(task.node_id)
@@ -411,11 +452,10 @@ class Scheduler:
             point = ptmod.parse(job.name)
             ctx = {"point.name": point["name"], "point.bench": point["bench"], "point.cp": point["cp"],
                    "point.weight": point["weight"], "emu": spec["emu"], "W": spec["W"], "I": spec["I"],
-                   "args": spec.get("args", ""), "trace_root": spec.get("trace_root", "")}
-            trace_file = recipes.substitute(spec["trace_file"], ctx)
-            ctx["trace_file"] = trace_file
-            command = recipes.substitute(spec["command"], ctx)
-            return (jobgen.run_point_script(task.id, spec, point, command, trace_file),
+                   "args": spec.get("args", ""), "trace_root": spec.get("trace_root", ""),
+                   **presets.point_vars(spec, point["name"])}
+            command, inputs = presets.point_command(spec, ctx)
+            return (jobgen.run_point_script(task.id, spec, point, command, inputs),
                     "simulator_out.txt", "simulator_err.txt")
         from ..post import plugins
         step = (spec.get("steps") or {})[job.name]
@@ -514,7 +554,8 @@ class Scheduler:
             key = task.outputs.get("bincache_key") or store.new_id()
             entry = tree.get(task.node_id)
             emu = provenance.bincache_store(key, art, {"key": key, "node": entry.rel, "runset": task.runset_name,
-                                                       "task": task.id, "workdir": task.spec.get("workdir")})
+                                                       "task": task.id, "workdir": task.spec.get("workdir"),
+                                                       "tool": task.spec.get("tool"), "mode": task.spec.get("mode")})
             art.unlink()
             task.outputs["emu"] = str(emu)
             self._finish_build(tree, task, emu, cached=False)

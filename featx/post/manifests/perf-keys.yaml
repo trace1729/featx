@@ -8,10 +8,22 @@ with:
   self: ${run}
   # label: point-dir root (first entry is the IPC reference)
   baselines:
-    exec: "@baseline(exec-0903)"
+    exec: "@baseline(${workload.reference})"
   points: ${points_config}     # collector JSON or one point name per line
   block: 2                     # PERF block (2 = formal window after warmup)
   keys: ""                     # optional YAML file with extra keys: [[name, module.suffix, counter], ...]
+params:
+  self: this runset's point dirs (label "self")
+  baselines: "label: point-dir root map (or a list of baseline names / runset refs); the first is the IPC
+    reference (default exec: the workload's reference baseline)"
+  points: collector JSON or one point name per line (default this runset's points)
+  block: PERF block (2 = formal window after warmup)
+  keys: optional YAML with extra keys [[name, module.suffix, counter], ...]
+outputs:
+  points.csv: per point and run, the key counters
+  report.md: per-run error table
+  summary.json: "reference, block, points, common_points, <label>.finished, <label>.ipc_geomean,
+    <label>.mean_abs_err_pct, <label>.mean_err_pct, <label>.max_abs_err_pct"
 cmd: |
   ${python} ${plugin.scripts}/perf_keys.py --runs ${baselines} self=${self} --ref-first --points ${points} \
     --block ${block} --keys "${keys}" -o ${out}

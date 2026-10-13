@@ -36,3 +36,34 @@ liveness:
 retry:
   max_infra_attempts: 3
   max_design_relaunches: 3
+
+# run.workload names. manifest: TSV with benchmark/point/weight/checkpoint/trace columns
+# (the point list and ${point.checkpoint} / ${point.trace}); run: keys layered under every run
+# recipe; label: the post plugins' `suite`; reference: their default baseline (null = none,
+# post steps that compare must set with.reference). Add a workload in $FEATX_ROOT/featx.yaml.
+workloads:
+  spec06:
+    description: SPEC CPU2006, 55 benchmarks, 1090 SimPoints
+    manifest: /nfs/share/gkc/traces/nemu-trace-spec06-v1/_manifest.tsv
+    label: spec06
+    reference: exec-0903
+    run:
+      trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+      # the manifest's checkpoint column points at a moved directory; legacy/ has them all
+      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
+  spec17:
+    description: SPEC CPU2017, 31 benchmarks, 590 SimPoints
+    manifest: /nfs/share/gkc/traces/nemu-trace-spec17-v1/_manifest.tsv
+    label: spec17
+    reference: exec-0903-spec17
+    run:
+      trace_root: /nfs/share/gkc/traces/nemu-trace-spec17-v1
+      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec17_rv64gcb_o2_20m/take_cpt/${point.name}/0/_${point.cp}_.gz
+  spec26:
+    description: SPEC CPU2026 (v1 traces), 1529 SimPoints
+    manifest: /nfs/share/gkc/traces/nemu-trace-spec26-v1/_manifest.tsv
+    label: spec26
+    reference: null
+    run:
+      trace_root: /nfs/share/gkc/traces/nemu-trace-spec26-v1
+      checkpoint_file: ${point.checkpoint}

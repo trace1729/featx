@@ -58,7 +58,15 @@ def build_script(task_id: str, spec: dict) -> str:
         out.append('trap \'python3 "$FX_DIR/patch.py" restore "$FX_DIR/patches.json" "$FX_DIR/patch-saved.json"\' EXIT\n')
         out.append('python3 "$FX_DIR/patch.py" apply "$FX_DIR/patches.json" "$FX_DIR/patch-saved.json" || exit 3\n')
     timeout = f"timeout {float(spec.get('timeout_hours', 10))}h "
-    if spec.get("type") == "script":
+    if spec.get("type") == "verilator":
+        v = spec.get("verilator") or {}
+        if v.get("bin_dir"):
+            out.append(f"export PATH={shlex.quote(str(v['bin_dir']))}:$PATH\n")
+        ds = f"DRAMSIM3_HOME={shlex.quote(str(v.get('dramsim3_home')))}" if v.get("dramsim3_home") else ""
+        out.append('echo "== make emu (verilator) $(date)"\n')
+        out.append(f"{timeout}make emu -j{v.get('jobs', 64)} {ds} {v.get('make_args', '')}\n")
+        out.append('rc=$?\necho "== make emu rc=$rc $(date)"\n[ $rc -eq 0 ] || exit $rc\n')
+    elif spec.get("type") == "script":
         body = spec.get("script") or ""
         out.append(f"cat > \"$FX_DIR/build-body.sh\" <<'FXEOF'\n{body}\nFXEOF\n")
         out.append(f'{timeout}bash "$FX_DIR/build-body.sh"\nrc=$?\n')
@@ -91,14 +99,15 @@ def build_script(task_id: str, spec: dict) -> str:
     return "".join(out)
 
 
-def run_point_script(task_id: str, spec: dict, point: dict, command: str, trace_file: str) -> str:
+def run_point_script(task_id: str, spec: dict, point: dict, command: str, inputs: dict[str, str]) -> str:
+    """inputs: label -> path that must exist (trace file, or checkpoint + diff reference)."""
     out = [HEADER.format(job=point["name"], task=task_id)]
     ds = spec.get("dramsim3_home")
     if ds:
         out.append(f"export LD_LIBRARY_PATH={shlex.quote(str(ds))}/build${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\n")
     out.append(_exports(spec.get("env") or {}))
-    out.append(f"trace={shlex.quote(trace_file)}\n")
-    out.append('[ -e "$trace" ] || { echo "featx: trace file not found: $trace" >&2; exit 2; }\n')
+    for label, path in inputs.items():
+        out.append(f"[ -e {shlex.quote(path)} ] || {{ echo {shlex.quote(f'featx: {label} not found: {path}')} >&2; exit 2; }}\n")
     emu = spec.get("emu")
     out.append(f"emu={shlex.quote(str(emu))}\n")
     out.append('[ -x "$emu" ] || { echo "featx: emu not executable: $emu" >&2; exit 2; }\n')

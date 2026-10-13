@@ -3,7 +3,9 @@
 Effective recipe for (node, kind) = deep merge, later wins:
   package defaults/recipes/<kind>.yaml -> $FEATX_ROOT/recipes/<kind>.yaml
   -> each ancestor's recipes/<kind>.yaml (root first) -> the node's own.
-Dicts merge recursively, lists replace, `key: null` deletes.
+Dicts merge recursively, lists replace, `key: null` deletes. A run recipe that names a
+`workload` gets that workload's run keys as a layer right above the package defaults; a
+legacy build `type:` is read as `tool:` (featx/presets.py).
 
 Substitution only touches ${name} where name is known (dotted names allowed), so shell
 syntax like ${HOME} or ${x%%=*} passes through untouched.
@@ -18,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from . import config, store
+from . import config, presets, store
 from .tree import Entry, Tree, TreeError
 
 RECIPE_KINDS = ("build", "run", "post")
@@ -29,7 +31,7 @@ def _defaults(kind: str) -> dict:
     return store.read_yaml(config.DEFAULTS_DIR / "recipes" / f"{kind}.yaml", {}) or {}
 
 
-def layers(tree: Tree, entry: Entry, kind: str) -> list[tuple[str, dict]]:
+def layers(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -> list[tuple[str, dict]]:
     if kind not in RECIPE_KINDS:
         raise TreeError(f"recipe kind must be one of {RECIPE_KINDS}")
     out = [("featx-defaults", _defaults(kind))]
@@ -40,15 +42,23 @@ def layers(tree: Tree, entry: Entry, kind: str) -> list[tuple[str, dict]]:
         data = store.read_yaml(e.dir / "recipes" / f"{kind}.yaml")
         if data:
             out.append((e.rel, data))
+    if overrides:
+        out.append(("overrides", overrides))
+    out = [(src, presets.legacy_layer(kind, data)) for src, data in out]
+    if kind == "run":
+        # The workload's run keys sit right above the featx defaults: every recipe layer wins.
+        merged: dict = {}
+        for _src, data in out:
+            merged = config.deep_merge(merged, data)
+        if merged.get("workload"):
+            out.insert(1, (f"workload:{merged['workload']}", presets.workload_layer(merged["workload"])))
     return out
 
 
 def effective(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -> dict:
     merged: dict = {}
-    for _src, data in layers(tree, entry, kind):
+    for _src, data in layers(tree, entry, kind, overrides):
         merged = config.deep_merge(merged, data)
-    if overrides:
-        merged = config.deep_merge(merged, overrides)
     return merged
 
 

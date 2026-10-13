@@ -16,6 +16,9 @@ Variables: everything from recipes.base_context plus
   of this runset's points, ${post.<step>} other step dirs, ${python} interpreter for scripts,
   ${plugin.scripts} featx/post/scripts (the built-in plugins' helpers), and every `with:` key.
   ${scripts} is the runset's snapshot of the node's helper scripts, as in build/run.
+  ${workload} / ${workload.label} / ${workload.reference}: the runset run's workload, its
+  analysis suite label and its default baseline name (spec06 / exec-0903 without a workload);
+  they are substituted before @baseline(..) references are resolved.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from pathlib import Path
 
 import yaml
 
-from .. import baselines, config, recipes
+from .. import baselines, config, presets, recipes, store
 
 MANIFEST_DIR = Path(__file__).parent / "manifests"
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
@@ -132,6 +135,12 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     if isinstance(params.get("baselines"), list):
         params["baselines"] = dict(_labelled(b) for b in params["baselines"])
     params = _self_refs(params, f"{entry.rel}/{task.runset_name}")
+    wl_ctx = workload_context(runset_dir)
+    ctx.update(wl_ctx)
+    params = recipes.substitute(params, wl_ctx)
+    if "@baseline()" in repr(params):
+        raise ValueError(f"post step {step_name!r}: workload {wl_ctx['workload']!r} has no reference baseline; "
+                         f"set the step's with.reference / baselines")
     params = baselines.resolve_refs(params, tree)
     for _ in range(3):   # params may reference each other and ctx
         params = recipes.substitute(params, {**ctx, **_flat_params(params)})
@@ -148,6 +157,13 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
                                                           "with": params}, sort_keys=False))
     env = {"FEATX_ROOT": str(config.root()), "FEATX_TOOLS": config.settings()["analysis_dir"]}
     return "\n".join(lines) + "\n", env
+
+
+def workload_context(runset_dir: Path) -> dict:
+    run = ((store.read_yaml(runset_dir / "experiment.yaml") or {}).get("recipes") or {}).get("run") or {}
+    wl = run.get("workload")
+    return {"workload": wl or "", "workload.label": presets.label(wl),
+            "workload.reference": presets.reference(wl) or ""}
 
 
 def _flat_params(params: dict) -> dict:

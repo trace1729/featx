@@ -6,10 +6,23 @@ description: >-
 after: [collect]
 with:
   trace: ${post.collect}/points.csv
-  reference: "@baseline(exec-0903)"
+  reference: "@baseline(${workload.reference})"
   config: ${points_config}
-  suite: spec06
+  suite: ${workload.label}
   topdown_config: /nfs/home/gongkaichen/tracertl/OpenXiangshan/scripts/top-down/configs.py
+params:
+  trace: this runset's collected points.csv (default ${post.collect}/points.csv)
+  reference: point-dir root, collector dir or @baseline/@run ref (default the workload's reference baseline)
+  config: points to pair (default this runset's points)
+  suite: label (default the run's workload label)
+  topdown_config: XiangShan top-down configs.py
+outputs:
+  points.csv: paired trace/execution rows per point, sorted by |IPC delta|
+  benchmarks.csv: per-benchmark trace_/execution_<metric> and deltas
+  topdown_points.csv: per-point TopDown category deltas
+  topdown_benchmarks.csv: per-benchmark TopDown category deltas
+  suite.json: "-> summary.json: paired_points, paired_benchmarks, trace_ipc_geomean, execution_ipc_geomean,
+    execution_ipc_change, trace_mean_<metric>, execution_mean_<metric>"
 cmd: |
   ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
   ${python} ${tools}/compare_gsim_spec_points.py --trace ${trace} --execution "$ref" --suite ${suite} \

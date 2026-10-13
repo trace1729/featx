@@ -21,6 +21,9 @@ REF_RE = re.compile(r"@(baseline|runset|run|post)\(([^()]*)\)(\.collected)?")
 SEED = {
     "exec-0903": {"root": "/nfs/share/gkc/wpe-synthetic_PA/0903/spec06-1.0c/execution",
                   "description": "XiangShan execution-driven reference (synthetic-PA 0903 campaign), 20M+20M"},
+    "exec-0903-spec17": {"root": "/nfs/share/gkc/wpe-synthetic_PA/0903/spec17-1.0c/execution",
+                         "description": "XiangShan execution-driven SPEC17 reference (0903), 20M+20M; "
+                                        "579/590 points completed, lbm_400000000 named 5.1e-05"},
     "nowpe-0912": {"root": "/nfs/share/gkc/wpe-NEMU_PA/0912/spec06-1.0c/trace",
                    "description": "TraceRTL, NEMU PA, no wrong-path emulation (0912 unified binary)"},
     "overlay-0928": {"root": "/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/0928/spec06-1.0c/trace",

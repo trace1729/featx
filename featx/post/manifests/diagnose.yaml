@@ -5,11 +5,24 @@ description: >-
 after: [collect]
 with:
   trace: ${post.collect}/points.csv
-  reference: "@baseline(exec-0903)"
+  reference: "@baseline(${workload.reference})"
   config: ${points_config}
-  suite: spec06
+  suite: ${workload.label}
   top_n: 10
   repo_root: /nfs/home/gongkaichen/tracertl/OpenXiangshan
+params:
+  trace: this runset's collected points.csv
+  reference: reference (default the workload's reference baseline)
+  config: points (default this runset's points)
+  suite: label (default the run's workload label)
+  top_n: how many largest-IPC-gap points get a report
+  repo_root: XiangShan checkout for the TopDown definitions
+outputs:
+  ranking.csv: points ranked by IPC gap
+  topdown_nodes.csv: TopDown node deltas of the ranked points
+  summary.md: human summary
+  points/<point>.md: per-point report
+  summary.json: ranking.rows, ranking.mean.<numeric column of ranking.csv>
 cmd: |
   ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
   ${python} ${tools}/diagnose_top_ipc_gaps.py --trace ${trace} --execution "$ref" --suite ${suite} \

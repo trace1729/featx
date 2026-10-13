@@ -185,7 +185,7 @@ def test_scripts_inherited_in_build_run_post(root, fake_emu, tmp_path):
     rdir = Path(res["runset_dir"])
     b_id, r_id, p_id = (t["id"] for t in res["tasks"])
     assert s.tasks[b_id].spec["script"] == f"bash {rdir}/scripts/build.sh"
-    assert f"bash {rdir}/scripts/args.sh" in s.tasks[r_id].spec["command"]
+    assert f"bash {rdir}/scripts/args.sh" in s.tasks[r_id].spec["args"]
     assert sorted(p.name for p in (rdir / "scripts").iterdir()) == ["args.sh", "build.sh", "stats.sh"]
     run_until(s, lambda: s.tasks[p_id].state in ("succeeded", "failed"))
     for t in (b_id, r_id, p_id):

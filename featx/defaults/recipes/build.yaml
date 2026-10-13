@@ -1,5 +1,16 @@
-# Build recipe defaults. type: gsim-two-step | script
-type: gsim-two-step
+# Build recipe defaults.
+tool: gsim           # gsim | verilator | script (the legacy `type: gsim-two-step|script` still works)
+mode: trace          # trace | exec -> TRACERTL_MODE=1|0; the run follows the build's mode
+# Make switches for every make call of the build (featx/presets.py lowers them at submit).
+options:
+  chiseldb: false    # WITH_CHISELDB (Chisel elaboration; gsim step 2 always links the DB bridge)
+  chiselmap: false   # WITH_CHISELMAP=1 when true (placeholder: no Makefile reads it yet)
+  constantin: false  # WITH_CONSTANTIN
+  dramsim3: true     # WITH_DRAMSIM3
+  threads: 1         # EMU_THREADS (a run's cores_per_point defaults to this)
+  optimize: -O3      # EMU_OPTIMIZE
+  flags: {}          # any other make variables, e.g. {DISABLE_PERF: 1, WITH_ROLLINGDB: 1}
+  extra: ""          # raw make args appended to every make call
 cores: 64            # placement need (make -j)
 mem_gb: 96
 host: null           # pin to a host; null = least-loaded
@@ -13,13 +24,20 @@ env:
 # Text patches applied before the build and reverted afterwards (parameter flips without
 # a commit). Each: {file: <path relative to workdir>, find: <exact text>, replace: <text>}.
 patches: []
+# tool: gsim -> step 1 `make gsim`, step 2 `make -C difftest emu GSIM=1`
 gsim:
   gsim_bin: /nfs/share/bin/gsim
   dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
   jobs: 64
-  step1_args: EMU_THREADS=1 TRACERTL_MODE=1 WITH_DRAMSIM3=1 WITH_CONSTANTIN=0 WITH_CHISELDB=0 EMU_OPTIMIZE=-O3
-  step2_args: SIM_TOP=SimTop NUM_CORES=1 RTL_SUFFIX=sv TRACERTL_MODE=1 WITH_DRAMSIM3=1 EMU_THREADS=1 WITH_CHISELDB=1 WITH_CONSTANTIN=0 EMU_OPTIMIZE=-O3
+  step1_args: ""     # raw make args after the generated ones (they win)
+  step2_args: ""
   # C++-only change (TraceRTL/difftest): copy this build/ dir and only relink (step 2).
   reuse_build_from: null
-# type: script -> bash body run in workdir; must leave ${artifact}.
+# tool: verilator -> `make emu` (Chisel elaboration + Verilator)
+verilator:
+  bin_dir: /nfs/home/gongkaichen/verilator/bin   # prepended to PATH
+  dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  jobs: 64
+  args: ""           # raw make args after the generated ones (they win)
+# tool: script -> bash body run in workdir; must leave ${artifact}.
 script: null

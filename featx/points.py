@@ -25,6 +25,10 @@ def from_suite(config_json: str, benchmarks: list[str] | None = None) -> list[st
 
 
 def resolve(spec: dict) -> list[str]:
+    """points ∪ points_file ∪ suite; none of them + a workload = all the workload's points.
+    `benchmarks` then keeps only those benchmarks. With a workload every point must be in
+    its manifest."""
+    from . import presets
     names: list[str] = []
     names += [p for p in spec.get("points") or [] if p]
     if spec.get("points_file"):
@@ -35,6 +39,19 @@ def resolve(spec: dict) -> list[str]:
         if isinstance(suite, str):
             suite = {"config": suite}
         names += from_suite(suite["config"], suite.get("benchmarks"))
+    wl = spec.get("workload")
+    if wl and not names:
+        names = presets.workload_points(spec)
+    benches = spec.get("benchmarks") or []
+    if benches:
+        names = [n for n in names if parse(n)["bench"] in benches]
+    if wl:
+        known = presets.manifest(wl)
+        missing = [n for n in names if known and n not in known]
+        if missing:
+            raise presets.PresetError(
+                f"{len(missing)} point(s) are not in workload {wl}: {', '.join(missing[:5])}"
+                f"{' ...' if len(missing) > 5 else ''} (an inherited suite/points? set it to null)")
     return list(dict.fromkeys(names))
 
 

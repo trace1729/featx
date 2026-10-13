@@ -5,9 +5,21 @@ description: >-
 with:
   input: ${run}               # dir of <bench>_<cp>_<weight> point dirs
   config: ${points_config}    # collector JSON (points of this runset)
-  suite: spec06
+  suite: ${workload.label}
   N: 2
   extra: ""                   # e.g. --include-incomplete
+params:
+  input: dir of <bench>_<cp>_<weight> point dirs (default this runset's run/)
+  config: collector JSON restricting the points (default this runset's points)
+  suite: label written into the outputs (default the run's workload label)
+  N: PERF block to read (2 = formal window after warmup)
+  extra: raw collector args, e.g. --include-incomplete
+outputs:
+  points.csv: one row per point (ipc, branch_mpki, topdown_*, train counters, ...)
+  benchmarks.csv: weighted per-benchmark rows
+  suite.json: "-> summary.json: configured_points, completed_points, ipc_geomean_completed_benchmarks,
+    benchmark_mean_<metric>, completed_point_total_<counter>, completed_point_wpt_fraction, ..."
+  collect.stdout: collector log
 cmd: |
   ${python} ${tools}/collect_gsim_spec_perf.py -r ${input} --config ${config} --suite ${suite} \
     -N ${N} -o ${out} ${extra} > ${out}/collect.stdout
