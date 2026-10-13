@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { api } from "../api";
 import { AddNodeDialog, MoveDialog, RemoveDialog } from "../components/NodeDialogs";
 import { Markdown } from "../components/FileViewer";
-import { Badge, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
+import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
 import type { NodeContext, RunsetSummary } from "../types";
 import { fmtTime, fmtValue, metricLabel, parseCsv, parseOverrides } from "../util";
@@ -270,41 +270,62 @@ interface WtStatus {
   submodules?: Record<string, { branch: string; path: string; head: string; dirty: number }>;
 }
 
-function WorktreeTab({ ctx }: { ctx: NodeContext }) {
+function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => void }) {
   const act = useAction();
   const invalidate = useInvalidateNode();
   const [repo, setRepo] = useState("");
   const [base, setBase] = useState("");
+  return (
+    <Dialog open onClose={onClose} title={`Create a worktree for ${path}`}>
+      <div className="form">
+        <label>repo</label>
+        <input type="text" className="mono" autoFocus value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="default: git.repo from featx.yaml" />
+        <label>base</label>
+        <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder="default: git.base from featx.yaml" />
+      </div>
+      <p className="muted small">Creates the worktree and branch featx/{path} (and the configured submodule worktrees). This takes a while.</p>
+      <ErrorBox error={act.error} />
+      <div className="dialog-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button
+          className="primary"
+          disabled={act.busy}
+          onClick={() =>
+            act.run(async () => {
+              await api.post("/worktrees", { ref: path, repo: repo || undefined, base: base || undefined });
+              await invalidate();
+              onClose();
+            })
+          }
+        >
+          {act.busy ? "Creating…" : "Create"}
+        </button>
+      </div>
+    </Dialog>
+  );
+}
+
+function WorktreeTab({ ctx }: { ctx: NodeContext }) {
+  const [creating, setCreating] = useState(false);
   const q = useQuery({
     queryKey: ["wt", ctx.node.path],
     queryFn: () => api.get<WtStatus>("/worktrees/status", { ref: ctx.node.path }),
     enabled: !!ctx.git,
   });
   if (!ctx.git) {
-    const inherited = ctx.ancestors.length > 0;
+    // ${worktree} only resolves from the node's own git info (recipes.base_context), so a
+    // build of this node is refused until it has one; runs with --bin do not need it.
     return (
       <div>
         <p>
-          This node has no worktree of its own.
-          {inherited && " Builds use the nearest ancestor's worktree, if one has it."}
+          No worktree. Builds of this node need one (<span className="mono">{"${worktree}"}</span>); runs with an
+          existing binary (<span className="mono">--bin</span>) don't.
         </p>
-        <div className="form">
-          <label>repo</label>
-          <input type="text" className="mono" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="default: git.repo from featx.yaml" />
-          <label>base</label>
-          <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder="default: git.base from featx.yaml" />
-          <span />
-          <div>
-            <button className="primary" disabled={act.busy} onClick={() => act.run(async () => {
-              await api.post("/worktrees", { ref: ctx.node.path, repo: repo || undefined, base: base || undefined });
-              await invalidate();
-            })}>
-              {act.busy ? "Creating…" : "Create worktree"}
-            </button>
-            <span className="muted small"> featx worktree create {ctx.node.path}</span>
-          </div>
+        <div className="row">
+          <button onClick={() => setCreating(true)}>Create worktree…</button>
+          <span className="muted small">featx worktree create {ctx.node.path}</span>
         </div>
-        <ErrorBox error={act.error} />
+        {creating && <CreateWorktreeDialog path={ctx.node.path} onClose={() => setCreating(false)} />}
       </div>
     );
   }

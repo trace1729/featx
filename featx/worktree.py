@@ -229,7 +229,8 @@ def status(node: Node) -> dict:
     git = node.git
     if not git:
         return {}
-    out = {"worktree": git.worktree, "branch": git.branch, "exists": Path(git.worktree).is_dir()}
+    out = {"worktree": git.worktree, "branch": git.branch, "repo": git.repo, "base": git.base,
+           "exists": Path(git.worktree).is_dir()}
     if out["exists"]:
         out["head"] = run_git(["-C", git.worktree, "rev-parse", "--short", "HEAD"], check=False)
         porcelain = run_git(["-C", git.worktree, "status", "--porcelain", "--ignore-submodules=all"],

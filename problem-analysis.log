@@ -158,3 +158,27 @@ MoveDialog 的 apply 改为 post /nodes/mv → onDone(dst) → refresh(src)；Re
 对话框，onDone 改为接收 rm 的返回值，顺序为 post /nodes/rm → onDone(r) → refresh(path)。
 featx/web/src/pages/Node.tsx：Remove 的 onDone 跳到父节点（顶层节点则跳到 /leaderboard），并带
 state.notice；NodePage 读取 useLocation().state.notice，用 okbox 显示。
+
+## 2026-10-13 15:10  UI worktree 标签页看起来像“新建条目”；继承说明错误；repo/base 显示为空
+
+问题与解决方案总结:
+用户反馈在节点页点击 worktree 标签后“屏幕上新建了一个条目”。在生产 UI 上用 Playwright 复现：点击标签只
+改变 ?tab=worktree，没有任何写请求，磁盘和树都没有变化；但对没有 worktree 的节点，标签页直接展开一个
+可编辑的 repo/base 表单和醒目的蓝色 Create worktree 按钮，看上去就像点开标签就开始新建条目，用户确认
+指的就是这个表单。排查时还发现两个问题：(1) 页面写着“Builds use the nearest ancestor's worktree”，
+与实现不符——recipes.base_context 只用节点自身的 git 设置 ${worktree}，没有时 build.workdir 保持
+字面量 ${worktree}，scheduler._validate 以 "create the node worktree first" 拒绝构建，只有 --bin
+运行不需要 worktree；(2) 已有 worktree 时 “repo / base” 一行只显示 “@”，因为 worktree.status() 返回
+的字典里没有 repo 和 base，而前端 GitInfo 类型假定有。另外节点头部 verdict 下拉框独占一行、status
+标签悬在右侧，原因是 .form select { width: 100% } 也作用于 .row 内的下拉框。修复方案：标签页只显示
+状态说明和 “Create worktree…” 普通按钮，点击后才弹出与 Add child/Move 一致的对话框填写 repo/base；
+说明改为准确文字；status() 补上 repo/base；.row 内的下拉框宽度改为 auto。
+
+代码修改说明:
+featx/web/src/pages/Node.tsx：新增 CreateWorktreeDialog（Dialog 内含 repo/base 输入、Cancel/Create，
+Create 仍 POST /worktrees 并 invalidate 节点查询，成功后关闭）；WorktreeTab 无 git 时只渲染说明文字、
+“Create worktree…” 按钮和 CLI 提示，按钮置 creating 状态才挂载对话框。featx/web/src/styles.css：增加
+.form .row select { width: auto; }（特异性高于 .form select）。featx/worktree.py：status() 输出增加
+repo、base。featx/web/src/App.test.tsx：新增用例，打开 git 为 null 的节点的 worktree 标签，断言点击按钮
+前没有 repo 输入框、点击后出现，且全程没有非 GET 请求。dev daemon 上 Playwright 验证：标签页 0 个写请求，
+对话框在临时仓库上创建 worktree 成功，repo / base 显示为 <repo> @ main，头部 verdict/status 同处一行。

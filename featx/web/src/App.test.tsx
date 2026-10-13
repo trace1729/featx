@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -14,6 +14,11 @@ const FIXTURES: Record<string, unknown> = {
     { id: "1", path: "wpe", name: "wpe", depth: 0, kind: "category", verdict: "open", status: "active", hypothesis: "", worktree: false, runsets: 0, latest: null, tasks: {}, active: [], eta_s: null },
     { id: "2", path: "wpe/overlay", name: "overlay", depth: 1, kind: "feature", verdict: "supported", status: "active", hypothesis: "h", worktree: true, runsets: 2, latest: "20261012-2", tasks: { run: "running" }, active: ["run"], eta_s: 600 },
   ],
+  "/nodes/context": {
+    node: { id: "1", path: "wpe", kind: "category", hypothesis: "", verdict: "open", verdict_note: "", status: "active", evidence: [], tags: [] },
+    dir: "/r/tree/wpe", ancestors: [], children: [], notes: "", git: null, recipes: {}, own_recipes: {},
+    scripts_dir: "/r/tree/wpe/scripts", scripts: [], runsets: [], runset_count: 0,
+  },
   "/leaderboard": {
     metric: "pk.self.mean_abs_err_pct",
     order: "asc",
@@ -72,5 +77,16 @@ describe("App", () => {
     expect(screen.getByText("0.800")).toBeTruthy();
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.find(([u]) => u.startsWith("/leaderboard"))!;
     expect((call[1].headers as Record<string, string>)["X-Featx-Token"]).toBe("t0k");
+  });
+
+  it("does not show a creation form just for opening the worktree tab", async () => {
+    setToken("t0k");
+    renderAt("/node/wpe?tab=worktree");
+    const open = await screen.findByRole("button", { name: "Create worktree…" });
+    expect(screen.queryByPlaceholderText(/git.repo/)).toBeNull();
+    fireEvent.click(open);
+    expect(await screen.findByPlaceholderText(/git.repo/)).toBeTruthy();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls;
+    expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
   });
 });
