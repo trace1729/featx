@@ -24,7 +24,8 @@ outputs:
   suite.json: "-> summary.json: paired_points, paired_benchmarks, trace_ipc_geomean, execution_ipc_geomean,
     execution_ipc_change, trace_mean_<metric>, execution_mean_<metric>"
 cmd: |
-  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite}) || exit $?
+  ${python} ${plugin.scripts}/check_paired.py ${trace} "$ref" || exit $?
   ${python} ${tools}/compare_gsim_spec_points.py --trace ${trace} --execution "$ref" --suite ${suite} \
     -o ${out} --topdown-config ${topdown_config} > ${out}/compare.stdout
 summary_from: suite.json

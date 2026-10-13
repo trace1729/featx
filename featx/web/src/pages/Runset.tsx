@@ -1,5 +1,5 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { FileBrowser, FileView, Markdown } from "../components/FileViewer";
@@ -20,57 +20,72 @@ function jobPct(job: JobView, target?: number): number | null {
 
 function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; onJob: (j: string) => void }) {
   const jobs = task.jobs ?? [];
+  const wrap = useRef<HTMLDivElement>(null);
+  // A campaign has ~1000 jobs: the table scrolls in its own box (header kept visible) so the
+  // log below stays reachable; keep the selected job (e.g. from ?job=) in view without
+  // scrolling the page.
+  useEffect(() => {
+    const box = wrap.current;
+    const row = box?.querySelector<HTMLTableRowElement>("tr.selected");
+    if (!box || !row) return;
+    const head = box.querySelector("thead")?.offsetHeight ?? 0;
+    if (row.offsetTop - head < box.scrollTop || row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) {
+      box.scrollTop = row.offsetTop - head - (box.clientHeight - head) / 2;
+    }
+  }, [job, jobs.length]);
   if (!jobs.length) return <div className="muted">this task has no per-point jobs.</div>;
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>job</th>
-          <th>state</th>
-          <th>host</th>
-          <th className="num">attempt</th>
-          <th style={{ width: "22%" }}>progress</th>
-          <th>ETA</th>
-          <th className="num">rc</th>
-          <th>failure</th>
-        </tr>
-      </thead>
-      <tbody>
-        {jobs.map((j) => (
-          <tr key={j.name} className={`clickable ${j.name === job ? "selected" : ""}`} onClick={() => onJob(j.name)}>
-            <td className="mono">{j.name}</td>
-            <td>
-              <StateBadge state={j.state} />
-            </td>
-            <td className="mono">{j.host ?? ""}</td>
-            <td className="num">{j.attempt}</td>
-            <td>
-              {j.state === "running" || j.state === "succeeded" ? (
-                <Progress
-                  pct={jobPct(j, task.target_inst)}
-                  label={
-                    j.progress?.inst !== undefined
-                      ? `${fmtCount(j.progress.inst)}${task.target_inst ? ` / ${fmtCount(task.target_inst)}` : ""}${j.progress.inst_per_s ? ` · ${fmtCount(j.progress.inst_per_s)}/s` : ""}`
-                      : undefined
-                  }
-                />
-              ) : (
-                ""
-              )}
-            </td>
-            <td>{ACTIVE.includes(j.state) ? <Eta seconds={j.eta_s} /> : ""}</td>
-            <td className="num">{j.rc ?? ""}</td>
-            <td className="small">
-              {j.failure && (
-                <span title={j.failure.tail ?? ""}>
-                  <Badge kind={j.failure.class === "design" ? "failed" : "warn"}>{j.failure.class ?? "?"}</Badge> <span className="mono">{j.failure.signature}</span>
-                </span>
-              )}
-            </td>
+    <div className="table-wrap jobs-wrap" ref={wrap} data-testid="jobs-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>job</th>
+            <th>state</th>
+            <th>host</th>
+            <th className="num">attempt</th>
+            <th style={{ width: "22%" }}>progress</th>
+            <th>ETA</th>
+            <th className="num">rc</th>
+            <th>failure</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {jobs.map((j) => (
+            <tr key={j.name} className={`clickable ${j.name === job ? "selected" : ""}`} onClick={() => onJob(j.name)}>
+              <td className="mono">{j.name}</td>
+              <td>
+                <StateBadge state={j.state} />
+              </td>
+              <td className="mono">{j.host ?? ""}</td>
+              <td className="num">{j.attempt}</td>
+              <td>
+                {j.state === "running" || j.state === "succeeded" ? (
+                  <Progress
+                    pct={jobPct(j, task.target_inst)}
+                    label={
+                      j.progress?.inst !== undefined
+                        ? `${fmtCount(j.progress.inst)}${task.target_inst ? ` / ${fmtCount(task.target_inst)}` : ""}${j.progress.inst_per_s ? ` · ${fmtCount(j.progress.inst_per_s)}/s` : ""}`
+                        : undefined
+                    }
+                  />
+                ) : (
+                  ""
+                )}
+              </td>
+              <td>{ACTIVE.includes(j.state) ? <Eta seconds={j.eta_s} /> : ""}</td>
+              <td className="num">{j.rc ?? ""}</td>
+              <td className="small">
+                {j.failure && (
+                  <span title={j.failure.tail ?? ""}>
+                    <Badge kind={j.failure.class === "design" ? "failed" : "warn"}>{j.failure.class ?? "?"}</Badge> <span className="mono">{j.failure.signature}</span>
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

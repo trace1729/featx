@@ -100,6 +100,11 @@ rules:
     signature: '{0}'
 
   # ---- post ----------------------------------------------------------------
+  - name: post-input
+    class: design
+    kinds: [post]
+    regex: '^(check_paired: nothing to compare: .{0,160}|ensure_collected: .{0,200})'
+    signature: '{0}'
   - name: py-traceback
     class: design
     kinds: [post]

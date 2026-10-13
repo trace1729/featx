@@ -45,6 +45,10 @@ def ensure_token() -> str:
     return tok
 
 
+HEARTBEAT_SECONDS = 5.0
+HUNG_AFTER = 600.0   # tick loop without progress this long = hung: stop the heartbeat
+
+
 class Daemon:
     def __init__(self, port: int | None = None, bind: str | None = None) -> None:
         s = config.settings()["daemon"]
@@ -57,6 +61,7 @@ class Daemon:
         self.token = ensure_token()
         self.stop = threading.Event()
         self.started = store.now_iso()
+        self.loop_beat = time.time()
 
     def write_daemon_json(self) -> None:
         store.write_json(config.daemon_json(), {
@@ -65,16 +70,25 @@ class Daemon:
 
     def loop(self) -> None:
         while not self.stop.is_set():
-            t0 = time.time()
+            t0 = self.loop_beat = time.time()
             try:
                 self.sched.tick()
             except Exception:  # noqa: BLE001
                 self.sched.tick_errors = (self.sched.tick_errors + [traceback.format_exc()])[-20:]
-            try:
-                self.write_daemon_json()
-            except OSError:
-                pass
+            self.loop_beat = time.time()
             self.stop.wait(max(0.5, self.tick_seconds - (time.time() - t0)))
+
+    def heartbeat_loop(self) -> None:
+        """daemon.json heartbeat on its own thread: a long tick (a big panel's launches) must not
+        make the CLI think featxd is down (then it would mutate files directly). A tick loop
+        stuck for HUNG_AFTER stops the heartbeat, so the watchdog still restarts a hung daemon."""
+        while not self.stop.is_set():
+            if time.time() - self.loop_beat < HUNG_AFTER:
+                try:
+                    self.write_daemon_json()
+                except OSError:
+                    pass
+            self.stop.wait(HEARTBEAT_SECONDS)
 
 
 UI_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -390,6 +404,8 @@ def main() -> None:
         d.write_daemon_json()
         th = threading.Thread(target=d.loop, name="featx-tick", daemon=True)
         th.start()
+        hb = threading.Thread(target=d.heartbeat_loop, name="featx-heartbeat", daemon=True)
+        hb.start()
         # uvicorn restores the previous SIGTERM handler after its graceful shutdown and then
         # re-raises the signal; with the default handler that kills us before `finally` runs.
         signal.signal(signal.SIGTERM, _exit_on_term)
@@ -398,6 +414,7 @@ def main() -> None:
         finally:
             d.stop.set()
             th.join(timeout=30)
+            hb.join(timeout=10)   # its last write must not land after the "stopped" mark
             info = store.read_json(config.daemon_json(), {})
             if info.get("pid") == os.getpid():
                 info["stopped"] = time.time()

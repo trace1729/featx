@@ -16,7 +16,8 @@ outputs:
   branch_type_mpki.csv: per-point MPKI per branch type, trace vs reference
   summary.json: mpki.rows, mpki.mean.<numeric column>
 cmd: |
-  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite}) || exit $?
+  ${python} ${plugin.scripts}/check_paired.py ${trace} "$ref" || exit $?
   ${python} ${tools}/extract_branch_type_mpki.py --trace ${trace} --execution "$ref" --suite ${suite} \
-    -o ${out}/branch_type_mpki.csv
+    -o ${out}/branch_type_mpki.csv || exit $?
   ${python} ${plugin.scripts}/csv_summary.py ${out}/branch_type_mpki.csv ${out}/summary.json --prefix mpki

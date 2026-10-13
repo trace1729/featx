@@ -24,13 +24,15 @@ def from_suite(config_json: str, benchmarks: list[str] | None = None) -> list[st
     return out
 
 
-def resolve(spec: dict) -> list[str]:
+def resolve(spec: dict, strict: bool = False) -> list[str]:
     """points ∪ points_file ∪ suite; none of them + a workload = all the workload's points.
     `benchmarks` then keeps only those benchmarks. With a workload every point must be in
-    its manifest."""
+    its manifest. strict (submit validation): `benchmarks` may not drop a point named
+    explicitly in `points`, nor leave nothing of a non-empty selection."""
     from . import presets
     names: list[str] = []
-    names += [p for p in spec.get("points") or [] if p]
+    explicit = [p for p in spec.get("points") or [] if p]
+    names += explicit
     if spec.get("points_file"):
         names += [l.strip() for l in Path(spec["points_file"]).read_text().splitlines()
                   if l.strip() and not l.startswith("#")]
@@ -44,7 +46,20 @@ def resolve(spec: dict) -> list[str]:
         names = presets.workload_points(spec)
     benches = spec.get("benchmarks") or []
     if benches:
+        selected = names
         names = [n for n in names if parse(n)["bench"] in benches]
+        if strict:
+            dropped = [n for n in explicit if parse(n)["bench"] not in benches]
+            if dropped:
+                raise presets.PresetError(
+                    f"benchmarks={benches} drops {len(dropped)} point(s) given by points/--point: "
+                    f"{', '.join(dropped[:5])}{' ...' if len(dropped) > 5 else ''} (an inherited "
+                    f"benchmarks filter? set it to null: --set run.benchmarks=null)")
+            if selected and not names:
+                known = sorted({parse(n)["bench"] for n in selected})
+                raise presets.PresetError(
+                    f"benchmarks={benches} matches none of the {len(selected)} selected points; "
+                    f"their benchmarks are: {', '.join(known[:12])}{' ...' if len(known) > 12 else ''}")
     if wl:
         known = presets.manifest(wl)
         missing = [n for n in names if known and n not in known]

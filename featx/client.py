@@ -47,6 +47,12 @@ class Client:
     def _do(self, method: str, path: str, *, timeout: float | None = None, **kw):
         try:
             r = self.http.request(method, path, timeout=timeout or self.http.timeout, **kw)
+        except httpx.ReadTimeout as error:
+            # featxd is up but busy; the request may still complete server side.
+            hint = " (it may still be applied: check `featx ps` / `featx events` before retrying)" \
+                if method != "GET" else ""
+            raise DaemonDown(f"featxd at {self.url} did not answer {method} {path} in time{hint}: "
+                             f"{error}") from error
         except httpx.TransportError as error:
             raise DaemonDown(f"featxd unreachable at {self.url}: {error}") from error
         if r.status_code >= 400:

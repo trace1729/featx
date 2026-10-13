@@ -150,7 +150,10 @@ A point name is `<bench>_<cp>_<weight>`; the bench may itself contain `_`.
    (`{config: <spec json>, benchmarks: [...]}` or just the JSON path).
 2. If none of these select anything and a `workload` is set, the run takes all of the workload's
    manifest points.
-3. `benchmarks: [...]` then keeps only the points of these benchmarks.
+3. `benchmarks: [...]` then keeps only the points of these benchmarks. Names are the manifest's
+   `benchmark` column (`mcf`, not `505.mcf_r`). Submit fails if the filter drops a point named in
+   `points` (or `--point`), or leaves nothing of a non-empty selection; the error lists the
+   benchmarks it saw. An inherited filter usually needs `--set run.benchmarks=null`.
 4. With a workload, every point must be in its manifest. Otherwise submit fails and names the
    missing points; an inherited `suite`/`points` usually needs `null` in the node's layer.
 5. `featx submit --point NAME` replaces `points`, `points_file` and `suite` for that submit.
@@ -198,6 +201,12 @@ steps:
 - `name: null` drops an inherited step.
 
 `summary.json` keys appear as `<step>.<key>` metrics on the leaderboard and in `featx result`.
+
+`pair`, `diagnose` and `branch-mpki` first check that the runset and the reference share at least
+one valid point (an `ipc` in both collector `points.csv`). If they share none, the step fails
+(exit 3) with `check_paired: nothing to compare: ...`. The message says which side has no valid
+point and gives per-side counts with the collector status. A common cause is `I < W`: there is no
+formal-window PERF block, so the status is `parse_error:need 2 PERF blocks`.
 
 ## variables — ${variables}
 
@@ -391,6 +400,9 @@ featx baseline list
 featx baseline add NAME ROOT -m "description" [--collected DIR] [--binary EMU]
 featx baseline rm NAME [--force]     # refused while a recipe refers to it, unless --force
 ```
+
+Older roots spell weights shortened (`GemsFDTD_10619_0.03475`); `perf-keys` matches such a dir to
+the 6-digit point name (`..._0.034750`) by numeric weight.
 
 The seeds are `exec-0903` (SPEC06) and `exec-0903-spec17`. Post steps refer to a baseline as
 `@baseline(NAME)` or by name in a `baselines:` list.

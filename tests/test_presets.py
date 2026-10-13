@@ -158,6 +158,24 @@ def test_workload_layer_and_points(toy_workload):
         presets.workload("nope")
 
 
+def test_points_strict_benchmarks_filter(toy_workload):
+    tree = Tree()
+    service.recipe_set("t/w", "run", {"workload": "toy"})
+    spec = recipes.effective(tree, tree.get("t/w"), "run")
+    # an inherited benchmarks filter silently dropped explicit points; strict (submit) refuses
+    assert points.resolve({**spec, "points": ["abort_1_0.5"], "benchmarks": ["ok"]}) == []
+    with pytest.raises(presets.PresetError, match="drops 1 point"):
+        points.resolve({**spec, "points": ["abort_1_0.5", "ok_1_0.5"], "benchmarks": ["ok"]}, strict=True)
+    with pytest.raises(presets.PresetError, match="matches none of the 3 selected points"):
+        points.resolve({**spec, "benchmarks": ["505.mcf_r"]}, strict=True)
+    assert points.resolve({**spec, "benchmarks": ["ok"]}, strict=True) == ["ok_1_0.5", "ok_2_0.25"]
+    assert points.resolve({**spec, "points": ["abort_1_0.5"], "benchmarks": None}, strict=True) == ["abort_1_0.5"]
+    service.recipe_set("t/w", "run", {"workload": "toy", "benchmarks": ["ok"], "points": ["abort_1_0.5"]})
+    with pytest.raises(SchedError, match="drops 1 point"):
+        sched().submit("t/w", ["run"], bin_ref="/bin/true")
+    assert Tree().runsets(Tree().get("t/w")) == []
+
+
 def test_failed_submit_leaves_no_runset(toy_workload):
     service.recipe_set("t/w", "run", {"workload": "toy", "points": ["nope_1_0.1"]})
     s = sched()

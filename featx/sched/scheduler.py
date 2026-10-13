@@ -46,6 +46,8 @@ class Scheduler:
         self.last_tick = 0.0
         self._progress_at: dict[tuple[str, str], float] = {}
         self._saved_at: dict[str, float] = {}
+        # (host, job dir, attempt, deadline): launches that completed after their job was cancelled
+        self._orphans: list[tuple[str, Path, int, float]] = []
         self._readopt()
 
     def _readopt(self) -> None:
@@ -230,8 +232,8 @@ class Scheduler:
         elif task.kind == "run":
             if spec.get("executor") not in ("points", "perf_trigger"):
                 raise SchedError("run.executor must be points|perf_trigger")
-            if spec.get("executor") == "points" and not ptmod.resolve(spec):
-                raise SchedError("run recipe selects no points (set points / points_file / suite)")
+            if spec.get("executor") == "points" and not ptmod.resolve(spec, strict=True):
+                raise SchedError("run recipe selects no points (set points / points_file / suite / workload)")
             if spec.get("executor") == "perf_trigger" and not spec["perf_trigger"].get("json_path"):
                 raise SchedError("perf_trigger executor needs perf_trigger.json_path")
             emu = str(spec.get("emu", ""))
@@ -334,39 +336,45 @@ class Scheduler:
     # ================================================================ tick
     def tick(self) -> None:
         with self.lock:
-            self.last_tick = _now()
-            active = [t for t in self.tasks.values() if t.state in ACTIVE_TASK_STATES and not t.blocked]
-            if not active:
-                return
-            tree = self._tree()
-            need_launch = False
-            for task in sorted(active, key=lambda t: t.created):
-                try:
-                    if task.state == "queued":
-                        dep = self._deps_state(task)
-                        note = {"wait": "waiting for dependencies", "broken": "blocked: a dependency failed",
-                                "ok": ""}[dep]
-                        if task.note != note:
-                            task.note = note
-                            self._save(task)
-                        if dep != "ok":
-                            continue
-                        self._materialize(tree, task)
+            need_launch = self._tick_locked()
+        if need_launch:
+            self._launch_queued()
+
+    def _tick_locked(self) -> bool:
+        """Poll/materialize under the lock; True if some job waits for a launch."""
+        self.last_tick = _now()
+        self._reap_orphans()
+        active = [t for t in self.tasks.values() if t.state in ACTIVE_TASK_STATES and not t.blocked]
+        if not active:
+            return False
+        tree = self._tree()
+        need_launch = False
+        for task in sorted(active, key=lambda t: t.created):
+            try:
+                if task.state == "queued":
+                    dep = self._deps_state(task)
+                    note = {"wait": "waiting for dependencies", "broken": "blocked: a dependency failed",
+                            "ok": ""}[dep]
+                    if task.note != note:
+                        task.note = note
                         self._save(task)
-                    if task.state == "running":
-                        self._poll(tree, task)
-                        need_launch |= any(j.state == "queued" for j in task.jobs)
-                except Exception as error:  # noqa: BLE001 — one bad task must not stop the loop
-                    msg = f"{task.id}: {error!r}"
-                    self.tick_errors = (self.tick_errors + [msg + "\n" + traceback.format_exc()])[-20:]
-                    if task.state == "queued":
-                        task.state, task.finished = "failed", _now()
-                        task.failure = {"class": "design", "signature": f"materialize: {error}"}
-                        self._save(task)
-                        self.inbox.emit("failure", task=task.id, kind=task.kind, node=self._rel(tree, task),
-                                        runset=task.runset_name, signature=task.failure["signature"])
-            if need_launch:
-                self._launch_queued(tree)
+                    if dep != "ok":
+                        continue
+                    self._materialize(tree, task)
+                    self._save(task)
+                if task.state == "running":
+                    self._poll(tree, task)
+                    need_launch |= any(j.state == "queued" for j in task.jobs)
+            except Exception as error:  # noqa: BLE001 — one bad task must not stop the loop
+                msg = f"{task.id}: {error!r}"
+                self.tick_errors = (self.tick_errors + [msg + "\n" + traceback.format_exc()])[-20:]
+                if task.state == "queued":
+                    task.state, task.finished = "failed", _now()
+                    task.failure = {"class": "design", "signature": f"materialize: {error}"}
+                    self._save(task)
+                    self.inbox.emit("failure", task=task.id, kind=task.kind, node=self._rel(tree, task),
+                                    runset=task.runset_name, signature=task.failure["signature"])
+        return need_launch
 
     def _rel(self, tree: Tree, task: Task) -> str:
         try:
@@ -375,9 +383,52 @@ class Scheduler:
             return task.node_id
 
     # --------------------------------------------------------------- launch
-    def _launch_queued(self, tree: Tree) -> None:
-        self.placement.refresh()
+    def _launch_queued(self) -> None:
+        """Reserve + prepare jobs under the lock, ssh-launch them without it, apply the results
+        under it again. A big panel's launches take a minute (~1 s per ssh, 16 at a time);
+        holding the lock that long blocked submit/cancel/every API call past the client timeout."""
+        self.placement.refresh()   # host probes: ssh too, no shared state to guard
+        with self.lock:
+            todo = self._reserve_launches(self._tree())
+        if not todo:
+            return
+        env = {"FX_HB_INTERVAL": config.settings()["liveness"]["heartbeat_interval"]}
+        # ssh launches in parallel (a 200-point panel would take minutes serially)
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            results = list(pool.map(lambda x: executor.launch(x[2], x[3], x[4], env=env), todo))
+        with self.lock:
+            tree = self._tree()
+            now = _now()
+            grace = float(config.settings()["liveness"]["launch_grace"])
+            for (task, job, host, jdir, attempt), (ok, err) in zip(todo, results):
+                if job.state != "launching" or job.attempt != attempt:
+                    # Cancelled (maybe already relaunched) while the ssh was in flight: the job
+                    # had no pid to kill then, so kill the started attempt once it writes one.
+                    if ok:
+                        self._orphans.append((host, jdir, attempt, now + grace))
+                    continue
+                job.host, job.launched = host, now
+                if not ok:
+                    self._job_failed(tree, task, job, None, err)
+            for task in {id(t): t for t, *_ in todo}.values():
+                self._refresh_task_state(tree, task)
+                self._save(task)
+
+    def _reap_orphans(self) -> None:
+        keep = []
+        for host, jdir, attempt, deadline in self._orphans:
+            st = executor.read_state(jdir, attempt)
+            if st.get("pid") and "exit_code" not in st:
+                executor.kill(host, st["pid"])
+            elif "exit_code" not in st and _now() < deadline:
+                keep.append((host, jdir, attempt, deadline))
+        self._orphans = keep
+
+    def _reserve_launches(self, tree: Tree) -> list[tuple[Task, Job, str, Path, int]]:
+        """Pick hosts for queued jobs (at most placement.max_launches_per_tick) and write their
+        cmd.sh. The jobs are left 'launching' with no `launched` time until the ssh returns."""
         per_host = self.jobs_per_host()
+        cap = int(config.settings()["placement"].get("max_launches_per_tick") or 0)
         starts: list[tuple[Task, Job, str]] = []
         for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=lambda t: t.created):
             limit = task.spec.get("max_parallel")
@@ -388,6 +439,8 @@ class Scheduler:
                     continue
                 if limit and running >= int(limit):
                     break
+                if cap and len(starts) >= cap:
+                    break   # the rest go next tick
                 if job.vars.get("after"):
                     states = {j.name: j.state for j in task.jobs}
                     if any(states.get(a) not in ("succeeded",) for a in job.vars["after"]):
@@ -412,24 +465,17 @@ class Scheduler:
             if changed and not any(t is task for t, _, _ in starts):
                 self._refresh_task_state(tree, task)
                 self._save(task)
-        if not starts:
-            return
-        prepared = [(t, j, h, self._prepare_job(tree, t, j)) for t, j, h in starts]
-        todo = [(t, j, h, jd) for t, j, h, jd in prepared if jd is not None]
-        env = {"FX_HB_INTERVAL": config.settings()["liveness"]["heartbeat_interval"]}
-        # ssh launches in parallel (a 200-point panel would take minutes serially)
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            results = list(pool.map(lambda x: executor.launch(x[2], x[3], x[1].attempt, env=env), todo))
-        now = _now()
-        for (task, job, host, _jd), (ok, err) in zip(todo, results):
-            job.host, job.launched = host, now
-            if ok:
-                job.state = "launching"
-            else:
-                self._job_failed(tree, task, job, None, err)
+        todo = []
+        for task, job, host in starts:
+            jdir = self._prepare_job(tree, task, job)
+            if jdir is not None:
+                todo.append((task, job, host, jdir, job.attempt))
         for task in {id(t): t for t, _, _ in starts}.values():
+            # Saved 'launching' before the ssh: a daemon restart then gives the attempt
+            # launch_grace to show up instead of launching it a second time.
             self._refresh_task_state(tree, task)
             self._save(task)
+        return todo
 
     def _script_for(self, tree: Tree, task: Task, job: Job, jdir: Path) -> tuple[str, str, str | None]:
         spec = task.spec

@@ -237,3 +237,78 @@ def test_relaunch_refreshes_scripts_and_build_key(root, fake_emu, tmp_path):
     s.relaunch(p.id)
     run_until(s, lambda: p.state in ("succeeded", "failed"))
     assert p.state == "succeeded" and service.result_get(res["runset"])["post"]["st"]["value"] == 2
+
+
+def _set_settings(root, **sections):
+    import yaml
+    from featx import config
+    data = yaml.safe_load((root / "featx.yaml").read_text())
+    for k, v in sections.items():
+        data.setdefault(k, {}).update(v)
+    (root / "featx.yaml").write_text(yaml.safe_dump(data))
+    config.reload_settings()
+
+
+def test_launch_runs_without_the_lock(root, fake_emu, monkeypatch):
+    import threading
+    make_node(fake_emu, ["ok_1_0.5"])
+    s = sched()
+    res = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))
+    tid = res["tasks"][0]["id"]
+    real, seen = executor.launch, []
+
+    def launch(*a, **kw):
+        # another thread (an API call) must get the lock while the ssh is in flight
+        out = []
+        th = threading.Thread(target=lambda: out.append(s.lock.acquire(timeout=2) and (s.lock.release() or True)))
+        th.start()
+        th.join()
+        seen.append((out[0], s.tasks[tid].jobs[0].state))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(executor, "launch", launch)
+    run_until(s, lambda: s.tasks[tid].state == "succeeded")
+    # the job was persisted 'launching' before the ssh
+    assert seen == [(True, "launching")]
+
+
+def test_cancel_during_launch_kills_the_started_attempt(root, fake_emu, monkeypatch):
+    make_node(fake_emu, ["hang_1_0.5"])
+    s = sched()
+    res = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))
+    tid = res["tasks"][0]["id"]
+    real = executor.launch
+
+    def launch(host, jdir, attempt, env=None):
+        s.cancel(tid)                      # lands while the ssh is in flight (the lock is free)
+        return real(host, jdir, attempt, env=env)
+
+    monkeypatch.setattr(executor, "launch", launch)
+    run_until(s, lambda: s._orphans or s.tasks[tid].state == "cancelled")
+    assert s.tasks[tid].state == "cancelled"
+    rdir = Tree().find_runset(res["runset"])
+    jdir = rdir[0].dir / rdir[1].name / "run" / "hang_1_0.5"
+    # the hang job started after the cancel; the orphan reaper kills it once its pid shows up
+    run_until(s, lambda: not s._orphans and executor.read_state(jdir, 1).get("pid"), timeout=20)
+    pid = executor.read_state(jdir, 1)["pid"]
+    run_until(s, lambda: executor.alive_on_host("localhost", pid) is False, timeout=10)
+    assert s.tasks[tid].state == "cancelled"
+
+
+def test_max_launches_per_tick(root, fake_emu, monkeypatch):
+    _set_settings(root, placement={"max_launches_per_tick": 2})
+    for cp in (2, 3):
+        d = fake_emu[1] / "hang" / str(cp)
+        d.mkdir()
+        (d / f"_{cp}_0.5_.trace.zstd").write_text("x")
+    make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
+    s = sched()
+    res = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))
+    tid = res["tasks"][0]["id"]
+    calls = []
+    monkeypatch.setattr(executor, "launch", lambda *a, **kw: calls.append(a) or (True, ""))
+    s.tick()        # materialize + first launches
+    assert len(calls) == 2
+    s.tick()
+    assert len(calls) == 3
+    s.cancel(tid)

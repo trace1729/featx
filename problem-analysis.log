@@ -296,3 +296,97 @@ DELETE /baselines/{name}。featx/mcp_server.py：新增 docs(topic) 工具，rec
 featx/docs.py：按 "## <topic> — <title>" 切分话题；_with_live_plugins 用已安装清单重新生成插件一节并去掉标记。
 docs/reference.md 中 launch/points 话题按 scheduler.py 中 only_points 的替换逻辑描述 --point。
 tests/test_docs.py：插件一节过期即失败；build/run 默认键必须都有文档；/help 返回 JSON。
+
+## 2026-10-13 21:15  perf-keys 对旧结果根目录报 "missing, no PERF output"：点名权重位数不一致
+
+问题与解决方案总结:
+manifest 与 featx 的点名把权重写成 6 位小数（GemsFDTD_10619_0.034750），但较早的结果根目录（如 exec-0903 基线
+/nfs/share/gkc/wpe-synthetic_PA/0903/...）的目录名用的是缩短写法（GemsFDTD_10619_0.03475、0.0095、5.1e-05）。
+perf_keys.py 直接 os.path.join(root, 点名) 找目录，找不到就把该点记为 missing，于是 IPC 误差统计的公共点被静默减少。
+证据：用 wpe/overlay 0928 的 trace 跑 GemsFDTD_10619_0.034750 + GemsFDTD_426_0.011821 对 exec-0903，修改前 exec
+一侧 "missing, no PERF output"、common_points=1；修改后 exec IPC 1.959992、self err 3.6789%、common_points=2。
+对全部 manifest 点检查：spec17 0903 exec 原来只命中 527/590，spec06 0903 exec 998/1090，0912 trace 998/1090；回退
+匹配后均为 590/590、1090/1090。解决方案：精确目录不存在时，按 <bench>_<cp> 找同名目录，并按权重数值相等匹配。
+
+代码修改说明:
+featx/post/scripts/perf_keys.py 新增 point_dir(root, name)：目录存在则直接返回；否则对每个 root 只做一次 os.listdir，
+以 rsplit("_", 2) 得到 (bench, cp) 建索引（bench 可含 "_"），用 math.isclose(rel_tol=1e-9) 比较权重，找不到仍返回
+精确路径（于是真正缺失的点照旧报 missing）。scan() 调用改为 scan(point_dir(root, p), ...)。
+tests/test_post_scripts.py::test_perf_keys_finds_shortened_weight_dirs 覆盖 0.03475 与 5.1e-05 两种写法和真正缺失点。
+
+## 2026-10-13 21:15  大批量提交时 ssh 启动持有调度锁，API 超过客户端 60 s 超时，CLI 误判 daemon 已死
+
+问题与解决方案总结:
+tick() 在 Scheduler.lock 内完成全部 ssh 启动（每次约 1 s，16 路并行）。上千点的 panel 一次 tick 要数分钟，期间所有
+需要锁的 API（submit、cancel、tasks 列表）都卡住，超过 client 的 60 s 超时；同时 daemon.json 的心跳只在 tick 循环里
+写，长 tick 会让 daemon_alive(max_age=60) 判定 featxd 已死，CLI 会退回直接改文件，与仍在运行的 daemon 冲突。
+解决方案：把启动拆成三段——锁内预留主机并写 cmd.sh（状态 launching 先落盘），锁外 ssh，锁内回写结果；每 tick
+最多启动 placement.max_launches_per_tick（默认 128）个，其余下一 tick；心跳改为独立线程每 5 s 写一次，tick 循环
+10 分钟没有进展才停止心跳，watchdog 仍能重启卡死的 daemon；客户端 ReadTimeout 单独报错并提示写操作可能已生效。
+锁外 ssh 期间任务可能被 cancel（甚至 relaunch）：此时 job 还没有 pid 无法杀，回写时发现状态/attempt 已变，若启动
+成功就记入 _orphans，等该 attempt 写出 pid 后杀掉（launch_grace 内一直没有 pid 则放弃）。
+证据：dev daemon（端口 8766）提交 202 点 run，启动过程中每秒调 GET /tasks，延迟 0.04~0.07 s（仅物化那一拍 0.57 s）。
+
+代码修改说明:
+featx/sched/scheduler.py：tick() = 锁内 _tick_locked() + 锁外 _launch_queued()；_reserve_launches() 预留主机、
+受 max_launches_per_tick 限制、_prepare_job 后保存 launching 状态；_launch_queued() 锁外 ThreadPoolExecutor(16)
+调 executor.launch，再加锁按 (state, attempt) 校验后写 host/launched 或 _job_failed；_reap_orphans() 每 tick 清理
+被取消的已启动 attempt。featx/sched/daemon.py：heartbeat_loop 线程（HEARTBEAT_SECONDS=5，HUNG_AFTER=600），
+退出时先 join 心跳线程再写 stopped。featx/client.py：httpx.ReadTimeout -> DaemonDown（非 GET 提示先查 ps/events）。
+featx/defaults/featx.yaml：placement.max_launches_per_tick: 128。
+tests/test_sched_local.py：test_launch_runs_without_the_lock（launch 中另一线程能拿到锁、job 为 launching）、
+test_cancel_during_launch_kills_the_started_attempt（去掉 _reap_orphans 中的 kill 后该测试失败，确认测试有效）、
+test_max_launches_per_tick（上限 2 时 3 个点分两拍启动）。
+
+## 2026-10-13 21:15  pair/diagnose 在两边没有可配对点时 ZeroDivisionError / RuntimeError，看不出原因
+
+问题与解决方案总结:
+compare_gsim_spec_points.py 计算几何平均时，若 runset 与参考没有任何同名且都有 ipc 的点，就 ZeroDivisionError；
+diagnose_top_ipc_gaps.py 报 "RuntimeError: no common valid Trace/Exec points"；extract_branch_type_mpki.py 静默写
+空表。最常见的原因是 I < W：运行在正式窗口前结束，只有 1 个 PERF 块，collector 给出
+parse_error:need 2 PERF blocks for -N 2, found 1、ipc 为空。证据：把已进回收站的 I<W runset 20261012-3 收集到 tmp，
+状态正是上述 parse_error，旧 compare 报 ZeroDivisionError。另外 post 脚本头是 set -uo pipefail（没有 -e），多行 cmd
+中间失败不会停止，返回码取最后一条命令。解决方案：比较前用新脚本 check_paired.py 检查配对，失败时退出码 3 并说明
+是哪一侧没有有效点、各侧有效点数和无效状态统计；分类规则把该信息作为失败签名。
+
+代码修改说明:
+featx/post/scripts/check_paired.py（stdlib）：读取两侧 points.csv，有效 = ipc 非空，按 (benchmark, point) 配对；
+有配对时 stderr 一行计数、退出 0；否则 "check_paired: nothing to compare: <原因>" 加各侧明细，退出 3。
+featx/post/manifests/{pair,diagnose,branch-mpki}.yaml：ensure_collected 与 check_paired 各接 "|| exit $?"，
+diagnose/branch-mpki 的工具行也接 "|| exit $?"，避免被后续 csv_summary 的返回码掩盖。
+config/classify.yaml：在 py-traceback 之前加 post-input 规则（check_paired / ensure_collected 的首行作签名，design）。
+tests：test_post_scripts.py::test_check_paired（runset 无效、参考无效、点集不相交三种提示），test_core.py classify 用例。
+
+## 2026-10-13 21:15  benchmarks 过滤与 points/--point 组合时静默得到空点集或丢点
+
+问题与解决方案总结:
+points.resolve 先取 points ∪ points_file ∪ suite（或 workload 全部点），再用 benchmarks 过滤。继承下来的 benchmarks
+与 --point 组合时会把显式给的点过滤掉：resolve({'points':['mcf_...'],'benchmarks':['gcc']}) 返回 []，部分重叠时
+静默少点；spec17 写成 benchmarks=['505.mcf_r'] 得到 0 点（manifest 的 benchmark 列是 mcf，有 18 点）。旧报错
+"run recipe selects no points (set points / points_file / suite)" 指向错误的原因。解决方案：提交时（strict）若
+benchmarks 丢掉了显式给出的点，或把非空选择过滤为空，直接报错并列出被丢的点 / 实际存在的 benchmark 名，提示
+--set run.benchmarks=null；非 strict（排行榜等只读路径）行为不变。
+证据：dev daemon 上 --point ok_1_0.5 + benchmarks=[ok2] 提交被拒并给出上述提示；加 --set run.benchmarks=null 后提交成功。
+另外发现（未修改）：featx recipe set NODE run k=null 走 deep_merge，None 表示从本层删除该键，因此无法用它屏蔽继承值，
+需 featx recipe edit 写入 "k: null" 或提交时 --set kind.k=null。
+
+代码修改说明:
+featx/points.py：resolve(spec, strict=False) 记录显式 points；strict 时在 benchmarks 过滤后检查被丢弃的显式点
+（"drops N point(s) given by points/--point"）和非空变空（"matches none of the N selected points; their benchmarks are: ..."），
+抛 PresetError，由 _submit_tasks 转成 SchedError，失败的提交不留下 runset。featx/sched/scheduler.py：_validate 用
+strict=True，空点集提示加上 workload。tests/test_presets.py::test_points_strict_benchmarks_filter。
+
+## 2026-10-13 21:15  Runset 页面 jobs 表过长时无法同时查看任务与日志
+
+问题与解决方案总结:
+jobs 表没有高度限制，一千多点时整页被表格撑开，表头滚出视野，选中某个点后下面的日志需要滚很远，?job= 深链接
+也看不到选中的行。解决方案：jobs 表放进最大高度 50vh 的独立滚动框，表头 sticky，选中行高亮；选中行不在框内可见
+区域时只滚动该框（不滚动整页）把它居中。
+证据：Playwright 对 dev daemon 202 点 runset：滚动框 clientHeight 473、scrollHeight 6054；滚到底后表头仍在框顶
+（偏移 1 px）；点击最后一行后日志面板在表下方可见、框滚动位置保持；带 ?job= 重新加载后选中行在框内可见。
+
+代码修改说明:
+featx/web/src/pages/Runset.tsx：JobsTable 外层 <div className="table-wrap jobs-wrap" data-testid="jobs-scroll">，
+useEffect([job, jobs.length]) 计算 tr.selected 相对滚动框的位置（扣除 sticky 表头高度），必要时设置 scrollTop。
+featx/web/src/styles.css：.table-wrap thead th sticky；.jobs-wrap max-height: 50vh；tr.selected 背景色。
+featx/web/src/App.test.tsx：1090 个 job 的 runset 渲染、选中行与日志仍显示。featx/web/dist 重新构建。

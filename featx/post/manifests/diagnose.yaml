@@ -24,7 +24,8 @@ outputs:
   points/<point>.md: per-point report
   summary.json: ranking.rows, ranking.mean.<numeric column of ranking.csv>
 cmd: |
-  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite})
+  ref=$(${python} ${plugin.scripts}/ensure_collected.py ${reference} --config ${config} --suite ${suite}) || exit $?
+  ${python} ${plugin.scripts}/check_paired.py ${trace} "$ref" || exit $?
   ${python} ${tools}/diagnose_top_ipc_gaps.py --trace ${trace} --execution "$ref" --suite ${suite} \
-    -N ${top_n} -o ${out} --repo-root ${repo_root} > ${out}/diagnose.stdout
+    -N ${top_n} -o ${out} --repo-root ${repo_root} > ${out}/diagnose.stdout || exit $?
   ${python} ${plugin.scripts}/csv_summary.py ${out}/ranking.csv ${out}/summary.json --prefix ranking

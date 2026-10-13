@@ -33,6 +33,14 @@ const FIXTURES: Record<string, unknown> = {
       { runset: "wpe/overlay/20261012-2", node: "wpe/overlay", name: "20261012-2", created: "2026-10-12T17:00:00", purpose: "best", sealed: true, verdict: "supported", node_status: "active", bin: "emu-a", value: 0.8, class: "k1", complete: true, points: 3, common_points: 3, tasks: {}, rank: 1 },
     ],
   },
+  "/result": { ref: "wpe/overlay/20261013-1", id: "R1", purpose: "", created: "2026-10-13T10:00:00", sealed: false,
+    derived_from: null, dir: "/r/tree/wpe/overlay/20261013-1", post: {}, problem_log_tail: "",
+    tasks: [{ id: "T1", kind: "run", name: "run", state: "succeeded", counts: { succeeded: 1090 }, failure: null }] },
+  "/tasks/T1": { id: "T1", kind: "run", node: "wpe/overlay", runset: "20261013-1", state: "succeeded", note: "", after: [],
+    counts: { succeeded: 1090 }, failure: null, created: "", blocked: false, design_relaunches: 0, outputs: {}, eta_s: null,
+    jobs: Array.from({ length: 1090 }, (_, i) => ({ name: `bench_${i}_0.001000`, state: "succeeded", host: "node024", attempt: 1,
+      rc: 0, progress: {}, failure: null, eta_s: null })) },
+  "/tasks/T1/log": { path: "/r/log", exists: true, tail: "done" },
 };
 
 beforeEach(() => {
@@ -112,6 +120,17 @@ describe("App", () => {
     const workload = select("spec17");
     fireEvent.change(workload, { target: { value: "spec17" } });
     expect(await screen.findByText(/--set build.mode=exec --set run.mode=exec --set run.workload=spec17/, { selector: "span" })).toBeTruthy();
+  });
+
+  it("scrolls a long jobs table in its own box", async () => {
+    setToken("t0k");
+    renderAt("/runset/wpe/overlay/20261013-1?job=bench_1000_0.001000");
+    await screen.findByText("bench_1089_0.001000");
+    const box = screen.getByTestId("jobs-scroll");
+    expect(box.classList.contains("table-wrap")).toBe(true);
+    expect(box.querySelectorAll("tbody tr").length).toBe(1090);
+    expect(box.querySelector("tr.selected td")?.textContent).toBe("bench_1000_0.001000");
+    expect(await screen.findByText("done")).toBeTruthy();   // the log below is still rendered
   });
 
   it("shows a docs topic", async () => {

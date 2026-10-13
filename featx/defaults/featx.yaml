@@ -27,6 +27,7 @@ placement:
   reserve_cores: 4         # never fill a host's last N cores
   max_jobs_per_host: 96    # featx's own concurrent jobs per host
   mem_reserve_gb: 32
+  max_launches_per_tick: 128   # ssh launches per scheduler tick (the rest go next tick; 0 = no cap)
 
 liveness:
   heartbeat_interval: 30

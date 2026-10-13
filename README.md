@@ -23,6 +23,10 @@ claude mcp add featx -- $PWD/.venv/bin/featx-mcp
 Optional watchdog (crontab):
 `*/5 * * * * /nfs/home/gongkaichen/tracertl/toolsets/featx/.venv/bin/featx daemon watchdog`.
 Jobs keep running while the daemon is down. On restart it re-adopts them from NFS state.
+`daemon.json` is refreshed every 5 s by its own thread. That thread stops only if the scheduler
+loop makes no progress for 10 min, so the watchdog still restarts a hung daemon. Launches use ssh
+without holding the scheduler lock, at most `placement.max_launches_per_tick` (128) per tick. A
+large panel therefore no longer blocks submit/cancel or the API.
 
 ## Layout
 

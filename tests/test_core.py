@@ -108,6 +108,8 @@ def test_recipe_inheritance(root):
     ("run", None, "featx: heartbeat stale on node1 (alive=False)", "infra", None),
     ("run", 7, "nothing useful", "design", "exit code 7"),
     ("post", 1, "Traceback...\nKeyError: 'ipc'", "design", "KeyError: 'ipc'"),
+    ("post", 3, "check_paired: nothing to compare: the reference has no valid point\n  trace a: 1/1",
+     "design", "check_paired: nothing to compare: the reference has no valid point"),
 ])
 def test_classify(root, kind, rc, text, cls, sig):
     v = classify.classify(kind, rc, text)

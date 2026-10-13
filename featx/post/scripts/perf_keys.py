@@ -44,6 +44,40 @@ def load_points(path):
     return [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
 
 
+_INDEX = {}
+
+
+def point_dir(root, name):
+    """<root>/<name>, or the dir of the same <bench>_<cp> whose weight is numerically equal:
+    older result roots spell weights shortened (0.03475, 5.1e-05) where the manifests and
+    featx use 6 digits (0.034750, 0.000051)."""
+    exact = os.path.join(root, name)
+    if os.path.isdir(exact):
+        return exact
+    if root not in _INDEX:
+        idx = _INDEX[root] = {}
+        try:
+            entries = os.listdir(root)
+        except OSError:
+            entries = []
+        for d in entries:
+            parts = d.rsplit("_", 2)
+            if len(parts) == 3:
+                idx.setdefault((parts[0], parts[1]), []).append(d)
+    try:
+        bench, cp, weight = name.rsplit("_", 2)
+        w = float(weight)
+    except ValueError:
+        return exact
+    for d in _INDEX[root].get((bench, cp), []):
+        try:
+            if math.isclose(float(d.rsplit("_", 1)[1]), w, rel_tol=1e-9, abs_tol=1e-12):
+                return os.path.join(root, d)
+        except ValueError:
+            pass
+    return exact
+
+
 def scan(point_dir, want, block):
     blocks = {}
     for fn in ("simulator_err.txt", "simulator_out.txt"):
@@ -101,7 +135,7 @@ def main():
     for p in points:
         ref_ipc = None
         for i, (label, root) in enumerate(runs):
-            v = scan(os.path.join(root, p), want, args.block)
+            v = scan(point_dir(root, p), want, args.block)
             row = {"point": p, "run": label}
             if isinstance(v, str) or not v.get("cycles"):
                 row["status"] = "missing"
