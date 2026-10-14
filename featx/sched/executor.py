@@ -87,6 +87,33 @@ def kill(host: str, pid: str | int, signal: str = "TERM") -> bool:
         return False
 
 
+def _run_on(host: str, inner: str, timeout: float) -> subprocess.CompletedProcess | None:
+    cmd = ["bash", "-c", inner] if is_local(host) else [*ssh_base(host), inner]
+    try:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                              timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def kill_many(host: str, pids: list[int], signal: str = "TERM") -> bool:
+    """kill() for many jobs of one host in a single ssh (a 125-point cancel was 125 serial sshs)."""
+    inner = "; ".join(f"pkill -{signal} -s {int(p)} 2>/dev/null; kill -{signal} -- -{int(p)} 2>/dev/null; "
+                      f"kill -{signal} {int(p)} 2>/dev/null" for p in pids) + "; true"
+    proc = _run_on(host, inner, 30)
+    return proc is not None and proc.returncode == 0
+
+
+def alive_many(host: str, pids: list[int]) -> dict[int, bool | None]:
+    """alive_on_host() for many pids of one host in a single ssh (None = host unreachable)."""
+    inner = "; ".join(f"kill -0 {int(p)} 2>/dev/null && echo {int(p)} alive || echo {int(p)} gone" for p in pids)
+    proc = _run_on(host, inner, 30)
+    if proc is None or proc.returncode != 0:
+        return {int(p): None for p in pids}
+    seen = dict(line.split() for line in proc.stdout.splitlines() if len(line.split()) == 2)
+    return {int(p): (seen[str(int(p))] == "alive") if str(int(p)) in seen else None for p in pids}
+
+
 def alive_on_host(host: str, pid: str | int) -> bool | None:
     """Direct check used before declaring a stale-heartbeat job dead (None = host unreachable)."""
     # Only the featx-exec leader counts: without it nobody writes exit_code, so a surviving emu

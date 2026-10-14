@@ -312,3 +312,63 @@ def test_max_launches_per_tick(root, fake_emu, monkeypatch):
     s.tick()
     assert len(calls) == 3
     s.cancel(tid)
+
+
+def test_max_total_cores_pends_until_jobs_finish(root, fake_emu, monkeypatch):
+    _set_settings(root, placement={"max_total_cores": 3})
+    for cp in (2, 3, 4, 5):
+        d = fake_emu[1] / "hang" / str(cp)
+        d.mkdir()
+        (d / f"_{cp}_0.5_.trace.zstd").write_text("x")
+    make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
+    s = sched()
+    first = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
+    service.recipe_set("t/sched/x", "run", {"points": ["hang_4_0.5", "hang_5_0.5"]})
+    second = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
+    calls = []
+    monkeypatch.setattr(executor, "launch", lambda *a, **kw: calls.append(a) or (True, ""))
+    s.tick()
+    s.tick()
+    # 3 one-core jobs of the older task fill the cap; the newer task waits with a note
+    assert len(calls) == 3 and s.cores_in_use() == 3
+    assert s.tasks[second].counts() == {"queued": 2}
+    assert s.tasks[second].note.startswith("pending: featx core cap 3")
+    s.cancel(first, jobs=["hang_1_0.5"])           # gives one core back
+    s.tick()
+    assert len(calls) == 4 and s.tasks[second].counts() == {"launching": 1, "queued": 1}
+    s.cancel(first)
+    s.tick()
+    assert len(calls) == 5 and s.tasks[second].note == ""
+    s.cancel(second)
+
+
+def test_cancel_kills_outside_the_lock_one_ssh_per_host(root, fake_emu, monkeypatch):
+    for cp in (2, 3):
+        d = fake_emu[1] / "hang" / str(cp)
+        d.mkdir()
+        (d / f"_{cp}_0.5_.trace.zstd").write_text("x")
+    make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
+    s = sched()
+    tid = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
+    run_until(s, lambda: all(j.state == "running" for j in s.tasks[tid].jobs))
+    real, calls = executor.kill_many, []
+
+    def kill_many(host, pids, signal="TERM"):
+        # the API must stay usable while the kill sshs run
+        assert s.lock.acquire(timeout=1)
+        s.lock.release()
+        calls.append((host, sorted(pids)))
+        return real(host, pids, signal)
+
+    import threading
+    monkeypatch.setattr(executor, "kill_many", kill_many)
+    t = threading.Thread(target=s.cancel, args=(tid,))
+    t.start()
+    t.join(30)
+    assert len(calls) == 1 and len(calls[0][1]) == 3
+    assert s.tasks[tid].state == "cancelled"
+    rdir = Tree().find_runset(s.tasks[tid].runset_name if "/" in s.tasks[tid].runset_name
+                              else f"t/sched/x/{s.tasks[tid].runset_name}")
+    for j in s.tasks[tid].jobs:
+        pid = executor.read_state(rdir[0].dir / rdir[1].name / j.rel, j.attempt)["pid"]
+        run_until(s, lambda: executor.alive_on_host("localhost", pid) is False, timeout=10)

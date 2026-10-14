@@ -48,6 +48,12 @@ class Scheduler:
         self._saved_at: dict[str, float] = {}
         # (host, job dir, attempt, deadline): launches that completed after their job was cancelled
         self._orphans: list[tuple[str, Path, int, float]] = []
+        # ssh work is queued under the lock and done without it (a 125-point cancel or a host
+        # full of stale heartbeats meant minutes of serial sshs that froze the API and the UI)
+        self._kills: list[tuple[str, int, str]] = []                     # (host, pid, signal)
+        self._suspects: dict[tuple[str, str, int], tuple[str, int]] = {}  # job key -> (host, pid)
+        self._alive: dict[tuple[str, str, int], bool | None] = {}         # job key -> probe result
+        self._ssh_lock = threading.Lock()
         self._readopt()
 
     def _readopt(self) -> None:
@@ -75,6 +81,53 @@ class Scheduler:
 
     def _job_dir(self, tree: Tree, task: Task, job: Job) -> Path:
         return self._runset_dir(tree, task) / job.rel
+
+    def cores_in_use(self) -> int:
+        """Cores reserved by featx's launching/running remote jobs (local post steps excluded)."""
+        return sum(j.cores for t in self.tasks.values() for j in t.jobs
+                   if j.state in ("launching", "running") and not j.local)
+
+    def max_total_cores(self) -> int:
+        return int(config.settings()["placement"].get("max_total_cores") or 0)
+
+    def _queue_kill(self, host: str, pid: str | int, signal: str = "TERM") -> None:
+        self._kills.append((host, int(pid), signal))
+
+    def _do_ssh_work(self, blocking: bool = True) -> None:
+        """Run the queued kills and liveness probes, one ssh per host, hosts in parallel.
+        Called without self.lock; _ssh_lock keeps two callers from sending the same kills.
+        Non-blocking callers leave the work to the next tick when another caller is busy."""
+        if not self._ssh_lock.acquire(blocking=blocking):
+            return
+        try:
+            with self.lock:
+                kills, self._kills = self._kills, []
+                suspects, self._suspects = self._suspects, {}
+            if not kills and not suspects:
+                return
+            work: dict[tuple[str, str], list[int]] = {}
+            for host, pid, sig in kills:
+                work.setdefault(("kill:" + sig, host), []).append(pid)
+            for host, pid in suspects.values():
+                work.setdefault(("alive", host), []).append(pid)
+
+            def one(item):
+                (what, host), pids = item
+                if what == "alive":
+                    return what, executor.alive_many(host, pids)
+                return what, executor.kill_many(host, pids, what.split(":", 1)[1])
+
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                results = list(pool.map(one, work.items()))
+            alive: dict[tuple[str, int], bool | None] = {}
+            for ((what, host), _), (_, res) in zip(work.items(), results):
+                if what == "alive":
+                    alive.update({(host, pid): v for pid, v in res.items()})
+            with self.lock:
+                for key, (host, pid) in suspects.items():
+                    self._alive[key] = alive.get((host, pid))
+        finally:
+            self._ssh_lock.release()
 
     def jobs_per_host(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -337,6 +390,7 @@ class Scheduler:
     def tick(self) -> None:
         with self.lock:
             need_launch = self._tick_locked()
+        self._do_ssh_work()
         if need_launch:
             self._launch_queued()
 
@@ -419,7 +473,7 @@ class Scheduler:
         for host, jdir, attempt, deadline in self._orphans:
             st = executor.read_state(jdir, attempt)
             if st.get("pid") and "exit_code" not in st:
-                executor.kill(host, st["pid"])
+                self._queue_kill(host, st["pid"])
             elif "exit_code" not in st and _now() < deadline:
                 keep.append((host, jdir, attempt, deadline))
         self._orphans = keep
@@ -429,11 +483,14 @@ class Scheduler:
         cmd.sh. The jobs are left 'launching' with no `launched` time until the ssh returns."""
         per_host = self.jobs_per_host()
         cap = int(config.settings()["placement"].get("max_launches_per_tick") or 0)
+        core_cap, cores_used = self.max_total_cores(), self.cores_in_use()
+        core_full = False   # set once a job does not fit: later tasks wait too (FIFO, no starving)
         starts: list[tuple[Task, Job, str]] = []
         for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=lambda t: t.created):
             limit = task.spec.get("max_parallel")
             running = sum(1 for j in task.jobs if j.state in ("launching", "running"))
             changed = False
+            waiting = False
             for job in task.jobs:
                 if job.state != "queued":
                     continue
@@ -441,6 +498,10 @@ class Scheduler:
                     break
                 if cap and len(starts) >= cap:
                     break   # the rest go next tick
+                # (a job bigger than the whole cap still runs, alone)
+                if core_cap and not job.local and (core_full or cores_used and cores_used + job.cores > core_cap):
+                    core_full = waiting = True
+                    break   # pending until running jobs finish and give their cores back
                 if job.vars.get("after"):
                     states = {j.name: j.state for j in task.jobs}
                     if any(states.get(a) not in ("succeeded",) for a in job.vars["after"]):
@@ -461,7 +522,12 @@ class Scheduler:
                 starts.append((task, job, host))
                 per_host[host] = per_host.get(host, 0) + 1
                 running += 1
+                if not job.local:
+                    cores_used += job.cores
                 changed = True
+            note = f"pending: featx core cap {core_cap} reached" if waiting else ""
+            if task.note != note and (waiting or task.note.startswith("pending: featx core cap")):
+                task.note, changed = note, True
             if changed and not any(t is task for t, _, _ in starts):
                 self._refresh_task_state(tree, task)
                 self._save(task)
@@ -554,8 +620,14 @@ class Scheduler:
             hb = st.get("heartbeat")
             if hb != job.hb_value:
                 job.hb_value, job.hb_seen = hb, now
+                self._alive.pop((task.id, job.name, job.attempt), None)
             elif now - (job.hb_seen or now) > live["dead_after"]:
-                alive = executor.alive_on_host(job.host, st.get("pid", 0)) if st.get("pid") else False
+                # Probe the host without the lock: queue the pid now, act on the answer next tick.
+                key = (task.id, job.name, job.attempt)
+                if st.get("pid") and key not in self._alive:
+                    self._suspects[key] = (job.host, int(st["pid"]))
+                    continue
+                alive = self._alive.pop(key, False) if st.get("pid") else False
                 if alive:
                     job.hb_seen = now   # heartbeat writer stuck (NFS hiccup) but the job is alive
                 else:
@@ -634,7 +706,7 @@ class Scheduler:
             # emu, under `timeout`, leaves the process group) whether or not we retry.
             st = executor.read_state(jdir, job.attempt)
             if job.host and st.get("pid"):
-                executor.kill(job.host, st["pid"], "KILL")
+                self._queue_kill(job.host, st["pid"], "KILL")
         if verdict["class"] == "infra" and infra_count <= max_infra:
             if job.host:
                 self.placement.mark_bad(job.host, 120)
@@ -730,7 +802,9 @@ class Scheduler:
             self._save(task)
             self.inbox.emit("cancelled", task=task.id, node=self._rel(tree, task), runset=task.runset_name,
                             jobs=jobs, dependents=cascaded)
-            return {"task": task.id, "cancelled_jobs": n, "state": task.state, "dependents": cascaded}
+            out = {"task": task.id, "cancelled_jobs": n, "state": task.state, "dependents": cascaded}
+        self._do_ssh_work(blocking=False)   # the kills, without the lock (else the next tick)
+        return out
 
     def _cancel_jobs(self, tree: Tree, task: Task, jobs: list[str] | None) -> int:
         n = 0
@@ -740,7 +814,7 @@ class Scheduler:
             if job.state in ("launching", "running") and job.host:
                 st = executor.read_state(self._job_dir(tree, task, job), job.attempt)
                 if st.get("pid"):
-                    executor.kill(job.host, st["pid"])
+                    self._queue_kill(job.host, st["pid"])
             job.state, job.finished = "cancelled", _now()
             n += 1
         self._refresh_task_state(tree, task)

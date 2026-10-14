@@ -27,6 +27,10 @@ Jobs keep running while the daemon is down. On restart it re-adopts them from NF
 loop makes no progress for 10 min, so the watchdog still restarts a hung daemon. Launches use ssh
 without holding the scheduler lock, at most `placement.max_launches_per_tick` (128) per tick. A
 large panel therefore no longer blocks submit/cancel or the API.
+Kills (cancel, dead attempts) and liveness probes of stale heartbeats are batched into one ssh
+per host and run without the lock as well. `placement.max_total_cores` (300) caps the cores
+all featx jobs reserve at once. Jobs beyond it stay queued, oldest task first, until running
+jobs finish; `featx daemon status` shows `cores_in_use`.
 
 ## Layout
 

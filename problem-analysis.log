@@ -390,3 +390,27 @@ featx/web/src/pages/Runset.tsx：JobsTable 外层 <div className="table-wrap job
 useEffect([job, jobs.length]) 计算 tr.selected 相对滚动框的位置（扣除 sticky 表头高度），必要时设置 scrollTop。
 featx/web/src/styles.css：.table-wrap thead th sticky；.jobs-wrap max-height: 50vh；tr.selected 背景色。
 featx/web/src/App.test.tsx：1090 个 job 的 runset 渲染、选中行与日志仍显示。featx/web/dist 重新构建。
+
+## 2026-10-14 13:50  取消大任务时 featxd 卡死 API/网页；无全局资源上限
+
+问题与解决方案总结:
+用户取消 4 个 125 点的 wpe/wp-mem run 任务时网页一直加载不出任务详情，featx task cancel / featx ps 均 60 s 超时。
+原因是 ssh 在 sched.lock 内串行执行：cancel 对每个 job 调一次 executor.kill（每次 ssh 约 1–2 s，125 点即数分钟），
+tick 里心跳过期的 job 逐个 alive_on_host + kill，所有读接口（/tasks、/tasks/{id}）都要拿同一把锁，于是全部阻塞。
+本次手动先在各节点杀掉 emu 使 375 个 job 同时心跳过期，13:27–13:43 共 375 次 retry、平均 2.6 s 一次，锁被占 16 分钟，
+三个 cancel 直到 13:43:13 才生效。另外 featx 对总占用没有上限，6 个任务同时铺开到 750 核。
+解决方案：锁内只把 kill / 存活探测排队，锁外按主机合并成一条 ssh 并行执行（cancel 立即返回，探测结果下一 tick 使用）；
+新增 placement.max_total_cores（默认 300），按任务创建顺序放置，超出上限的 job 保持 queued，任务 note 显示
+"pending: featx core cap ..."，运行中的 job 结束释放核后再放置。
+证据：events/inbox.jsonl seq 68 之后 375 条 retry 间隔 2.6 s；node024 上 3 次嵌套 ssh 共 6.0 s；daemon pid 4006305
+期间 /tasks 超时、13:43 后 featx ps 0.67 s 返回。新测试：cancel 执行 kill 时另一线程 1 s 内拿到锁且 3 个 job 只用 1 次 ssh；
+max_total_cores=3 时第二个任务排队并在释放核后依次启动。
+
+代码修改说明:
+featx/sched/executor.py：kill_many / alive_many 一条 ssh 处理同一主机的多个 pid。
+featx/sched/scheduler.py：_kills / _suspects / _alive 队列，_do_ssh_work 在锁外按主机并行执行（_ssh_lock 防重复，
+cancel 用非阻塞调用，忙时交给下一 tick）；tick = 锁内 _tick_locked → 锁外 _do_ssh_work → _launch_queued；_reap_orphans、
+_job_failed、_cancel_jobs 改为排队 kill；_poll 心跳过期时先登记探测并跳过，下一 tick 用结果判定，心跳恢复则清除旧结果。
+cores_in_use() 统计 launching/running 非本地 job 的 cores；_reserve_launches 超出 max_total_cores 时停止并让后续任务也等待
+（单个超过上限的 job 在空闲时仍可独占运行）。featx/defaults/featx.yaml 加 max_total_cores: 300；/status 输出 cores_in_use、
+max_total_cores。tests/test_sched_local.py 两个新测试。

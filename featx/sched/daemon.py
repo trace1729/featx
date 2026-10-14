@@ -135,6 +135,7 @@ def build_app(d: Daemon) -> "FastAPI":
                 "tasks": {s: sum(1 for t in tasks if t.state == s) for s in
                           ("queued", "running", "succeeded", "failed", "cancelled")},
                 "jobs_per_host": sched.jobs_per_host(),
+                "cores_in_use": sched.cores_in_use(), "max_total_cores": sched.max_total_cores(),
                 "unacked_events": len(d.inbox.query(unacked=True, limit=100000))}
 
     @app.get("/hosts")
