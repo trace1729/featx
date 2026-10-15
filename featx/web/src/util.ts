@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { TreeRow } from "./types";
 
 export function fmtDuration(s: number | null | undefined): string {
@@ -167,9 +168,13 @@ export interface QuickPresets {
   workload: string;
   W: string;
   I: string;
+  /** "" inherit, "full" = every point (run.coverage null), else a fraction in (0, 1] */
+  coverage: string;
+  /** "on": add the spec-score post step (perf_trigger --report scoring) */
+  specScore: string;
 }
 
-export const NO_PRESETS: QuickPresets = { tool: "", mode: "", chiseldb: "", chiselmap: "", workload: "", W: "", I: "" };
+export const NO_PRESETS: QuickPresets = { tool: "", mode: "", chiseldb: "", chiselmap: "", workload: "", W: "", I: "", coverage: "", specScore: "" };
 
 /** Presets -> recipe overrides for the selected stages. The mode goes to the build when it is
  * built in this submit (the run follows it), and to the run as well so a --bin run checks it. */
@@ -194,6 +199,10 @@ export function presetOverrides(q: QuickPresets, kinds: string[]): Record<string
     const v = q[key].replace(/[_,]/g, "").trim();
     if (v) put("run", [key], /^\d+$/.test(v) ? Number(v) : v);
   }
+  const cov = (q.coverage ?? "").trim();
+  if (cov === "full") put("run", ["coverage"], null);
+  else if (cov) put("run", ["coverage"], /^\d*\.?\d+$/.test(cov) ? Number(cov) : cov);
+  if (q.specScore === "on") put("post", ["steps", "spec-score", "plugin"], "spec-score");
   return out;
 }
 
@@ -221,4 +230,43 @@ export function setFlags(overrides: Record<string, unknown>): string[] {
   };
   walk("", overrides);
   return out;
+}
+
+const STORE_PREFIX = "featx.v1.";
+
+export function loadStored<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(STORE_PREFIX + key);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveStored(key: string, value: unknown) {
+  try {
+    if (value === undefined) localStorage.removeItem(STORE_PREFIX + key);
+    else localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
+  } catch {
+    // storage full or disabled: the choice is just not remembered
+  }
+}
+
+/** useState that survives reloads (localStorage, JSON, key prefixed "featx.v1."). Changing
+ * `key` loads that key's value; `fallback` is used when nothing is stored under it. */
+export function usePersistentState<T>(key: string, fallback: T): [T, (v: T | ((old: T) => T)) => void] {
+  const [state, setState] = useState<{ key: string; value: T }>(() => ({ key, value: loadStored(key, fallback) }));
+  const current = state.key === key ? state.value : loadStored(key, fallback);
+  useEffect(() => {
+    if (state.key !== key) setState({ key, value: loadStored(key, fallback) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const set = (v: T | ((old: T) => T)) =>
+    setState((old) => {
+      const base = old.key === key ? old.value : loadStored(key, fallback);
+      const value = typeof v === "function" ? (v as (o: T) => T)(base) : v;
+      saveStored(key, value);
+      return { key, value };
+    });
+  return [current, set];
 }

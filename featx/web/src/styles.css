@@ -38,9 +38,9 @@ label { color: var(--muted); }
 .topbar nav { display: flex; gap: 2px; }
 .topbar nav a { padding: 4px 9px; border-radius: 5px; color: var(--muted); }
 .topbar nav a.active { background: var(--accent-bg); color: var(--accent); }
-.topbar .spacer { flex: 1; }
+.topbar .spacer, .spacer { flex: 1; }
 .topbar .stat { color: var(--muted); white-space: nowrap; }
-.body { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+.body { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; }
 .sidebar { border-right: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 8px 6px; }
 .main { overflow: auto; padding: 16px 20px 40px; }
 
@@ -84,7 +84,10 @@ tr.selected td { background: var(--accent-bg); }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin-bottom: 12px; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* minmax(0,1fr): a bare 1fr is minmax(auto,1fr), so an editor's longest rendered line (CodeMirror
+   renders lines as they scroll into view) widened its column while the other one shrank */
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.grid2 > * { min-width: 0; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
 .muted { color: var(--muted); } .small { font-size: 11px; }
@@ -111,7 +114,7 @@ dialog h2 { margin-top: 0; }
 .form .row select { width: auto; }       /* verdict/status selects share a line with other controls */
 .form .row input.narrow { width: 9em; }
 .login { max-width: 460px; margin: 12vh auto; }
-.cm-editor { border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.cm-editor { border: 1px solid var(--line); border-radius: 6px; font-size: 12px; max-width: 100%; }
 
 /* Docs page: topic list + reference text */
 .docs { display: flex; gap: 18px; align-items: flex-start; }
@@ -120,3 +123,15 @@ dialog h2 { margin-top: 0; }
 .docs-index a { padding: 2px 6px; border-radius: 3px; }
 .docs-index a.active { background: var(--accent-bg); font-weight: 600; }
 .docs-body { flex: 1; min-width: 0; max-width: 980px; }
+
+/* worktree changes */
+.diff { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 6px 0; max-height: 60vh; overflow: auto; white-space: pre; word-break: normal; }
+.diff > div { padding: 0 10px; }
+.diff .add { background: var(--ok-bg); color: var(--ok); }
+.diff .del { background: var(--bad-bg); color: var(--bad); }
+.diff .hunk { color: var(--run); }
+.diff .meta { color: var(--muted); font-weight: 600; }
+td.diff-add { color: var(--ok); } td.diff-del { color: var(--bad); }
+.evidence-row { gap: 6px; padding: 1px 0; }
+.evidence-row .danger-link { color: var(--bad); font-size: 14px; }
+.cap-input { width: 6em; }

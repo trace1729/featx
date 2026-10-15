@@ -453,3 +453,24 @@ score_run 用该目录名调用 point_dir（point_dir 仍保留对旧结果根�
 "total guest instructions"（均带 HIT GOOD TRAP）与 simpoint_summary.json 生成 featx/defaults/insts/
 spec17_rv64gcb_o2_20m.json（31 个 benchmark、590 点，权重与 v1 manifest 逐点一致）；同样的方法在 spec06 上与
 cluster-0-0.json 的 insts 完全相同（bzip2_chicken/combined/html 三例核对），作为该来源可信的依据。
+
+## 2026-10-15 14:40 Settings 页滚动 Package defaults 时 Overrides 编辑框被挤窄（~/ui_2.png）
+问题与解决方案总结:
+用户截图中 Settings 页左侧 Overrides 编辑框远窄于右侧。Playwright（1500px 视口）复现：初始两列宽 392/756px，把
+Package defaults 编辑器滚到底后变为 358/1319px（右列超出容器）。原因是 `.grid2 { grid-template-columns: 1fr 1fr }`
+中 1fr 等价于 minmax(auto, 1fr)，列的最小宽度取内容 min-content；CodeMirror 不折行且按可视区渲染行，滚动后渲染
+出更长的行，右列 min-content 变大，于是把左列挤窄。`.body` 的 `300px 1fr` 同样会被宽内容撑开。改为 minmax(0,1fr)。
+代码修改说明:
+styles.css: `.grid2` 改为 `minmax(0, 1fr) minmax(0, 1fr)` 并给子项 `min-width: 0`，两列宽度不再依赖内容，长行在
+CodeMirror 自己的 .cm-scroller 内横向滚动；`.body` 改为 `300px minmax(0, 1fr)`，主区域不被宽表格/编辑器撑出视口；
+`.cm-editor` 加 `max-width: 100%`。Recipes 标签页的两个编辑器同样使用 .grid2，一并修复。
+
+## 2026-10-15 14:05 Tasks 页记住筛选项后 React 报 "Rendered more hooks than during the previous render"
+问题与解决方案总结:
+给 Tasks 页加"show finished"复选框与文本筛选的持久化（usePersistentState）时，第一次加载（q.isLoading）页面正常，
+数据到达后整页报错空白。原因是新 hook 写在 `if (q.isLoading) return ...` 之后：加载中那次渲染少调用了两个 hook，
+数据到达后 hook 数量变多，违反 React 的 hook 调用顺序规则。解决：所有 hook 都放到任何提前 return 之前。
+代码修改说明:
+featx/web/src/pages/Tasks.tsx TasksPage：把 usePersistentState("tasks:showFinished") / ("tasks:filter") 以及排序用的
+useMemo 移到 `if (q.isLoading)` 之前，提前 return 只发生在全部 hook 调用之后；vitest 中 tasks 页用例覆盖
+"加载中 → 有数据"的两次渲染，不再报错。

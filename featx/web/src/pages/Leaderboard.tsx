@@ -1,9 +1,14 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { Badge, ErrorBox, Loading, VerdictMark } from "../components/ui";
 import type { Board } from "../types";
-import { fmtTime, fmtValue, metricLabel } from "../util";
+import { fmtTime, fmtValue, loadStored, metricLabel, saveStored } from "../util";
+
+// the board's choices (metric, class, order, checkboxes) live in the URL; the last ones are
+// remembered and restored when the page is opened without any
+const REMEMBERED = ["metric", "cls", "order", "best", "all"];
 
 export function LeaderboardPage() {
   const [sp, setSp] = useSearchParams();
@@ -15,6 +20,17 @@ export function LeaderboardPage() {
     if (key === "metric") next.delete("cls"); // classes belong to the metric's post step
     setSp(next, { replace: true });
   };
+  useEffect(() => {
+    if ([...sp.keys()].length) return;
+    const last = loadStored<Record<string, string>>("leaderboard", {});
+    const keep = Object.entries(last).filter(([k, v]) => REMEMBERED.includes(k) && v);
+    if (keep.length) setSp(new URLSearchParams(keep), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    const now = Object.fromEntries(REMEMBERED.filter((k) => sp.get(k)).map((k) => [k, sp.get(k)!]));
+    if (Object.keys(now).length) saveStored("leaderboard", now);
+  }, [sp]);
   const params = {
     metric: sp.get("metric"),
     cls: sp.get("cls"),

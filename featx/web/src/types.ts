@@ -29,6 +29,7 @@ export interface NodeSummary {
   status: string;
   evidence: string[];
   tags: string[];
+  comment?: string;
 }
 
 export interface TaskBrief {
@@ -36,6 +37,7 @@ export interface TaskBrief {
   kind: string;
   name: string;
   state: string;
+  priority?: number;
   counts: Record<string, number>;
   failure: unknown;
 }
@@ -101,6 +103,7 @@ export interface TaskView {
   counts: Record<string, number>;
   failure: unknown;
   created: string;
+  priority?: number;
   blocked: boolean;
   design_relaunches: number;
   outputs: Record<string, unknown>;
@@ -118,6 +121,11 @@ export interface Status {
   tasks: Record<string, number>;
   jobs_per_host: Record<string, number>;
   unacked_events: number;
+  cores_in_use?: number;
+  max_total_cores?: number;
+  run_cores_in_use?: number;
+  build_cores_in_use?: number;
+  max_build_cores?: number;
 }
 
 export interface Health {

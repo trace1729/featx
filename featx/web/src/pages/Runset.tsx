@@ -7,6 +7,7 @@ import { LogTail } from "../components/LogTail";
 import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
 import type { JobView, RunsetSummary, TaskView } from "../types";
 import { countsText, fmtCount, fmtTime, fmtValue, splitRunset } from "../util";
+import { PriorityControl } from "./Tasks";
 
 const ACTIVE = ["queued", "running", "launching"];
 const TABS = ["jobs", "post", "files", "problem log", "provenance"] as const;
@@ -117,6 +118,12 @@ function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
           <button className="danger" disabled={act.busy} onClick={() => call("unblock", { extra: 1 })}>
             Unblock (+1 design relaunch)
           </button>
+        )}
+        {ACTIVE.includes(task.state) && (
+          <>
+            <span className="muted small">priority</span>
+            <PriorityControl task={task} />
+          </>
         )}
         <span className="muted small">
           design relaunches {task.design_relaunches} · featx task relaunch {task.id}

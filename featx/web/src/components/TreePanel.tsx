@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import type { TreeRow } from "../types";
-import { buildTree, fmtDuration, type TreeNode } from "../util";
+import { buildTree, fmtDuration, usePersistentState, type TreeNode } from "../util";
 import { AddNodeDialog, MoveDialog } from "./NodeDialogs";
 import { Badge, ErrorBox, VerdictMark } from "./ui";
 
@@ -77,8 +77,9 @@ export function TreePanel() {
   const loc = useLocation();
   const nav = useNavigate();
   const tree = useQuery({ queryKey: ["tree"], queryFn: () => api.get<TreeRow[]>("/tree"), refetchInterval: 5000 });
-  const [filter, setFilter] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = usePersistentState("tree:filter", "");
+  const [collapsedList, setCollapsedList] = usePersistentState<string[]>("tree:collapsed", []);
+  const collapsed = useMemo(() => new Set(collapsedList), [collapsedList]);
   const [adding, setAdding] = useState(false);
   const [move, setMove] = useState<{ src: string; dst: string } | null>(null);
   const rows = tree.data ?? [];
@@ -92,13 +93,7 @@ export function TreePanel() {
   const roots = useMemo(() => buildTree(shown), [shown]);
   const m = loc.pathname.match(/^\/(node|runset)\/(.+)$/);
   const selected = m ? (m[1] === "runset" ? m[2].replace(/\/[^/]+$/, "") : m[2]) : "";
-  const toggle = (path: string) =>
-    setCollapsed((old) => {
-      const next = new Set(old);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+  const toggle = (path: string) => setCollapsedList((old) => (old.includes(path) ? old.filter((p) => p !== path) : [...old, path]));
   const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
   return (
     <div

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api, getToken, onTokenChange, setToken } from "./api";
 import { TreePanel } from "./components/TreePanel";
 import { DocsPage } from "./pages/Docs";
@@ -44,6 +44,11 @@ function TopBar() {
         <span className="stat">
           {s.tasks.running} running · {s.tasks.queued} queued · {s.tasks.failed} failed
         </span>
+      )}
+      {s && s.max_total_cores !== undefined && (
+        <Link to="/tasks" className="stat" title={`run cores ${s.run_cores_in_use ?? 0}/${s.max_total_cores || "∞"} · build cores ${s.build_cores_in_use ?? 0}/${s.max_build_cores || "∞"} (caps editable on the Tasks page)`}>
+          cores {s.run_cores_in_use ?? 0}/{s.max_total_cores || "∞"}
+        </Link>
       )}
       {free.length > 0 && (
         <span className="stat" title={free.map((h) => `${h.host}: ${h.free_cores?.toFixed(0)} cores free, ${h.featx_jobs} featx jobs`).join("\n")}>
