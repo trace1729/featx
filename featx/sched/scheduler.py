@@ -82,13 +82,16 @@ class Scheduler:
     def _job_dir(self, tree: Tree, task: Task, job: Job) -> Path:
         return self._runset_dir(tree, task) / job.rel
 
-    def cores_in_use(self) -> int:
+    def cores_in_use(self, kind: str | None = None) -> int:
         """Cores reserved by featx's launching/running remote jobs (local post steps excluded)."""
-        return sum(j.cores for t in self.tasks.values() for j in t.jobs
+        return sum(j.cores for t in self.tasks.values() if kind is None or t.kind == kind for j in t.jobs
                    if j.state in ("launching", "running") and not j.local)
 
     def max_total_cores(self) -> int:
         return int(config.settings()["placement"].get("max_total_cores") or 0)
+
+    def max_build_cores(self) -> int:
+        return int(config.settings()["placement"].get("max_build_cores") or 0)
 
     def _queue_kill(self, host: str, pid: str | int, signal: str = "TERM") -> None:
         self._kills.append((host, int(pid), signal))
@@ -483,10 +486,14 @@ class Scheduler:
         cmd.sh. The jobs are left 'launching' with no `launched` time until the ssh returns."""
         per_host = self.jobs_per_host()
         cap = int(config.settings()["placement"].get("max_launches_per_tick") or 0)
-        core_cap, cores_used = self.max_total_cores(), self.cores_in_use()
-        core_full = False   # set once a job does not fit: later tasks wait too (FIFO, no starving)
+        core_caps = {"run": self.max_total_cores(), "build": self.max_build_cores()}
+        cores_used = {kind: self.cores_in_use(kind) for kind in core_caps}
+        # FIFO applies within each budget; queued runs must not block builds.
+        core_full = {kind: False for kind in core_caps}
         starts: list[tuple[Task, Job, str]] = []
         for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=lambda t: t.created):
+            pool = "build" if task.kind == "build" else "run"
+            core_cap = core_caps[pool]
             limit = task.spec.get("max_parallel")
             running = sum(1 for j in task.jobs if j.state in ("launching", "running"))
             changed = False
@@ -499,8 +506,9 @@ class Scheduler:
                 if cap and len(starts) >= cap:
                     break   # the rest go next tick
                 # (a job bigger than the whole cap still runs, alone)
-                if core_cap and not job.local and (core_full or cores_used and cores_used + job.cores > core_cap):
-                    core_full = waiting = True
+                if core_cap and not job.local and (core_full[pool] or
+                        cores_used[pool] and cores_used[pool] + job.cores > core_cap):
+                    core_full[pool] = waiting = True
                     break   # pending until running jobs finish and give their cores back
                 if job.vars.get("after"):
                     states = {j.name: j.state for j in task.jobs}
@@ -523,10 +531,12 @@ class Scheduler:
                 per_host[host] = per_host.get(host, 0) + 1
                 running += 1
                 if not job.local:
-                    cores_used += job.cores
+                    cores_used[pool] += job.cores
                 changed = True
-            note = f"pending: featx core cap {core_cap} reached" if waiting else ""
-            if task.note != note and (waiting or task.note.startswith("pending: featx core cap")):
+            label = "build core cap" if pool == "build" else "core cap"
+            note = f"pending: featx {label} {core_cap} reached" if waiting else ""
+            if task.note != note and (waiting or task.note.startswith(("pending: featx core cap",
+                                                                      "pending: featx build core cap"))):
                 task.note, changed = note, True
             if changed and not any(t is task for t, _, _ in starts):
                 self._refresh_task_state(tree, task)
