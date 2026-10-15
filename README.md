@@ -30,10 +30,12 @@ large panel therefore no longer blocks submit/cancel or the API.
 Kills (cancel, dead attempts) and liveness probes of stale heartbeats are batched into one ssh
 per host and run without the lock as well. `placement.max_total_cores` (300) caps remote
 run cores; `placement.max_build_cores` (64) gives remote builds an independent budget.
-Jobs beyond either budget stay queued, oldest task first within that budget, until cores
-are released. Both budgets still require available host CPU and memory. A job larger than
+Jobs beyond either budget stay queued until cores are released, highest task priority first,
+then oldest (`featx submit --priority N`, `featx task priority TASK N`, the ▲/▼ control on the
+Tasks page; running jobs are never preempted). Both budgets still require available host CPU and memory. A job larger than
 its budget can run alone in that budget; 0 disables that budget's cap. `featx daemon status`
-shows total `cores_in_use` plus `run_cores_in_use` and `build_cores_in_use`.
+shows total `cores_in_use` plus `run_cores_in_use` and `build_cores_in_use`. Both caps can be changed live
+with `featx config set placement.max_total_cores=200` or the Capacity panel of the Tasks page.
 
 ## Layout
 
@@ -118,13 +120,21 @@ Pages:
   `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
   reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
   only with "show incomplete" and are never ranked.
-- **Node**: hypothesis, verdict, evidence, recipes (own-layer editor and explain view), scripts,
-  worktree, runsets, submit form.
+- **Node**: hypothesis, verdict, evidence (add, edit, remove), a free-form comment, recipes
+  (own-layer editor and explain view), scripts, notes (Markdown, editable), runsets, submit form.
+  A "code changed" badge appears when the node worktree differs from its base; the worktree tab
+  lists the commits ahead, the changed/untracked files per repo (main + submodule worktrees) and
+  each file's diff against the merge-base.
+- **Submit form**: kinds, binary, points, quick presets (build tool/mode/options, workload,
+  coverage, `spec-score` post step), priority, overrides. The choices are remembered per node in
+  the browser (kinds, presets and priority also seed other nodes); "reset form" clears them.
 - **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
   problem log, cancel/relaunch/resubmit/unblock.
-- **Tasks**, **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
+- **Tasks**: priority column with ▲/▼, Capacity panel (run/build cores in use vs cap, editable).
+- **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
   (`featx.yaml` editor, baselines, bin import), **Docs** (`docs/reference.md` by topic).
 - In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
+- Filters, checkboxes and leaderboard choices are remembered in the browser (`localStorage`, `featx.v1.*`).
 
 Everything the UI does also has a CLI form:
 
@@ -167,6 +177,10 @@ code change. Each has a `cmd` template and default parameters (`with`), and must
 
 - `perf-keys`: formal-window IPC/counters vs baselines.
 - `collect`, `pair`, `diagnose`, `branch-mpki`: wrap `microarch/spec_trace_compare/03_analysis`.
+- `spec-score`: the SPEC score as `perf_trigger --report` computes it (SPECxx/GHz, int/fp, @f GHz,
+  minimal coverage), optionally against baselines on the same points (`<label>.score_err_pct`).
+  Instruction counts come from the workload's `insts` json in `featx.yaml`. Add it with
+  `--set post.steps.spec-score.plugin=spec-score` or the Submit form checkbox.
 
 `featx compare <runset|baseline>...` runs `perf-keys` ad hoc.
 
@@ -197,7 +211,7 @@ hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
 |---|---|
 | Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
 | Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `docs`, `script_write`, `script_read`, `worktree_create` |
-| Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel` |
+| Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel`, `task_priority` |
 | Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
 | Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |
 

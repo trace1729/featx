@@ -7,7 +7,7 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
 ## concepts — Nodes, runsets, tasks
 
 - **Node**: a directory in the feature tree, `tree/<category>/<feature>/<sub>/`. It holds
-  `node.yaml` (hypothesis, verdict, evidence, git), its own recipe layers `recipes/{build,run,post}.yaml`,
+  `node.yaml` (hypothesis, verdict, evidence, comment, notes, git), its own recipe layers `recipes/{build,run,post}.yaml`,
   helper `scripts/`, and its runsets.
 - **Runset**: one experiment of a node, `<node>/<YYYYMMDD-n>/`. Every `featx submit` creates a new
   one, unless you pass `--runset` to reuse an unsealed runset. It contains:
@@ -22,6 +22,14 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
 - **Task**: one kind (build, run or post) of a runset, made of jobs. A build is one job, a run
   has one job per point, a post has one job per step. The tasks of a submit are chained:
   build → run → post.
+- **Node fields** (`featx node update`, MCP `node_update`, the UI header): `hypothesis`,
+  `verdict` (open|supported|refuted|inconclusive), `verdict_note`, `status`
+  (active|parked|done|abandoned), `evidence` (a list: `--evidence` adds, `--rm-evidence` removes;
+  the API also accepts the full list), `tags`, `notes` (Markdown, the Notes tab) and `comment`
+  (free-form thoughts). Other keys (git, moves, created) cannot be changed this way.
+- **Code changes**: `node_context.git` reports `ahead` and `files_changed` against the base; the
+  UI worktree tab and `GET /worktrees/changes?ref=NODE` list the commits and files of the main and
+  submodule worktrees, `GET /worktrees/diff?ref=NODE&sub=&path=` one file's diff.
 - **Ref forms**: a node is its path (`wpe/overlay/smoke`) or its id. A runset is
   `<node path>/<YYYYMMDD-n>` or a runset id prefix (≥ 6 characters).
 
@@ -42,6 +50,11 @@ featx ps ; featx logs <task> -j astar_biglakes_38_0.017849 -f
 - `--set kind.key=value` overrides one key for this submit only. The value is parsed as YAML:
   `--set run.points=[a_1_0.1,b_2_0.2]`, `--set build.options.chiseldb=true`.
 - `--step NAME` restricts post to some steps.
+- `--priority N` (default 0): when cores are scarce, queued jobs launch highest priority first,
+  then oldest task first. Running jobs are never preempted. Change it later with
+  `featx task priority TASK N` (the whole runset; `--only-task` for one task), MCP
+  `task_priority`, or ▲/▼ on the Tasks page. The caps are `placement.max_total_cores` (run) and
+  `placement.max_build_cores` (build), live-editable with `featx config set` or the UI.
 
 A run recipe only needs the keys that differ from the defaults. `featx recipe show NODE run`
 prints the effective recipe. A minimal `recipes/run.yaml`:
