@@ -43,13 +43,16 @@ retry:
 # run.workload names. manifest: TSV with benchmark/point/weight/checkpoint/trace columns
 # (the point list and ${point.checkpoint} / ${point.trace}); run: keys layered under every run
 # recipe; label: the post plugins' `suite`; reference: their default baseline (null = none,
-# post steps that compare must set with.reference). Add a workload in $FEATX_ROOT/featx.yaml.
+# post steps that compare must set with.reference); insts: per-benchmark instruction counts
+# {bench: {insts, points}} for spec-score (relative paths are under featx/defaults/).
+# Add a workload in $FEATX_ROOT/featx.yaml.
 workloads:
   spec06:
     description: SPEC CPU2006, 55 benchmarks, 1090 SimPoints
     manifest: /nfs/share/gkc/traces/nemu-trace-spec06-v1/_manifest.tsv
     label: spec06
     reference: exec-0903
+    insts: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/cluster-0-0.json
     run:
       trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
       # the manifest's checkpoint column points at a moved directory; legacy/ has them all
@@ -59,6 +62,8 @@ workloads:
     manifest: /nfs/share/gkc/traces/nemu-trace-spec17-v1/_manifest.tsv
     label: spec17
     reference: exec-0903-spec17
+    # from legacy/spec17_rv64gcb_o2_20m logs/profiling "total guest instructions" + simpoint_summary.json
+    insts: insts/spec17_rv64gcb_o2_20m.json
     run:
       trace_root: /nfs/share/gkc/traces/nemu-trace-spec17-v1
       checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec17_rv64gcb_o2_20m/take_cpt/${point.name}/0/_${point.cp}_.gz
@@ -67,6 +72,7 @@ workloads:
     manifest: /nfs/share/gkc/traces/nemu-trace-spec26-v1/_manifest.tsv
     label: spec26
     reference: null
+    insts: /nfs/home/share/checkpoints_profiles/spec26_gcc15_rv64gc_base_260517/json/checkpoints_all.json
     run:
       trace_root: /nfs/share/gkc/traces/nemu-trace-spec26-v1
       checkpoint_file: ${point.checkpoint}

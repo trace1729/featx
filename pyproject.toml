@@ -27,6 +27,7 @@ include = ["featx*"]
 
 [tool.setuptools.package-data]
 featx = ["post/manifests/*.yaml", "post/scripts/*.py","defaults/*.yaml", "defaults/recipes/*.yaml",
+         "defaults/insts/*.json",
          "web/dist/*", "web/dist/**/*"]
 
 [tool.pytest.ini_options]

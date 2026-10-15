@@ -16,8 +16,9 @@ Variables: everything from recipes.base_context plus
   of this runset's points, ${post.<step>} other step dirs, ${python} interpreter for scripts,
   ${plugin.scripts} featx/post/scripts (the built-in plugins' helpers), and every `with:` key.
   ${scripts} is the runset's snapshot of the node's helper scripts, as in build/run.
-  ${workload} / ${workload.label} / ${workload.reference}: the runset run's workload, its
-  analysis suite label and its default baseline name (spec06 / exec-0903 without a workload);
+  ${workload} / ${workload.label} / ${workload.reference} / ${workload.insts}: the runset run's
+  workload, its analysis suite label, its default baseline name (spec06 / exec-0903 without a
+  workload) and its per-benchmark instruction-count json (spec-score);
   they are substituted before @baseline(..) references are resolved.
 """
 
@@ -163,7 +164,7 @@ def workload_context(runset_dir: Path) -> dict:
     run = ((store.read_yaml(runset_dir / "experiment.yaml") or {}).get("recipes") or {}).get("run") or {}
     wl = run.get("workload")
     return {"workload": wl or "", "workload.label": presets.label(wl),
-            "workload.reference": presets.reference(wl) or ""}
+            "workload.reference": presets.reference(wl) or "", "workload.insts": presets.insts(wl)}
 
 
 def _flat_params(params: dict) -> dict:

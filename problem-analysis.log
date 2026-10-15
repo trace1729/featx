@@ -433,3 +433,23 @@ featx/tree.py：Tree.update 只接受白名单字段 + add_/rm_evidence、add_/r
 featx/worktree.py：status() 末尾补 return out；新增 changes()/file_diff()（merge-base 到工作区的 numstat/name-status，
 .gitmodules 中的共享子模块路径剔除，diff 只允许变更列表中的路径）。
 tests/test_presets.py、tests/test_core.py：修正预期，覆盖上述行为。
+
+## 2026-10-15 14:10  spec-score 与 perf_trigger 对比时只认到 193/1090 个点
+问题与解决方案总结:
+在 1010/naive（1090 点全部完成）上，perf_trigger --report 给出 SPEC2006/GHz 20.487、Checkpoints 1090/1090，
+而 spec_score.py 第一版只统计到 193 个完成点，覆盖率最低 0.06。用 astar_biglakes 定位：benchmarks.csv 显示
+finished:5 none:19，即 19 个点的目录根本没找到。原因是 cluster-0-0.json 的权重是 7 位有效数字（0.0288622），
+perf_trigger 的结果目录名按 f"{weight:.6f}" 生成（astar_biglakes_2972_0.028862），而复用的 perf_keys.point_dir
+只做"精确名"或"数值相等（rel 1e-9）"匹配，0.0288622 与 0.028862 不相等，于是判为 none。此外 perf_trigger 计算时用的
+是 json 中的原始权重而非目录名上的 6 位权重。解决：点目录一律按 <bench>_<cp>_<w:.6f> 查找；权重优先取 insts json
+中该点的原始值（与 perf_trigger 一致），json 中没有的点才用点名上的权重。修复后在同一结果根上逐行比较，29 个
+group 的 time/ref_time/score/coverage、SPECint/fp/总分 per GHz、@3.0GHz、Minimal Coverage、Checkpoints 全部一致。
+代码修改说明:
+featx/post/scripts/spec_score.py 新增 point_weight(p, weights)：从点名拆出 bench/cp，权重取
+weights[bench][cp]（insts json 的 points 字段）否则取点名权重，返回 (bench, w, f"{bench}_{cp}_{w:.6f}")；
+score_run 用该目录名调用 point_dir（point_dir 仍保留对旧结果根缩写权重 0.03475 的数值匹配），并用 w 参与
+Σcpi·w、Σw_done 和覆盖率计算。main() 读取 insts json 时同时保存每个 benchmark 的 points 权重表传给 score_run。
+另外 spec17 没有现成的 insts json：从 legacy/spec17_rv64gcb_o2_20m/logs/profiling/<bench>.log 的
+"total guest instructions"（均带 HIT GOOD TRAP）与 simpoint_summary.json 生成 featx/defaults/insts/
+spec17_rv64gcb_o2_20m.json（31 个 benchmark、590 点，权重与 v1 manifest 逐点一致）；同样的方法在 spec06 上与
+cluster-0-0.json 的 insts 完全相同（bzip2_chicken/combined/html 三例核对），作为该来源可信的依据。

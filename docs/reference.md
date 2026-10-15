@@ -179,6 +179,10 @@ Each entry has:
 - `manifest`: a TSV (`suite benchmark point weight checkpoint trace max_instr`);
 - `label`: the analysis `--suite` label;
 - `reference`: the default baseline of post comparisons;
+- `insts`: per-benchmark instruction counts `{bench: {insts, points}}` for `spec-score`
+  (spec06: the checkpoint `cluster-0-0.json`; spec17: `featx/defaults/insts/`, taken from the
+  NEMU profiling logs; spec26: the checkpoint `checkpoints_all.json`; relative paths are under
+  `featx/defaults/`);
 - `run:` keys, which become a recipe layer right above the package defaults, so any recipe
   layer still wins.
 
@@ -237,8 +241,8 @@ Post steps:
 - `${out}` (this step's dir), `${run}` (the runset's point dirs), `${points_config}`;
 - `${post.<step>}`, `${step}`, `${python}`, `${plugin.scripts}`;
 - every `with:` parameter;
-- `${workload}`, `${workload.label}`, `${workload.reference}`. These are taken from the runset's
-  run recipe; without a workload they are `spec06` and `exec-0903`.
+- `${workload}`, `${workload.label}`, `${workload.reference}`, `${workload.insts}`. These are
+  taken from the runset's run recipe; without a workload they are `spec06` and `exec-0903`.
 
 Shell environment of every job:
 - `$FX_TMP`: a node-local temp dir;
@@ -376,6 +380,27 @@ Outputs (in `${out}` = `<runset>/post/<step>/`):
 - `points.csv`: per point and run, the key counters
 - `report.md`: per-run error table
 - `summary.json`: reference, block, points, common_points, <label>.finished, <label>.ipc_geomean, <label>.mean_abs_err_pct, <label>.mean_err_pct, <label>.max_abs_err_pct
+
+### spec-score
+
+SPEC score the way perf_trigger --report computes it (finished points only, cpi from the last clock_cycle/commitInstr, per-benchmark time = weighted cpi x insts / f, group score = ref_time / time / f, SPECint/fp/overall geomean per GHz and @f GHz, minimal coverage), for this runset and optionally baselines on the same point set. Writes groups.csv, benchmarks.csv, report.md, summary.json.
+
+| param | default | meaning |
+|---|---|---|
+| `self` | `${run}` | this runset's point dirs (label "self"; its scores are the top-level summary keys) |
+| `baselines` | `{}` | label: point-dir root map (or a list of baseline names / runset refs), scored on the same points; adds <label>.spec_per_ghz and <label>.score_err_pct |
+| `points` | `${points_config}` | collector JSON or one point name per line (default this runset's points) |
+| `insts` | `${workload.insts}` | per-benchmark instruction count json {bench: {insts, points}} (default the workload's featx.yaml `insts`; weights listed there are used as perf_trigger uses them) |
+| `frequency` | `3.0` | GHz used for time and score |
+| `spec_version` | `auto` | auto \| 06 \| 17 \| 26 |
+| `label` | `${workload.label}` | workload label for spec_version auto (default the run's workload label) |
+
+Outputs (in `${out}` = `<runset>/post/<step>/`):
+
+- `groups.csv`: per run and SPEC benchmark, time, ref_time, score, coverage
+- `benchmarks.csv`: per run and benchmark, insts, finished points, weights, weighted cpi, time
+- `report.md`: perf_trigger-style score table per run
+- `summary.json`: spec_per_ghz, specint_per_ghz, specfp_per_ghz, spec_at_freq, min_coverage, spec_per_ghz_available, groups_scored, missing_groups, finished, points, common_points, score.<group>, <label>.spec_per_ghz, <label>.score_err_pct
 <!-- plugins:end -->
 
 ## worktrees — Worktrees and branches

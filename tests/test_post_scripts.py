@@ -62,3 +62,60 @@ def test_check_paired(tmp_path):
     assert p.returncode == 3 and "the reference has no valid point" in p.stderr
     p = run("check_paired.py", ok, other)
     assert p.returncode == 3 and "other point set / reference" in p.stderr
+
+
+def point(d, cycles, insts, out="EXCEEDING CYCLE/INSTR LIMIT", err_extra=""):
+    perf_dir(d, cycles, insts)
+    (d / "simulator_out.txt").write_text(f"boot\n{out}\n")
+    if err_extra:
+        with open(d / "simulator_err.txt", "a") as handle:
+            handle.write(err_extra + "\n")
+
+
+def test_spec_score_matches_perf_trigger_formula(tmp_path):
+    # spec06 groups by short-name prefix: astar = astar_biglakes + astar_rivers
+    insts = {"astar_biglakes": {"insts": "2000000000", "points": {"1": "0.6", "2": "0.4"}},
+             "astar_rivers": {"insts": "1000000000", "points": {"5": "1.0"}}}
+    (tmp_path / "insts.json").write_text(json.dumps(insts))
+    pts = tmp_path / "points.txt"
+    pts.write_text("astar_biglakes_1_0.600000\nastar_biglakes_2_0.400000\nastar_rivers_5_1.000000\n")
+    root = tmp_path / "self"
+    point(root / "astar_biglakes_1_0.600000", 2000, 1000)            # cpi 2
+    point(root / "astar_biglakes_2_0.400000", 1000, 1000, out="ABORT at pc 0x0")
+    point(root / "astar_rivers_5_1.000000", 1500, 1000, out="HIT GOOD TRAP")   # cpi 1.5
+    ref = tmp_path / "ref"
+    for name in ("astar_biglakes_1_0.6", "astar_biglakes_2_0.4", "astar_rivers_5_1.0"):  # shortened
+        point(ref / name, 1000, 1000)                                  # cpi 1
+    p = run("spec_score.py", "--runs", f"self={root}", f"exec={ref}", "--points", pts,
+            "--insts", tmp_path / "insts.json", "--label", "spec06", "--frequency", "2", "-o", tmp_path / "out")
+    assert p.returncode == 0, p.stderr
+    s = json.loads((tmp_path / "out" / "summary.json").read_text())
+    # biglakes: only the cpi-2 point counts -> 2 * 2e9 / 2e9 = 2 s; rivers: 1.5 * 1e9 / 2e9 = 0.75 s
+    time = 2 + 0.75
+    assert abs(s["score.473.astar"] - 7020 / time / 2) < 1e-9
+    assert abs(s["min_coverage"] - (0.6 * 2e9 + 1.0 * 1e9) / 3e9) < 1e-12
+    assert s["finished"] == 2 and s["exec.finished"] == 3 and s["common_points"] == 2
+    # every other group has no benchmark: the suite score is null, as perf_trigger's nan
+    assert s["spec_per_ghz"] is None and s["groups_scored"] == 1
+    assert "403.gcc" in s["missing_groups"]
+    assert abs(s["spec_per_ghz_available"] - 7020 / time / 2) < 1e-9
+    # the baseline finished every point at cpi 1: 1 s + 0.5 s
+    assert abs(s["exec.spec_per_ghz_available"] - 7020 / (1 + 0.5) / 2) < 1e-9
+    assert "473.astar" in (tmp_path / "out" / "report.md").read_text()
+
+
+def test_spec_score_assertion_and_missing_insts(tmp_path):
+    (tmp_path / "insts.json").write_text(json.dumps({"mcf": {"insts": "100", "points": {"1": "1.0"}}}))
+    pts = tmp_path / "points.txt"
+    pts.write_text("mcf_1_1.000000\n")
+    point(tmp_path / "r" / "mcf_1_1.000000", 10, 10, out="still running",
+          err_extra="emu: Assertion failed")
+    p = run("spec_score.py", "--runs", f"self={tmp_path / 'r'}", "--points", pts,
+            "--insts", tmp_path / "insts.json", "--version", "06", "-o", tmp_path / "out")
+    assert p.returncode == 0, p.stderr
+    rows = list(csv.DictReader(open(tmp_path / "out" / "benchmarks.csv")))
+    assert rows[0]["states"] == "aborted:1"
+    pts.write_text("gcc_1_1.000000\n")
+    p = run("spec_score.py", "--runs", f"self={tmp_path / 'r'}", "--points", pts,
+            "--insts", tmp_path / "insts.json", "-o", tmp_path / "out")
+    assert p.returncode != 0 and "no insts for gcc" in p.stderr

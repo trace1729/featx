@@ -200,6 +200,14 @@ def test_post_workload_label_and_missing_reference(toy_workload, tmp_path):
     store.write_yaml(rdir / "experiment.yaml", {"recipes": {"run": {}}})
     cmd, _ = plugins.render(tree, task, "pair", {}, rdir, rdir / "post" / "pair")
     assert "--suite spec06" in cmd and "/0903/spec06-1.0c/execution" in cmd
+    # spec-score: no baselines by default, the spec06 insts json, and the workload label
+    cmd, _ = plugins.render(tree, task, "spec-score", {}, rdir, rdir / "post" / "spec-score")
+    assert f"--runs self={rdir / 'run'}  --points" in cmd     # empty baselines
+    assert "spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/cluster-0-0.json" in cmd
+    assert '--label "spec06"' in cmd and "--version auto" in cmd
+    store.write_yaml(rdir / "experiment.yaml", {"recipes": {"run": {"workload": "spec17"}}})
+    cmd, _ = plugins.render(tree, task, "spec-score", {"baselines": ["/b/root"]}, rdir, rdir / "post" / "spec-score")
+    assert "featx/defaults/insts/spec17_rv64gcb_o2_20m.json" in cmd and "b:root=/b/root" in cmd
 
 
 def test_exec_run_with_fake_emu(root, fake_emu):

@@ -1,0 +1,35 @@
+name: spec-score
+description: >-
+  SPEC score the way perf_trigger --report computes it (finished points only, cpi from the last
+  clock_cycle/commitInstr, per-benchmark time = weighted cpi x insts / f, group score =
+  ref_time / time / f, SPECint/fp/overall geomean per GHz and @f GHz, minimal coverage), for
+  this runset and optionally baselines on the same point set. Writes groups.csv,
+  benchmarks.csv, report.md, summary.json.
+with:
+  self: ${run}
+  baselines: {}                # optional label: point-dir root map (or list of baseline names / runset refs)
+  points: ${points_config}
+  insts: ${workload.insts}     # {bench: {insts, points}} json (perf_trigger --json-path)
+  frequency: 3.0
+  spec_version: auto           # auto (from the workload label / benchmark names) | 06 | 17 | 26
+  label: ${workload.label}
+params:
+  self: this runset's point dirs (label "self"; its scores are the top-level summary keys)
+  baselines: "label: point-dir root map (or a list of baseline names / runset refs), scored on the same
+    points; adds <label>.spec_per_ghz and <label>.score_err_pct"
+  points: collector JSON or one point name per line (default this runset's points)
+  insts: "per-benchmark instruction count json {bench: {insts, points}} (default the workload's
+    featx.yaml `insts`; weights listed there are used as perf_trigger uses them)"
+  frequency: GHz used for time and score
+  spec_version: auto | 06 | 17 | 26
+  label: workload label for spec_version auto (default the run's workload label)
+outputs:
+  groups.csv: per run and SPEC benchmark, time, ref_time, score, coverage
+  benchmarks.csv: per run and benchmark, insts, finished points, weights, weighted cpi, time
+  report.md: perf_trigger-style score table per run
+  summary.json: "spec_per_ghz, specint_per_ghz, specfp_per_ghz, spec_at_freq, min_coverage,
+    spec_per_ghz_available, groups_scored, missing_groups, finished, points, common_points,
+    score.<group>, <label>.spec_per_ghz, <label>.score_err_pct"
+cmd: |
+  ${python} ${plugin.scripts}/spec_score.py --runs self=${self} ${baselines} --points ${points} \
+    --insts "${insts}" --frequency ${frequency} --version ${spec_version} --label "${label}" -o ${out}

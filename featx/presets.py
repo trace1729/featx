@@ -189,6 +189,15 @@ def label(name: str | None) -> str:
     return str(workload(name).get("label") or name)
 
 
+def insts(name: str | None) -> str:
+    """The workload's per-benchmark instruction-count json (spec-score); relative paths are
+    under featx/defaults/."""
+    path = workload(name or "spec06").get("insts") or ""
+    if path and not path.startswith("/"):
+        path = str(config.DEFAULTS_DIR / path)
+    return path
+
+
 def reference(name: str | None) -> str | None:
     if not name:
         return "exec-0903"
