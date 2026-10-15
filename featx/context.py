@@ -12,7 +12,7 @@ def node_summary(entry: Entry) -> dict:
     n = entry.node
     return {"id": n.id, "path": entry.rel, "kind": n.kind, "hypothesis": n.hypothesis,
             "verdict": n.verdict, "verdict_note": n.verdict_note, "status": n.status,
-            "evidence": n.evidence, "tags": n.tags}
+            "evidence": n.evidence, "tags": n.tags, "comment": n.comment}
 
 
 def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
@@ -23,7 +23,7 @@ def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
         t = tasks.get(tid)
         if t:
             out["tasks"].append({"id": t.id, "kind": t.kind, "name": t.name, "state": t.state,
-                                 "counts": t.counts(), "failure": (t.failure or {}).get("signature")})
+                                 "priority": t.priority, "counts": t.counts(), "failure": (t.failure or {}).get("signature")})
     posts = {}
     pdir = rdir / "post"
     if pdir.is_dir():

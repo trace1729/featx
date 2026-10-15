@@ -173,6 +173,20 @@ def worktree_status(ref: str) -> dict:
     return worktree.status(entry.node)
 
 
+def worktree_changes(ref: str) -> dict:
+    entry = Tree().get(ref)
+    if not entry.node.git:
+        raise TreeError(f"{entry.rel} has no worktree")
+    return worktree.changes(entry.node)
+
+
+def worktree_diff(ref: str, sub: str, path: str) -> dict:
+    entry = Tree().get(ref)
+    if not entry.node.git:
+        raise TreeError(f"{entry.rel} has no worktree")
+    return worktree.file_diff(entry.node, sub, path)
+
+
 # ----------------------------------------------------------- problem log
 def runset_dir(ref: str) -> tuple[Path, str]:
     tree = Tree()

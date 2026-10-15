@@ -17,6 +17,7 @@ from . import config, store, taskstore
 from .model import (
     KINDS,
     NAME_RE,
+    EDITABLE_FIELDS,
     NODE_STATUSES,
     RESERVED_NAMES,
     RUNSET_RE,
@@ -233,16 +234,28 @@ class Tree:
                     raise TreeError(f"verdict must be one of {VERDICTS}")
                 if key == "status" and value not in NODE_STATUSES:
                     raise TreeError(f"status must be one of {NODE_STATUSES}")
+                if key in ("evidence", "tags", "add_evidence", "rm_evidence", "add_tags",
+                           "rm_tags"):
+                    if isinstance(value, str) or not all(isinstance(v, str) for v in value):
+                        raise TreeError(f"{key} must be a list of strings")
+                    value = [v.strip() for v in value if v.strip()]
                 if key == "add_evidence":
-                    node.evidence = list(dict.fromkeys(node.evidence + list(value)))
+                    node.evidence = list(dict.fromkeys(node.evidence + value))
+                elif key == "rm_evidence":
+                    node.evidence = [e for e in node.evidence if e not in value]
                 elif key == "add_tags":
-                    node.tags = list(dict.fromkeys(node.tags + list(value)))
+                    node.tags = list(dict.fromkeys(node.tags + value))
                 elif key == "rm_tags":
                     node.tags = [t for t in node.tags if t not in value]
-                elif hasattr(node, key):
+                elif key in ("evidence", "tags"):
+                    setattr(node, key, list(dict.fromkeys(value)))
+                elif key in EDITABLE_FIELDS:
+                    if not isinstance(value, str):
+                        raise TreeError(f"{key} must be a string")
                     setattr(node, key, value)
                 else:
-                    raise TreeError(f"unknown field {key}")
+                    raise TreeError(f"field {key} cannot be updated (editable: "
+                                    f"{', '.join(EDITABLE_FIELDS)}, add_/rm_evidence, add_/rm_tags)")
             self.save(entry)
             return entry
 

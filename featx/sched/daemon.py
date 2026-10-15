@@ -216,6 +216,14 @@ def build_app(d: Daemon) -> "FastAPI":
     def worktree_status(ref: str):
         return service.worktree_status(ref)
 
+    @app.get("/worktrees/changes")
+    def worktree_changes(ref: str):
+        return service.worktree_changes(ref)
+
+    @app.get("/worktrees/diff")
+    def worktree_diff(ref: str, path: str, sub: str = ""):
+        return service.worktree_diff(ref, sub, path)
+
     # ------------------------------------------------------------ tasks
     @app.post("/tasks")
     def submit(body: dict = Body(...)):
@@ -223,7 +231,8 @@ def build_app(d: Daemon) -> "FastAPI":
                             runset=body.get("runset"), purpose=body.get("purpose", ""),
                             overrides=body.get("overrides"), bin_ref=body.get("bin"),
                             after=body.get("after"), derived_from=body.get("derived_from"),
-                            only_points=body.get("points"), post_steps=body.get("post_steps"))
+                            only_points=body.get("points"), post_steps=body.get("post_steps"),
+                            priority=int(body.get("priority") or 0))
 
     @app.get("/tasks")
     def tasks(active: bool = False, node: str | None = None, limit: int = 200):
@@ -251,6 +260,10 @@ def build_app(d: Daemon) -> "FastAPI":
     def relaunch(tid: str, body: dict = Body(default={})):
         return sched.relaunch(tid, jobs=body.get("jobs"), force=body.get("force", False),
                               reason=body.get("reason", ""))
+
+    @app.post("/tasks/{tid}/priority")
+    def priority(tid: str, body: dict = Body(...)):
+        return sched.set_priority(tid, int(body["priority"]), runset=bool(body.get("runset", False)))
 
     @app.post("/tasks/{tid}/resubmit")
     def resubmit(tid: str, body: dict = Body(default={})):
@@ -347,6 +360,10 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.put("/config")
     def config_put(body: dict = Body(...)):
         return locked(config.write_user_layer, body["text"])
+
+    @app.post("/config/set")
+    def config_set(body: dict = Body(...)):
+        return locked(config.set_user_key, body["key"], body.get("value"))
 
     @app.get("/files")
     def file_read(path: str, tail: int | None = None, max_bytes: int = 256 * 1024, skip_perf: bool = False):

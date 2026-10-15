@@ -176,3 +176,27 @@ def write_user_layer(text: str) -> dict:
     changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
     return {"path": str(user_layer_path()), "changed": changed,
             "restart_needed": [k for k in changed if k in RESTART_KEYS]}
+
+
+def set_user_key(key: str, value) -> dict:
+    """Set one dotted key (e.g. placement.max_total_cores) in the user layer; None removes it.
+    The layer is re-dumped, so YAML comments in it are not kept."""
+    path = user_layer_path()
+    data = (yaml.safe_load(path.read_text()) if path.is_file() else None) or {}
+    parts = key.split(".")
+    node = data
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+        if not isinstance(node, dict):
+            raise ValueError(f"{key}: {part} is not a mapping in {path}")
+    if value is None:
+        node.pop(parts[-1], None)
+    else:
+        node[parts[-1]] = value
+    schema = defaults()
+    for part in parts:
+        if not isinstance(schema, dict) or part not in schema:
+            raise ValueError(f"{key}: unknown key")
+        schema = schema[part]
+    text = yaml.safe_dump(data, sort_keys=False) if data else ""
+    return write_user_layer(text)

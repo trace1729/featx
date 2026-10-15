@@ -372,3 +372,30 @@ def test_cancel_kills_outside_the_lock_one_ssh_per_host(root, fake_emu, monkeypa
     for j in s.tasks[tid].jobs:
         pid = executor.read_state(rdir[0].dir / rdir[1].name / j.rel, j.attempt)["pid"]
         run_until(s, lambda: executor.alive_on_host("localhost", pid) is False, timeout=10)
+
+
+def test_priority_takes_freed_cores_first(root, fake_emu, monkeypatch):
+    _set_settings(root, placement={"max_total_cores": 2})
+    for cp in (2, 3, 4, 5):
+        d = fake_emu[1] / "hang" / str(cp)
+        d.mkdir()
+        (d / f"_{cp}_0.5_.trace.zstd").write_text("x")
+    make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
+    s = sched()
+    old = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
+    service.recipe_set("t/sched/x", "run", {"points": ["hang_4_0.5", "hang_5_0.5"]})
+    res = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), priority=5)
+    new = res["tasks"][0]["id"]
+    assert s.tasks[new].priority == 5 and s.task_view(s.tasks[new])["priority"] == 5
+    calls = []
+    monkeypatch.setattr(executor, "launch", lambda *a, **kw: calls.append(a) or (True, ""))
+    s.tick()
+    s.tick()
+    # the younger task has the higher priority: it takes the whole cap
+    assert s.tasks[new].counts() == {"launching": 2} and s.tasks[old].counts() == {"queued": 3}
+    s.cancel(new)
+    s.set_priority(old, 9, runset=True)
+    assert s.tasks[old].priority == 9
+    s.tick()
+    assert s.tasks[old].counts() == {"launching": 2, "queued": 1}
+    s.cancel(old)

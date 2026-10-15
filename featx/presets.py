@@ -11,6 +11,7 @@ run:    mode     trace | exec; unset = the build's mode (same submit or the --bi
                  key still wins), and with no points / points_file / suite selected the run
                  takes every point of the workload's manifest.
         benchmarks [..] keep only these benchmarks.
+        coverage 0<c<=1: per benchmark, the heaviest points until their weights reach c.
 
 The task spec keeps tool/mode/options next to the lowered args (for display); the bincache
 key ignores them because the lowered args carry their whole effect. The defaults lower to

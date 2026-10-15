@@ -120,7 +120,7 @@ featx submit NODE build --set build.tool=verilator --set build.options.chiseldb=
 |---|---|---|
 | `mode` | `null` | `trace` or `exec`. Unset: the build's mode (same submit, the `--bin` runset's build, or the bincache manifest's `mode`), else `trace`. A mismatch with the build is an error. |
 | `workload` | `null` | `spec06`, `spec17`, `spec26` (see `featx help workloads`) |
-| `points`, `points_file`, `suite`, `benchmarks` | | point selection (see `featx help points`) |
+| `points`, `points_file`, `suite`, `benchmarks`, `coverage` | | point selection (see `featx help points`) |
 | `W`, `I` | 20000000, 40000000 | warmup and measured instructions (`-W`, `-I`) |
 | `emu` | `${bin}` | the runset binary; or an absolute path |
 | `args` | `""` | extra emu arguments |
@@ -154,9 +154,14 @@ A point name is `<bench>_<cp>_<weight>`; the bench may itself contain `_`.
    `benchmark` column (`mcf`, not `505.mcf_r`). Submit fails if the filter drops a point named in
    `points` (or `--point`), or leaves nothing of a non-empty selection; the error lists the
    benchmarks it saw. An inherited filter usually needs `--set run.benchmarks=null`.
-4. With a workload, every point must be in its manifest. Otherwise submit fails and names the
+4. `coverage: c` (0 < c ≤ 1) keeps, per benchmark, the heaviest points (ties: lower checkpoint
+   first) until their weights sum to at least `c`. `coverage: 0.3` on spec06/spec17 gives exactly
+   the `spec06-0.3c.json` (143 points) / `spec17-0.3c.json` (70 points) sets. Names keep their
+   weights, so baselines still match. It can't be combined with explicit `points`/`--point`;
+   `null` or `1` = no filter.
+5. With a workload, every point must be in its manifest. Otherwise submit fails and names the
    missing points; an inherited `suite`/`points` usually needs `null` in the node's layer.
-5. `featx submit --point NAME` replaces `points`, `points_file` and `suite` for that submit.
+6. `featx submit --point NAME` replaces `points`, `points_file` and `suite` for that submit.
    `benchmarks` and the workload check still apply to the names it gives.
 
 Duplicates are dropped; the order is kept. `run/points.json` (`${points_config}`) records the

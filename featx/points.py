@@ -24,11 +24,32 @@ def from_suite(config_json: str, benchmarks: list[str] | None = None) -> list[st
     return out
 
 
+def by_coverage(names: list[str], coverage: float) -> list[str]:
+    """Per benchmark, the heaviest points (ties: lower checkpoint first) until their weights
+    sum to `coverage` — the rule behind the <suite>-0.3c.json configs."""
+    groups: dict[str, list[dict]] = {}
+    for name in names:
+        p = parse(name)
+        groups.setdefault(p["bench"], []).append(p)
+    keep: set[str] = set()
+    for pts in groups.values():
+        total = 0.0
+        for p in sorted(pts, key=lambda p: (-float(p["weight"]), int(p["cp"]) if p["cp"].isdigit() else 0,
+                                            p["cp"])):
+            if total >= coverage - 1e-9:
+                break
+            keep.add(p["name"])
+            total += float(p["weight"])
+    return [n for n in names if n in keep]
+
+
 def resolve(spec: dict, strict: bool = False) -> list[str]:
     """points ∪ points_file ∪ suite; none of them + a workload = all the workload's points.
-    `benchmarks` then keeps only those benchmarks. With a workload every point must be in
-    its manifest. strict (submit validation): `benchmarks` may not drop a point named
-    explicitly in `points`, nor leave nothing of a non-empty selection."""
+    `benchmarks` then keeps only those benchmarks, and `coverage` (0 < c ≤ 1) only the
+    heaviest points of each benchmark up to that weight. With a workload every point must
+    be in its manifest. strict (submit validation): `benchmarks` may not drop a point named
+    explicitly in `points`, nor leave nothing of a non-empty selection; `coverage` may not
+    be combined with explicit points."""
     from . import presets
     names: list[str] = []
     explicit = [p for p in spec.get("points") or [] if p]
@@ -60,6 +81,20 @@ def resolve(spec: dict, strict: bool = False) -> list[str]:
                 raise presets.PresetError(
                     f"benchmarks={benches} matches none of the {len(selected)} selected points; "
                     f"their benchmarks are: {', '.join(known[:12])}{' ...' if len(known) > 12 else ''}")
+    coverage = spec.get("coverage")
+    if coverage is not None:
+        try:
+            coverage = float(coverage)
+        except (TypeError, ValueError):
+            raise presets.PresetError(f"coverage must be a number in (0, 1], got {coverage!r}") from None
+        if not 0 < coverage <= 1:
+            raise presets.PresetError(f"coverage must be in (0, 1], got {coverage}")
+        if strict and explicit:
+            raise presets.PresetError(
+                "coverage selects points by weight and can't be combined with points/--point "
+                "(an inherited coverage? set it to null: --set run.coverage=null)")
+        if coverage < 1:
+            names = by_coverage(names, coverage)
     if wl:
         known = presets.manifest(wl)
         missing = [n for n in names if known and n not in known]

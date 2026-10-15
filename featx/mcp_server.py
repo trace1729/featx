@@ -106,11 +106,14 @@ def node_create(path: str, hypothesis: str = "", tags: list[str] | None = None, 
 def node_update(node: str, hypothesis: str | None = None, verdict: str | None = None,
                 verdict_note: str | None = None, status: str | None = None,
                 add_evidence: list[str] | None = None, add_tags: list[str] | None = None,
-                notes: str | None = None) -> dict:
+                notes: str | None = None, comment: str | None = None,
+                rm_evidence: list[str] | None = None, evidence: list[str] | None = None) -> dict:
     """Update a node. verdict: open|supported|refuted|inconclusive (back it with add_evidence =
-    runset refs). status: active|parked|done|abandoned."""
+    runset refs). status: active|parked|done|abandoned. evidence replaces the whole list,
+    rm_evidence drops entries; notes = Markdown notes, comment = free-form thoughts."""
     return service.node_update(node, hypothesis=hypothesis, verdict=verdict, verdict_note=verdict_note,
-                               status=status, add_evidence=add_evidence, add_tags=add_tags, notes=notes)
+                               status=status, add_evidence=add_evidence, add_tags=add_tags, notes=notes,
+                               comment=comment, rm_evidence=rm_evidence, evidence=evidence)
 
 
 @tool
@@ -179,13 +182,22 @@ def worktree_create(node: str, base: str | None = None, adopt_path: str | None =
 @tool
 def task_submit(node: str, kinds: list[str] | None = None, purpose: str = "",
                 overrides: dict | None = None, bin: str | None = None, points: list[str] | None = None,
-                post_steps: list[str] | None = None, runset: str | None = None) -> dict:
+                post_steps: list[str] | None = None, runset: str | None = None, priority: int = 0) -> dict:
     """Submit build/run/post (default all, chained) as a new runset of `node`.
     overrides: {"run": {"W": 1000000, "I": 2000000}, ...} merged over the effective recipes.
-    bin: emu path | bincache key | runset ref to skip the build. points: subset of run points."""
+    bin: emu path | bincache key | runset ref to skip the build. points: subset of run points.
+    priority: higher launches first when cores are scarce (default 0)."""
     return _c(300).post("/tasks", {"node": node, "kinds": kinds or ["build", "run", "post"], "purpose": purpose,
                                    "overrides": overrides, "bin": bin, "points": points,
-                                   "post_steps": post_steps, "runset": runset}, timeout=300)
+                                   "post_steps": post_steps, "runset": runset, "priority": priority},
+                        timeout=300)
+
+
+@tool
+def task_priority(task: str, priority: int, runset: bool = True) -> dict:
+    """Change launch priority of a task (runset=True: every task of its runset). Higher first;
+    running jobs are not preempted."""
+    return _c().post(f"/tasks/{task}/priority", {"priority": priority, "runset": runset})
 
 
 @tool

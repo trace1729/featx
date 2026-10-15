@@ -31,6 +31,11 @@ class SchedError(Exception):
     pass
 
 
+def launch_order(task: Task) -> tuple:
+    """Higher priority first, then oldest first."""
+    return (-task.priority, task.created)
+
+
 def _now() -> float:
     return time.time()
 
@@ -144,9 +149,11 @@ class Scheduler:
     def submit(self, node_ref: str, kinds: list[str], *, runset: str | None = None,
                purpose: str = "", overrides: dict | None = None, bin_ref: str | None = None,
                after: list[str] | None = None, derived_from: str | None = None,
-               only_points: list[str] | None = None, post_steps: list[str] | None = None) -> dict:
+               only_points: list[str] | None = None, post_steps: list[str] | None = None,
+               priority: int = 0) -> dict:
         """Create tasks for a node. kinds ⊆ [build, run, post] in pipeline order; a new runset
-        is created unless `runset` names an existing unsealed one."""
+        is created unless `runset` names an existing unsealed one. Higher `priority` tasks get
+        freed cores and launch slots first."""
         overrides = overrides or {}
         kinds = [k for k in ("build", "run", "post") if k in kinds]
         if not kinds:
@@ -174,6 +181,7 @@ class Scheduler:
                 raise
             emu_override = next((t.spec["emu"] for t in created if t.kind == "run"), None) if bin_ref else None
             for task in created:
+                task.priority = int(priority or 0)
                 rs.recipes[task.kind] = task.spec
                 rs.tasks.append(task.id)
             if emu_override and not rs.bin:
@@ -406,7 +414,7 @@ class Scheduler:
             return False
         tree = self._tree()
         need_launch = False
-        for task in sorted(active, key=lambda t: t.created):
+        for task in sorted(active, key=launch_order):
             try:
                 if task.state == "queued":
                     dep = self._deps_state(task)
@@ -488,10 +496,10 @@ class Scheduler:
         cap = int(config.settings()["placement"].get("max_launches_per_tick") or 0)
         core_caps = {"run": self.max_total_cores(), "build": self.max_build_cores()}
         cores_used = {kind: self.cores_in_use(kind) for kind in core_caps}
-        # FIFO applies within each budget; queued runs must not block builds.
+        # Priority, then FIFO, applies within each budget; queued runs must not block builds.
         core_full = {kind: False for kind in core_caps}
         starts: list[tuple[Task, Job, str]] = []
-        for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=lambda t: t.created):
+        for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=launch_order):
             pool = "build" if task.kind == "build" else "run"
             core_cap = core_caps[pool]
             limit = task.spec.get("max_parallel")
@@ -915,7 +923,8 @@ class Scheduler:
             entry = tree.get(task.node_id)
             res = self.submit(entry.node.id, kinds, purpose=purpose or f"resubmit of {task.runset_name}",
                               overrides=overrides, derived_from=f"{entry.rel}/{task.runset_name}",
-                              only_points=only, bin_ref=bin_ref)
+                              only_points=only, bin_ref=bin_ref,
+                              priority=max(t.priority for t in group))
             # The derived runset supersedes the source: drop its tasks still waiting on the failure.
             res["superseded"] = []
             for t in group:
@@ -924,6 +933,17 @@ class Scheduler:
                     self._save(t)
                     res["superseded"].append(t.id)
             return res
+
+    def set_priority(self, ref: str, priority: int, *, runset: bool = False) -> dict:
+        """Change the launch priority of a task (or every task of its runset). Running jobs are
+        not preempted; the order decides which queued jobs get freed cores first."""
+        with self.lock:
+            task = self.get(ref)
+            group = [t for t in self.tasks.values() if t.runset_id == task.runset_id] if runset else [task]
+            for t in group:
+                t.priority = int(priority)
+                self._save(t)
+            return {"tasks": [t.id for t in group], "priority": int(priority)}
 
     def unblock(self, ref: str, extra: int = 1) -> dict:
         with self.lock:
@@ -939,6 +959,7 @@ class Scheduler:
         out = {"id": task.id, "kind": task.kind, "node": self._rel(tree, task), "runset": task.runset_name,
                "state": task.state, "note": task.note, "after": task.after, "counts": task.counts(),
                "failure": task.failure, "created": task.created, "blocked": task.blocked,
+               "priority": task.priority,
                "design_relaunches": task.design_relaunches, "outputs": task.outputs,
                "eta_s": self.task_eta(task)}
         prog = [j.progress for j in task.jobs if j.state == "running" and j.progress.get("inst")]

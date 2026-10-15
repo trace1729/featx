@@ -414,3 +414,22 @@ _job_failed、_cancel_jobs 改为排队 kill；_poll 心跳过期时先登记探
 cores_in_use() 统计 launching/running 非本地 job 的 cores；_reserve_launches 超出 max_total_cores 时停止并让后续任务也等待
 （单个超过上限的 job 在空闲时仍可独占运行）。featx/defaults/featx.yaml 加 max_total_cores: 300；/status 输出 cores_in_use、
 max_total_cores。tests/test_sched_local.py 两个新测试。
+
+## 2026-10-15 13:21  节点字段可任意覆盖；status() 追加 ahead 后漏写 return；coverage 测试预期错误
+
+问题与解决方案总结:
+1) 为支持网页编辑 evidence，检查 Tree.update 时发现兜底分支 hasattr(node, key) -> setattr 允许 POST /nodes/update
+   覆盖任意字段（git、moves、id、created），网页或 MCP 误传 {"git": {...}} 会破坏节点与 worktree 的绑定。
+   改为显式白名单 EDITABLE_FIELDS，并增加 evidence（整表替换，用于编辑/重排）与 rm_evidence；类型不符直接报错。
+2) worktree.status() 增加 ahead / files_changed 时把新代码插到了原 return 之前、却替换掉了 return 语句，
+   新测试 test_worktree_changes_and_diff 得到 None（TypeError: 'NoneType' object is not subscriptable）。补回 return。
+3) coverage 单测我写的 0.8 预期漏算了：b 的 0.4+0.3=0.7 < 0.8，需要第三个点；实现本身与 spec06-0.3c.json（143 点，
+   含 bzip2_program 的同权重平局）、spec17-0.3c.json（70 点）逐点一致，修正的是测试预期。
+4) 白名单测试最初用 {"git": None}：Tree.update 对 None 值是跳过（表示“未提供”），不会报错；改用 {"git": {}} 验证被拒。
+
+代码修改说明:
+featx/model.py：EDITABLE_FIELDS、Node.comment、Task.priority。
+featx/tree.py：Tree.update 只接受白名单字段 + add_/rm_evidence、add_/rm_tags，列表字段校验为字符串列表并去空白、去重。
+featx/worktree.py：status() 末尾补 return out；新增 changes()/file_diff()（merge-base 到工作区的 numstat/name-status，
+.gitmodules 中的共享子模块路径剔除，diff 只允许变更列表中的路径）。
+tests/test_presets.py、tests/test_core.py：修正预期，覆盖上述行为。

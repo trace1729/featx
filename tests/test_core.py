@@ -293,3 +293,74 @@ def test_snapshot_scripts_layers_and_prunes(root, tmp_path):
     (root / "scripts" / "common.sh").unlink()
     recipes.snapshot_scripts(tree, entry, tmp_path / "rs")
     assert sorted(p.name for p in dest.iterdir()) == ["x.sh"]
+
+
+def test_update_allowlist_evidence_edit_and_comment(root):
+    Tree().add("a/b", parents=True)
+    service.node_update("a/b", add_evidence=["a/b/20261012-1", "a/b/20261012-2", "note x"])
+    service.node_update("a/b", rm_evidence=["note x"], comment="try a wider window\nnext")
+    n = Tree().get("a/b").node
+    assert n.evidence == ["a/b/20261012-1", "a/b/20261012-2"] and n.comment == "try a wider window\nnext"
+    # the full list replaces (edit + reorder), blanks and duplicates dropped
+    service.node_update("a/b", evidence=["a/b/20261012-2", " ", "a/b/20261012-3", "a/b/20261012-2"])
+    assert Tree().get("a/b").node.evidence == ["a/b/20261012-2", "a/b/20261012-3"]
+    assert service.node_context("a/b")["node"]["comment"].startswith("try")
+    for bad in ({"git": {}}, {"moves": []}, {"created": "x"}, {"id": "y"}, {"evidence": "a/b/1"},
+                {"comment": 3}):
+        with pytest.raises(TreeError):
+            service.node_update("a/b", **bad)
+
+
+def test_set_user_key(root):
+    res = config.set_user_key("placement.max_total_cores", 40)
+    assert res["changed"] == ["placement"] and config.settings()["placement"]["max_total_cores"] == 40
+    assert config.settings()["hosts"] == ["localhost"]          # the rest of the layer survives
+    config.set_user_key("placement.max_total_cores", None)
+    assert config.settings()["placement"]["max_total_cores"] == config.defaults()["placement"]["max_total_cores"]
+    for key, value in (("placement.nope", 1), ("placement.max_total_cores", "many"), ("zzz", 1)):
+        with pytest.raises(ValueError):
+            config.set_user_key(key, value)
+
+
+def test_worktree_changes_and_diff(root, tmp_path):
+    from featx import worktree
+    from featx.model import GitInfo
+    repo, wt = tmp_path / "repo", tmp_path / "wt" / "c"
+    _git("init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("one\n")
+    (repo / ".gitmodules").write_text('[submodule "shared"]\n\tpath = shared\n\turl = x\n')
+    _git("add", ".", cwd=repo)
+    _git("commit", "-q", "-m", "base", cwd=repo)
+    _git("worktree", "add", "-q", "-b", "c", str(wt), "main", cwd=repo)
+    (wt / "a.txt").write_text("one\ntwo\n")
+    _git("commit", "-q", "-am", "add two", cwd=wt)
+    (wt / "b.txt").write_text("new\n")
+    _git("add", "b.txt", cwd=wt)
+    _git("commit", "-q", "-m", "add b", cwd=wt)
+    (wt / "b.txt").write_text("new\nmore\n")              # uncommitted
+    (wt / "u.txt").write_text("untracked\n")
+    os.symlink(tmp_path, wt / "shared")                   # a shared submodule symlink: not a change
+    _git("commit", "-q", "--allow-empty", "-m", "upstream", cwd=repo)   # base moves on
+    e = Tree().add("c")
+    e.node.git = GitInfo(repo=str(repo), base="main", branch="c", worktree=str(wt))
+    store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+
+    ch = service.worktree_changes("c")
+    r = ch["repos"][""]
+    assert (r["ahead"], r["behind"]) == (2, 1)
+    assert [c["subject"] for c in r["commits"]] == ["add b", "add two"]
+    files = {f["path"]: f for f in r["files"]}
+    assert set(files) == {"a.txt", "b.txt"}
+    assert files["b.txt"]["status"] == "A" and files["b.txt"]["added"] == 2 and files["b.txt"]["uncommitted"]
+    assert files["a.txt"]["added"] == 1 and not files["a.txt"]["uncommitted"]
+    assert r["untracked"] == ["u.txt"]
+    assert ch["total"] == {"files": 3, "added": 3, "deleted": 0, "ahead": 2}
+    st = service.worktree_status("c")
+    assert st["ahead"] == 2 and st["files_changed"] == 2
+    d = service.worktree_diff("c", "", "a.txt")["diff"]
+    assert "+two" in d and "a/a.txt" in d
+    assert "+untracked" in service.worktree_diff("c", "", "u.txt")["diff"]
+    with pytest.raises(TreeError):
+        service.worktree_diff("c", "", "../etc/passwd")
+    with pytest.raises(TreeError):
+        service.worktree_diff("c", "TraceRTL", "a.txt")

@@ -26,6 +26,7 @@ points: []
 points_file: null
 suite: null                 # {config: <spec json>, benchmarks: [optional subset]}
 benchmarks: []              # keep only points of these benchmarks
+coverage: null              # 0<c<=1: per benchmark the heaviest points up to weight c (0.3 = the -0.3c configs)
 dump_db: false              # --dump-db --db-path=<point dir>/chiseldb.sqlite (needs build.options.chiseldb)
 cores_per_point: null       # null = the build's options.threads (1 without a build)
 mem_gb_per_point: 8

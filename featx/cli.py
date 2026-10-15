@@ -143,11 +143,14 @@ def node_set(ref: str, hypothesis: Optional[str] = typer.Option(None, "-H", "--h
              note: Optional[str] = typer.Option(None, "--verdict-note"),
              status: Optional[str] = typer.Option(None, help="active|parked|done|abandoned"),
              evidence: List[str] = typer.Option([], "--evidence", help="runset ref backing the verdict"),
+             rm_evidence: List[str] = typer.Option([], "--rm-evidence", help="drop an evidence entry"),
              tag: List[str] = typer.Option([], "--tag"), untag: List[str] = typer.Option([], "--untag"),
-             notes: Optional[str] = typer.Option(None, "--notes")):
-    """Update hypothesis / verdict / status / tags / notes."""
+             notes: Optional[str] = typer.Option(None, "--notes"),
+             comment: Optional[str] = typer.Option(None, "--comment", help="free-form thoughts")):
+    """Update hypothesis / verdict / status / evidence / tags / notes / comment."""
     fields = {"hypothesis": hypothesis, "verdict": verdict, "verdict_note": note, "status": status,
-              "add_evidence": evidence or None, "add_tags": tag or None, "rm_tags": untag or None, "notes": notes}
+              "add_evidence": evidence or None, "rm_evidence": rm_evidence or None,
+              "add_tags": tag or None, "rm_tags": untag or None, "notes": notes, "comment": comment}
     fields = {k: v for k, v in fields.items() if v is not None}
     c = via_daemon()
     out(c.post("/nodes/update", {"ref": ref, **fields}) if c else service.node_update(ref, **fields))
@@ -276,7 +279,7 @@ def script_show(ref: str, name: str):
 
 
 # ================================================================== submit
-def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after):
+def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after, priority=0):
     overrides: dict = {}
     for item in set_ or []:
         kind, dot, rest = item.partition(".")
@@ -284,7 +287,8 @@ def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, st
             fail(f"--set must look like run.W=1000000 (got {item!r})")
         overrides = config.deep_merge(overrides, {kind: parse_kv([rest])})
     body = {"node": node, "kinds": kinds, "runset": runset, "purpose": purpose, "overrides": overrides,
-            "bin": bin_, "points": points or None, "post_steps": steps or None, "after": after or None}
+            "bin": bin_, "points": points or None, "post_steps": steps or None, "after": after or None,
+            "priority": priority}
     res = client().post("/tasks", body, timeout=300)
     typer.echo(f"runset {res['runset']}")
     for t in res["tasks"]:
@@ -304,12 +308,13 @@ def submit(node: str, kinds: List[str] = typer.Argument(None, help="build run po
            set_: List[str] = typer.Option([], "--set", help=SUBMIT_HELP),
            point: List[str] = typer.Option([], "--point", help="restrict run to these points"),
            step: List[str] = typer.Option([], "--step", help="restrict post to these steps"),
-           after: List[str] = typer.Option([], "--after", help="task ids the first task waits for")):
+           after: List[str] = typer.Option([], "--after", help="task ids the first task waits for"),
+           priority: int = typer.Option(0, "--priority", help="higher launches first when cores are scarce")):
     """Submit build/run/post as a chained DAG in a new runset of NODE."""
     for k in kinds or []:
         if k not in KINDS:
             fail(f"unknown kind {k} (build|run|post)")
-    _submit(node, list(kinds or KINDS), runset, purpose, bin_, set_, point, step, after)
+    _submit(node, list(kinds or KINDS), runset, purpose, bin_, set_, point, step, after, priority)
 
 
 @app.command()
@@ -398,6 +403,14 @@ def task_resubmit(tid: str, all_points: bool = typer.Option(False, "--all-points
 @guarded
 def task_cancel(tid: str, job: List[str] = typer.Option([], "-j", "--job")):
     out(client().post(f"/tasks/{tid}/cancel", {"jobs": job or None}))
+
+
+@task_app.command("priority")
+@guarded
+def task_priority(tid: str, priority: int = typer.Argument(..., help="higher launches first"),
+                  only_task: bool = typer.Option(False, "--only-task", help="not the whole runset")):
+    """Change the launch priority of a task's runset (running jobs are not preempted)."""
+    out(client().post(f"/tasks/{tid}/priority", {"priority": priority, "runset": not only_task}))
 
 
 @task_app.command("unblock")

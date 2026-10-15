@@ -21,6 +21,10 @@ ACTIVE_TASK_STATES = ("queued", "running")
 TERMINAL_TASK_STATES = ("succeeded", "failed", "cancelled")
 JOB_ACTIVE = ("queued", "launching", "running")
 
+# node.yaml fields that node_update may set; git/moves/ids are owned by worktree/mv code
+EDITABLE_FIELDS = ("hypothesis", "verdict", "verdict_note", "status", "notes", "comment",
+                   "evidence", "tags")
+
 
 def kind_for_depth(depth: int) -> str:
     return KINDS[min(depth, len(KINDS)) - 1]
@@ -56,6 +60,7 @@ class Node(BaseModel):
     git: GitInfo | None = None
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
+    comment: str = ""         # free-form thoughts, shown under the evidence
     created: str = ""
     updated: str = ""
     moves: list[dict] = Field(default_factory=list)
@@ -116,6 +121,7 @@ class Task(BaseModel):
     max_design_relaunches: int = 3
     blocked: bool = False
     note: str = ""
+    priority: int = 0         # higher launches first; FIFO by `created` within a priority
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}

@@ -217,3 +217,24 @@ def test_exec_run_with_fake_emu(root, fake_emu):
     argv = (Path(res["runset_dir"]) / "run" / "ok_1_0.5" / "argv.txt").read_text()
     assert argv.startswith(f"-i {traces}/ok/1/") and "--no-diff" in argv and "--tracertl-file" not in argv
     assert s.tasks[rid].spec["mode"] == "exec"
+
+
+def test_points_coverage():
+    names = ["a_1_0.5", "a_2_0.3", "a_3_0.2", "b_9_0.3", "b_4_0.3", "b_5_0.4"]
+    # a: 0.5 alone reaches 0.5; b: 0.4, then the 0.3 tie goes to the lower checkpoint (4)
+    assert points.by_coverage(names, 0.5) == ["a_1_0.5", "b_4_0.3", "b_5_0.4"]
+    # 0.8: a needs 0.5+0.3; b's 0.4+0.3 = 0.7 is still short, so all three
+    assert points.by_coverage(names, 0.8) == ["a_1_0.5", "a_2_0.3", "b_9_0.3", "b_4_0.3", "b_5_0.4"]
+    assert points.by_coverage(names, 1.0) == names
+    for bad in (0, 1.5, "x"):
+        with pytest.raises(presets.PresetError):
+            points.resolve({"points": names, "coverage": bad})
+    with pytest.raises(presets.PresetError, match="coverage"):
+        points.resolve({"points": names, "coverage": 0.5}, strict=True)
+
+
+def test_points_coverage_on_workload(toy_workload):
+    every = points.resolve({"workload": "toy"})
+    picked = points.resolve({"workload": "toy", "coverage": 0.3})
+    assert picked and set(picked) <= set(every)
+    assert picked == points.by_coverage(every, 0.3)

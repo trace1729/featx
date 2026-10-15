@@ -321,4 +321,139 @@ def status(node: Node) -> dict:
                           "head": run_git(["-C", sub.path, "rev-parse", "--short", "HEAD"], check=False),
                           "dirty": len(porcelain.splitlines())}
         out["submodules"] = subs
+        mb = run_git(["-C", git.worktree, "merge-base", git.base, "HEAD"], check=False)
+        if mb:
+            ahead = run_git(["-C", git.worktree, "rev-list", "--count", f"{mb}..HEAD"], check=False)
+            out["ahead"] = int(ahead or 0)
+            changed = run_git(["-C", git.worktree, "diff", "--name-only", "-z", "--ignore-submodules=all",
+                               mb], check=False)
+            skip = _submodule_paths(git.worktree)
+            out["files_changed"] = len([p for p in changed.split("\0") if p and p not in skip])
     return out
+
+
+MAX_COMMITS = 200
+MAX_FILES = 2000
+MAX_DIFF_BYTES = 256 * 1024
+
+
+def _repos(node: Node) -> dict[str, tuple[str, str]]:
+    """name -> (checkout path, base) for the node worktree ("" = main) and its submodule
+    worktrees."""
+    git = node.git
+    out = {"": (git.worktree, git.base)}
+    for name, sub in git.submodule_worktrees.items():
+        out[name] = (sub.path, sub.base)
+    return out
+
+
+def _submodule_paths(path: str) -> set[str]:
+    raw = run_git(["-C", path, "config", "-f", ".gitmodules", "--get-regexp", r"submodule\..*\.path"],
+                  check=False)
+    return {line.split(None, 1)[1] for line in raw.splitlines() if len(line.split(None, 1)) == 2}
+
+
+def _z_entries(raw: str, numstat: bool) -> list[tuple[list[str], list[str]]]:
+    """Parse `git diff -z --numstat|--name-status` into (fields, paths) records; renames and
+    copies carry two paths."""
+    toks = raw.split("\0")
+    out, i = [], 0
+    while i < len(toks):
+        tok = toks[i]
+        if not tok:
+            i += 1
+            continue
+        if numstat:
+            added, deleted, path = tok.split("\t", 2)
+            if path:
+                out.append(([added, deleted], [path]))
+                i += 1
+            else:                                   # rename: "a\td\t" then old, new
+                out.append(([added, deleted], [toks[i + 1], toks[i + 2]]))
+                i += 3
+        else:
+            if tok[0] in "RC":
+                out.append(([tok], [toks[i + 1], toks[i + 2]]))
+                i += 3
+            else:
+                out.append(([tok], [toks[i + 1]]))
+                i += 2
+    return out
+
+
+def _repo_changes(path: str, base: str) -> dict:
+    out = {"path": path, "base": base, "exists": Path(path).is_dir()}
+    if not out["exists"]:
+        return out
+    mb = run_git(["-C", path, "merge-base", base, "HEAD"], check=False)
+    if not mb:
+        out["error"] = f"no merge-base between {base} and HEAD"
+        return out
+    out["merge_base"] = mb[:12]
+    counts = run_git(["-C", path, "rev-list", "--left-right", "--count", f"{base}...HEAD"],
+                     check=False).split()
+    out["behind"], out["ahead"] = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (0, 0)
+    log = run_git(["-C", path, "log", f"-{MAX_COMMITS}", "--format=%h%x09%an%x09%ar%x09%s",
+                   f"{mb}..HEAD"], check=False)
+    out["commits"] = [dict(zip(("sha", "author", "when", "subject"), line.split("\t", 3)))
+                      for line in log.splitlines() if line]
+    skip = _submodule_paths(path)
+    # merge-base vs working tree: committed and uncommitted changes together
+    args = ["-C", path, "diff", "-z", "-M", "--ignore-submodules=all"]
+    stats = {tuple(p)[-1]: f for f, p in _z_entries(run_git(args + ["--numstat", mb], check=False), True)}
+    uncommitted = {p[-1] for _, p in _z_entries(run_git(args + ["--name-status", "HEAD"], check=False),
+                                                False)}
+    files = []
+    for (code,), paths in _z_entries(run_git(args + ["--name-status", mb], check=False), False):
+        if paths[-1] in skip:
+            continue
+        added, deleted = stats.get(paths[-1], ["0", "0"])
+        files.append({"status": code[0], "path": paths[-1], "old_path": paths[0] if len(paths) > 1 else None,
+                      "added": None if added == "-" else int(added),
+                      "deleted": None if deleted == "-" else int(deleted),
+                      "uncommitted": paths[-1] in uncommitted})
+    out["truncated"] = len(files) > MAX_FILES
+    out["files"] = files[:MAX_FILES]
+    untracked = run_git(["-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
+    untracked = [p for p in untracked.split("\0") if p and p not in skip]
+    out["untracked"] = untracked[:MAX_FILES]
+    out["added"] = sum(f["added"] or 0 for f in files)
+    out["deleted"] = sum(f["deleted"] or 0 for f in files)
+    return out
+
+
+def changes(node: Node) -> dict:
+    """Code that differs from the base: commits ahead, files changed since the merge-base
+    (committed + uncommitted) and untracked files, for the worktree and each submodule
+    worktree. Shared (symlinked) submodules are left out."""
+    if not node.git:
+        return {"repos": {}}
+    repos = {name: _repo_changes(path, base) for name, (path, base) in _repos(node).items()}
+    total = {"files": sum(len(r.get("files", [])) + len(r.get("untracked", [])) for r in repos.values()),
+             "added": sum(r.get("added", 0) for r in repos.values()),
+             "deleted": sum(r.get("deleted", 0) for r in repos.values()),
+             "ahead": sum(r.get("ahead", 0) for r in repos.values())}
+    return {"repos": repos, "total": total}
+
+
+def file_diff(node: Node, sub: str, path: str) -> dict:
+    """Unified diff of one changed file against the merge-base (working tree side)."""
+    repos = _repos(node) if node.git else {}
+    if sub not in repos:
+        raise TreeError(f"no repo {sub!r} in this node's worktree")
+    wt, base = repos[sub]
+    info = _repo_changes(wt, base)
+    known = {f["path"]: f for f in info.get("files", [])}
+    if path in info.get("untracked", []):
+        fp = Path(wt) / path
+        text = fp.read_text(errors="replace") if fp.is_file() else ""
+        diff = "".join(f"+{line}\n" for line in text.splitlines())
+        diff = f"--- /dev/null\n+++ b/{path}\n" + diff
+    elif path in known:
+        f = known[path]
+        paths = [f["old_path"], path] if f["old_path"] else [path]
+        diff = run_git(["-C", wt, "diff", "-M", info["merge_base"], "--", *paths], check=False)
+    else:
+        raise TreeError(f"{path} is not among the changed files of {sub or 'the worktree'}")
+    truncated = len(diff) > MAX_DIFF_BYTES
+    return {"sub": sub, "path": path, "diff": diff[:MAX_DIFF_BYTES], "truncated": truncated}
