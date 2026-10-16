@@ -747,10 +747,12 @@ def _ckpt_table(rows: list[dict]) -> None:
         typer.echo("no checkpoint sets (checkpoints.roots: "
                    + (", ".join(map(str, (config.settings().get("checkpoints") or {}).get("roots") or [])) or "unset") + ")")
         return
-    typer.echo(f"{'set':44s} {'layout':8s} {'points':>6s} {'bench':>5s} insts restorer  traced_by / problem")
+    w = max(len(r["name"]) for r in rows)              # full names: run.checkpoint takes them
+    typer.echo(f"{'set':{w}s} {'layout':8s} {'points':>6s} {'bench':>5s} insts restorer  traced_by / problem")
     for r in sorted(rows, key=lambda r: (r.get("spec") or "", r["name"])):
-        note = r["error"] or ("multi-hart (not runnable)" if r["multihart"] else ", ".join(r["traced_by"]))
-        typer.echo(f"{r['name'][:44]:44s} {r['layout'] or '-':8s} {r['n_points']:6d} {r['benches']:5d} "
+        note = "; ".join(x for x in ("multi-hart (not runnable)" if r["multihart"] else "", r["error"]) if x) \
+            or ", ".join(r["traced_by"])
+        typer.echo(f"{r['name']:{w}s} {r['layout'] or '-':8s} {r['n_points']:6d} {r['benches']:5d} "
                    f"{'yes' if r['has_insts'] else 'no':5s} {'yes' if r['restorer_needed'] else 'no':8s}  {note}")
 
 

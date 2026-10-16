@@ -260,7 +260,7 @@ function CheckpointsCard() {
                 <td>{c.has_insts ? "yes" : "no"}</td>
                 <td>{c.restorer_needed ? ".gz" : "-"}</td>
                 <td className="small">
-                  {c.runnable ? c.traced_by.join(", ") : <Badge kind={c.multihart ? "warn" : "failed"}>{c.multihart ? "multi-hart (not runnable)" : c.error}</Badge>}
+                  {c.runnable ? c.traced_by.join(", ") : <Badge kind={c.multihart ? "warn" : "failed"}>{[c.multihart && "multi-hart (not runnable)", c.error].filter(Boolean).join("; ")}</Badge>}
                 </td>
               </tr>
             ))}
