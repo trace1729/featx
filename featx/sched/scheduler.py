@@ -227,14 +227,17 @@ class Scheduler:
                 ov = {**(ov or {}), "emu": emu_override}
             try:
                 spec = recipes.effective(tree, entry, kind, ov)
+                built = prev.spec if prev is not None and prev.kind == "build" else \
+                    ({"mode": bin_mode} if bin_mode else None)
+                if kind == "run" and spec.get("checkpoint") and presets.run_mode(spec, built) == "exec":
+                    # the set's images, before the commands embed a workload's checkpoint_file template
+                    spec["checkpoint_file"] = "${point.checkpoint}"
                 spec = recipes.substitute(spec, {**ctx, **recipes.scalar_vars(spec)})
                 if kind == "build":
                     spec = presets.lower_build(spec)
                 if kind == "run":
                     if only_points:
                         spec["points"], spec["points_file"], spec["suite"] = list(only_points), None, None
-                    built = prev.spec if prev is not None and prev.kind == "build" else \
-                        ({"mode": bin_mode} if bin_mode else None)
                     spec = presets.lower_run(spec, built)
             except presets.PresetError as error:
                 raise SchedError(str(error)) from None

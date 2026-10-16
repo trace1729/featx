@@ -496,3 +496,10 @@ spec06_2harts_e（无 manifest）覆盖此路径。
 - featx/post/plugins.py workload_context：读 run.checkpoint_set，调用 insts_path(ck, info["path"])。只有当集合是隐式的（没有 path，或 implied=True）时，空结果才回退到 ${workload.insts}。
 - featx/post/scripts/spec_score.py：insts 为空时的报错补充说明"run.checkpoint 集合（如 take_cpt）可能没有 insts"。
 - spec-score manifest 参数说明、reference.md 的 variables 与 checkpoints 两节同步更新；tests/test_ckpt.py 新增断言：roots 为空时，按名字查不到 insts，按路径能查到。
+
+## 2026-10-17 02:45 显式 run.checkpoint 的 exec 命令仍指向工作负载模板里的镜像
+问题与解决方案总结:
+同事环境冒烟（site nfs-share，run.checkpoint=自建集合 spec06_fake）的第二轮里，cmd.sh 的输入存在性检查用的是集合里的镜像，emu 命令行 -i 却是 legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/ok/1/... 这个模板路径。fake emu 只要路径含 /ok/ 就判通过，所以作业"成功"了，错误被掩盖。原因：scheduler.submit 先用 recipes.substitute(spec, scalar_vars(spec)) 把配方自身的标量键代入 commands.exec，然后才调用 lower_run。site 的 recipe_defaults.run.checkpoint_file 模板因此在 _lower_checkpoint 把 checkpoint_file 改成 ${point.checkpoint} 之前，就已经被写死进命令字符串。单测没暴露这个问题，是因为测试里没有任何层设置 checkpoint_file，${checkpoint_file} 留到了按点代入时才替换。解决：在自代入之前判断——run 配方带 checkpoint 且 run_mode 是 exec 时，先把 checkpoint_file 设为 ${point.checkpoint}，命令里嵌入的就是集合镜像的占位符。
+代码修改说明:
+- featx/sched/scheduler.py submit：built 的计算提到 substitute 之前（逻辑不变）。kind=="run"、spec.checkpoint 非空且 presets.run_mode(spec, built)=="exec" 时，先写 spec["checkpoint_file"]="${point.checkpoint}" 再自代入；按点生成命令时，由 point_vars 从集合索引给出镜像。未设 run.checkpoint 和 trace 模式的配方完全不变，没有改动非 checkpoint 路径的行为。
+- tests/test_ckpt.py test_exec_run_with_a_checkpoint_set：recipe_defaults 加一个 checkpoint_file 模板，断言 argv 用的是集合镜像。已确认：不带本修复时该测试失败，带修复时通过。

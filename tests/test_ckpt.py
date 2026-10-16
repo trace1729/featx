@@ -228,7 +228,9 @@ def test_exec_run_with_a_checkpoint_set(root, fake_emu, tmp_path):
     _touch(s6 / "checkpoint" / "ok" / "1" / "_1_0.500000_.zstd")
     site = tmp_path / "site.yaml"
     site.write_text(yaml.safe_dump({"baselines": {"ref": {"root": str(tmp_path / "refroot"), "checkpoint": "older_set"}}}))
-    update_layer(root, checkpoints={"roots": [str(r)]}, site=str(site))
+    # a layer's checkpoint_file template (as the site's recipe_defaults) must not win over the set
+    update_layer(root, checkpoints={"roots": [str(r)]}, site=str(site), recipe_defaults={"run": {
+        "checkpoint_file": str(tmp_path / "template" / "${point.bench}" / "${point.cp}" / "_${point.cp}_.zstd")}})
     Tree().add("t/ck", parents=True)
     service.recipe_set("t/ck", "run", {"mode": "exec", "checkpoint": "spec06_fake_set", "W": 1, "I": 300000,
                                        "dramsim3_home": None, "exec": {"diff": None}})
