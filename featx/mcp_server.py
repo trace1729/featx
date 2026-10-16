@@ -151,7 +151,7 @@ def plugins_list() -> dict:
 def docs(topic: str | None = None) -> Any:
     """featx reference (docs/reference.md). No topic: the topic list. A topic (concepts, launch,
     recipes, build, run, points, workloads, post, variables, references, plugins, worktrees,
-    baselines, a plugin name, or "all"): its Markdown."""
+    baselines, checkpoints, a plugin name, or "all"): its Markdown."""
     if not topic:
         return featx_docs.index()
     return featx_docs.topic(topic)
@@ -283,6 +283,16 @@ def runsets_list(node: str) -> list:
 def baselines() -> dict:
     """Named baselines usable in post steps as @baseline(name) or in a `baselines:` list."""
     return service.baselines_list()
+
+
+@tool
+def checkpoints(spec: str | None = None, name: str | None = None, bench: str | None = None) -> Any:
+    """Exec-mode checkpoint sets (run.checkpoint). No name: every set with layout, points,
+    benches, insts?, restorer?, multihart, traced_by, error (spec="06"|"17"|"26" filters).
+    name: that set's points (bench filters by prefix) with weights and image files."""
+    if name:
+        return service.checkpoint_show(name, bench=bench)
+    return service.checkpoints(spec=spec)
 
 
 @tool

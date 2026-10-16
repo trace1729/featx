@@ -333,6 +333,14 @@ def build_app(d: Daemon) -> "FastAPI":
     def baseline_rm(name: str, force: bool = False):
         return service.baseline_rm(name, force=force)
 
+    @app.get("/checkpoints")
+    def checkpoints(spec: str | None = None, refresh: bool = False):
+        return service.checkpoints(spec=spec, refresh=refresh)
+
+    @app.get("/checkpoints/{name}")
+    def checkpoint_show(name: str, bench: str | None = None):
+        return service.checkpoint_show(name, bench=bench)
+
     @app.get("/plugins")
     def plugins_list():
         from ..post import plugins

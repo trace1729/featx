@@ -9,7 +9,7 @@ with:
   self: ${run}
   baselines: {}                # optional label: point-dir root map (or list of baseline names / runset refs)
   points: ${points_config}
-  insts: ${workload.insts}     # {bench: {insts, points}} json (perf_trigger --json-path)
+  insts: ${checkpoint.insts}   # {bench: {insts, points}} json (perf_trigger --json-path)
   frequency: 3.0
   spec_version: auto           # auto (from the workload label / benchmark names) | 06 | 17 | 26
   label: ${workload.label}
@@ -18,7 +18,7 @@ params:
   baselines: "label: point-dir root map (or a list of baseline names / runset refs), scored on the same
     points; adds <label>.spec_per_ghz and <label>.score_err_pct"
   points: collector JSON or one point name per line (default this runset's points)
-  insts: "per-benchmark instruction count json {bench: {insts, points}} (default the workload's
+  insts: "per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json, else the workload's
     featx.yaml `insts`; weights listed there are used as perf_trigger uses them)"
   frequency: GHz used for time and score
   spec_version: auto | 06 | 17 | 26

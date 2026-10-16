@@ -33,9 +33,11 @@ bin_app = typer.Typer(no_args_is_help=True, help="Binary cache.")
 script_app = typer.Typer(no_args_is_help=True, help="Per-node helper scripts.")
 config_app = typer.Typer(no_args_is_help=True, help="featx.yaml (user layer over the package defaults).")
 plugin_app = typer.Typer(no_args_is_help=True, help="Post-processing plugins (manifests).")
+ckpt_app = typer.Typer(no_args_is_help=True, help="SimPoint checkpoint sets for exec runs (run.checkpoint).")
 for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_app), ("task", task_app),
                   ("daemon", daemon_app), ("log", log_app), ("baseline", base_app), ("bin", bin_app),
-                  ("script", script_app), ("config", config_app), ("plugin", plugin_app)):
+                  ("script", script_app), ("config", config_app), ("plugin", plugin_app),
+                  ("ckpt", ckpt_app)):
     app.add_typer(sub, name=name)
 
 KINDS = ("build", "run", "post")
@@ -737,6 +739,53 @@ def baseline_rm(name: str, force: bool = typer.Option(False, "-f", "--force",
                                                       help="remove even while workloads / post recipes name it")):
     """Remove a named baseline (refused while a workload or a post recipe uses it)."""
     out(service.baseline_rm(name, force=force))
+
+
+# ================================================================ checkpoints
+def _ckpt_table(rows: list[dict]) -> None:
+    if not rows:
+        typer.echo("no checkpoint sets (checkpoints.roots: "
+                   + (", ".join(map(str, (config.settings().get("checkpoints") or {}).get("roots") or [])) or "unset") + ")")
+        return
+    typer.echo(f"{'set':44s} {'layout':8s} {'points':>6s} {'bench':>5s} insts restorer  traced_by / problem")
+    for r in sorted(rows, key=lambda r: (r.get("spec") or "", r["name"])):
+        note = r["error"] or ("multi-hart (not runnable)" if r["multihart"] else ", ".join(r["traced_by"]))
+        typer.echo(f"{r['name'][:44]:44s} {r['layout'] or '-':8s} {r['n_points']:6d} {r['benches']:5d} "
+                   f"{'yes' if r['has_insts'] else 'no':5s} {'yes' if r['restorer_needed'] else 'no':8s}  {note}")
+
+
+@ckpt_app.command("list")
+@guarded
+def ckpt_list(spec: Optional[str] = typer.Option(None, help="SPEC version: 06, 17, 26"),
+              all_sets: bool = typer.Option(False, "--all", help="include multi-hart and broken sets"),
+              as_json: bool = typer.Option(False, "--json")):
+    """Checkpoint sets under checkpoints.roots (use a name as run.checkpoint with run.mode=exec)."""
+    rows = service.checkpoints(spec=spec, all_sets=all_sets)
+    out(rows) if as_json else _ckpt_table(rows)
+
+
+@ckpt_app.command("show")
+@guarded
+def ckpt_show(name: str = typer.Argument(..., help="set name (featx ckpt list) or set directory"),
+              bench: Optional[str] = typer.Option(None, help="only this benchmark (prefix match)"),
+              as_json: bool = typer.Option(False, "--json")):
+    """One set: layout, weights json, and its points with weights and image files."""
+    r = service.checkpoint_show(name, bench=bench)
+    if as_json:
+        return out(r)
+    for k in ("name", "path", "layout", "json", "json_sha256", "multihart", "restorer_needed", "traced_by",
+              "missing", "extra", "error"):
+        typer.echo(f"{k:16s} {r[k]}")
+    typer.echo(f"{'points':16s} {len(r['points'])} in {len({p['bench'] for p in r['points'].values()})} benchmarks")
+    for n, p in r["points"].items():
+        typer.echo(f"  {n:48s} {p['weight']:>12s}  {p['image']}")
+
+
+@ckpt_app.command("rescan")
+@guarded
+def ckpt_rescan(spec: Optional[str] = typer.Option(None, help="only sets of this SPEC version")):
+    """Rebuild the cached set indexes (they also rebuild by themselves when a set changes)."""
+    _ckpt_table(service.checkpoints(spec=spec, refresh=True))
 
 
 @bin_app.command("import")

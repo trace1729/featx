@@ -72,7 +72,8 @@ default_workload: null
 checkpoints:
   roots: []
 
-# Named result roots seeded into $FEATX_ROOT/baselines.yaml ({name: {root, description, ...}}).
+# Named result roots ({name: {root, description, checkpoint, ...}}), overlaid per entry by
+# $FEATX_ROOT/baselines.yaml.
 baselines: {}
 
 # Recipe keys layered right above the package recipe defaults ({build: {...}, run: {...}}).

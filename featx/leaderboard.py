@@ -2,7 +2,7 @@
 
 A metric is "<post step>.<summary key>", e.g. pk.self.mean_abs_err_pct. Two runsets are only
 ranked against each other when they agree on the step's reference (baseline), PERF block,
-run window (W, I) and point set: a 1M+2M smoke compared with a 20M+20M baseline is not
+run window (W, I), checkpoint set and point set: a 1M+2M smoke compared with a 20M+20M baseline is not
 comparable with a 20M+20M run, even though both carry the same metric name.
 """
 
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from . import points as pts
-from . import store, taskstore
+from . import presets, store, taskstore
 from .model import Runset
 from .tree import Entry, Tree
 
@@ -62,7 +62,11 @@ def _runset_record(entry: Entry, rs: Runset) -> dict:
             s = store.read_json(step / "summary.json")
             if isinstance(s, dict):
                 posts[step.name] = s
-    rec = {"rdir": str(rdir), "W": run.get("W"), "I": run.get("I"), "points": plist,
+    try:
+        ckpt = presets.run_checkpoint(run) or "-"
+    except Exception:  # noqa: BLE001 - an unknown workload must not break the board
+        ckpt = "-"
+    rec = {"rdir": str(rdir), "W": run.get("W"), "I": run.get("I"), "ckpt": ckpt, "points": plist,
            "points_hash": hashlib.sha1(json.dumps(plist).encode()).hexdigest()[:10] if plist else "none",
            "posts": posts}
     _cache[str(rdir)] = (sig, rec)
@@ -81,11 +85,13 @@ def _fmt_count(n) -> str:
 def class_of(step: str, summary: dict, rec: dict) -> dict:
     ref = summary.get("reference", "-")
     block = summary.get("block", "-")
-    key = f"{step}|ref={ref}|blk={block}|W={rec['W']}|I={rec['I']}|pts={rec['points_hash']}"
+    ckpt = rec.get("ckpt", "-")
+    key = f"{step}|ref={ref}|blk={block}|W={rec['W']}|I={rec['I']}|ckpt={ckpt}|pts={rec['points_hash']}"
     label = (f"{step} vs {ref} · W={_fmt_count(rec['W'])} I={_fmt_count(rec['I'])} · "
-             f"{len(rec['points'])} pts")
+             f"{ckpt} · {len(rec['points'])} pts")
     return {"key": key, "label": label, "step": step, "reference": ref, "block": block,
-            "W": rec["W"], "I": rec["I"], "n_points": len(rec["points"]), "points_hash": rec["points_hash"]}
+            "W": rec["W"], "I": rec["I"], "checkpoint": ckpt, "n_points": len(rec["points"]),
+            "points_hash": rec["points_hash"]}
 
 
 def _complete(summary: dict, task_states: list[str]) -> bool:

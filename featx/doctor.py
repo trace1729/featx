@@ -81,11 +81,16 @@ def local_checks() -> list[dict]:
     xs = paths.get("xiangshan") or repo
     cfg = Path(xs) / "scripts" / "top-down" / "configs.py" if xs else None
     out.append(_path("paths.xiangshan top-down", cfg, why="pair / diagnose TopDown definitions"))
-    for r in (s.get("checkpoints") or {}).get("roots") or []:
-        out.append(_path(f"checkpoints root {r}", r, "dir"))
+    out.extend(checkpoint_checks(s))
+    from . import ckpt
+    known = ckpt.set_dirs()
     for name, wl in (s.get("workloads") or {}).items():
         wl = wl or {}
         out.append(_path(f"workload {name}: manifest", wl.get("manifest")))
+        if wl.get("checkpoint"):
+            out.append(_item(f"workload {name}: checkpoint", OK if wl["checkpoint"] in known else WARN,
+                             wl["checkpoint"] if wl["checkpoint"] in known else
+                             f"{wl['checkpoint']}: not a set under checkpoints.roots"))
         run = wl.get("run") or {}
         if run.get("trace_root"):
             out.append(_path(f"workload {name}: trace_root", run["trace_root"], "dir"))
@@ -96,6 +101,27 @@ def local_checks() -> list[dict]:
     from . import baselines
     for name, b in baselines.load().items():
         out.append(_path(f"baseline {name}", b.get("root"), "dir"))
+    return out
+
+
+def checkpoint_checks(s: dict) -> list[dict]:
+    """Each checkpoints root, with how many of its sets exec runs can use."""
+    from . import ckpt
+    roots = (s.get("checkpoints") or {}).get("roots") or []
+    if not roots:
+        return [_item("checkpoints.roots", WARN, "unset (exec runs only get the workloads' own checkpoints)")]
+    rows = ckpt.catalog()
+    out = []
+    for r in roots:
+        if not Path(r).is_dir():
+            out.append(_item(f"checkpoints root {r}", WARN, f"{r}: no such dir"))
+            continue
+        mine = [x for x in rows if Path(x["path"]).parent == Path(r)]
+        good = sum(x["runnable"] for x in mine)
+        multi = sum(bool(x["multihart"]) for x in mine)
+        broken = sum(not x["runnable"] and not x["multihart"] for x in mine)
+        out.append(_item(f"checkpoints root {r}", OK, f"{len(mine)} sets: {good} runnable, {multi} multi-hart, "
+                         f"{broken} broken (featx ckpt list --all)"))
     return out
 
 

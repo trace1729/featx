@@ -474,3 +474,16 @@ CodeMirror 自己的 .cm-scroller 内横向滚动；`.body` 改为 `300px minmax
 featx/web/src/pages/Tasks.tsx TasksPage：把 usePersistentState("tasks:showFinished") / ("tasks:filter") 以及排序用的
 useMemo 移到 `if (q.isLoading)` 之前，提前 return 只发生在全部 hook 调用之后；vitest 中 tasks 页用例覆盖
 "加载中 → 有数据"的两次渲染，不再报错。
+
+## 2026-10-17 01:50 checkpoint 目录名中的 "<n>harts" 识别不到多核集合
+问题与解决方案总结:
+新写的 test_ckpt 用名为 spec06_2harts_e、没有 manifest/ 的合成集合测试"按名字识别多核"，结果 multihart=False，
+`featx ckpt list` 把它列成可运行，`run.checkpoint=spec06_2harts_e` 也没有被拒绝。原因是正则 `(\d+)harts?\b`：
+`\b` 要求 harts 后面是非单词字符，而真实集合名都是 `..._2harts_260818` 这种形式，下划线属于单词字符，所以永远匹配
+不上。真实数据上的 4 个多核集合之前之所以被正确标出，是因为它们的 manifest/<bench>.json 里有 "multihart": true，
+名字这条路径实际从未生效（ls checkpoints_profiles 验证：名字均为 _<n>harts_<date>）。改为显式的前后断言。
+代码修改说明:
+featx/ckpt.py `_HARTS` 改为 `(?<![a-z0-9])\d+harts?(?![a-z])|dual_core`：数字前不能是字母数字（避免误匹配
+rv64...），harts 后不能紧跟字母，下划线/日期/结尾都可以。对 spec06_gcc16_rv64gcb_2harts_260818、
+..._4harts_260924、..._dual_core_...、single_core、普通单核集合逐一验证结果正确；tests/test_ckpt.py 的
+spec06_2harts_e（无 manifest）覆盖此路径。

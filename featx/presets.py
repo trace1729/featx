@@ -6,6 +6,9 @@ build:  tool    gsim | verilator | script      (legacy `type: gsim-two-step|scri
                 -> the make variables of every make call; the raw gsim.step1_args /
                    gsim.step2_args / verilator.args come after them, so they win.
 run:    mode     trace | exec; unset = the build's mode (same submit or the --bin runset)
+        checkpoint  exec: a checkpoint set (featx ckpt list) or set dir: its points replace the
+                 workload's and each point runs its own image; unset = the workload's set via
+                 its checkpoint_file template. Recorded as checkpoint_set (name, json sha).
         workload a name from featx.yaml `workloads` (spec06, spec17, spec26):
                  its `run:` keys become a layer right above the featx defaults (so any recipe
                  key still wins), and with no points / points_file / suite selected the run
@@ -179,8 +182,84 @@ def workload_points(spec: dict) -> list[str]:
 
 
 def point_vars(spec: dict, name: str) -> dict:
+    idx = checkpoint_index(spec)
+    if idx is not None:
+        p = idx["points"].get(name) or {}
+        return {"point.checkpoint": p["image"]} if p else {}
     row = manifest(spec.get("workload")).get(name) or {}
     return {f"point.{k}": v for k, v in (("trace", row.get("trace")), ("checkpoint", row.get("checkpoint"))) if v}
+
+
+# ============================================================== checkpoint
+def implied_checkpoint(spec: dict) -> str | None:
+    """The checkpoint set a run without run.checkpoint uses: its workload's (the default
+    workload's without one) — the set the workload's checkpoint_file template / traces use."""
+    name = spec.get("workload") or default_workload()
+    return (workloads().get(name) or {}).get("checkpoint") if name else None
+
+
+def run_checkpoint(spec: dict) -> str | None:
+    """The checkpoint set of a (lowered) run recipe; runsets from before run.checkpoint
+    existed get their workload's set."""
+    info = spec.get("checkpoint_set") or {}
+    return info.get("name") or spec.get("checkpoint") or implied_checkpoint(spec)
+
+
+def workload_of_checkpoint(name: str | None) -> str | None:
+    """The workload traced from set `name`, else the first one of its SPEC version (label)."""
+    import re
+    if not name:
+        return None
+    for w, wl in workloads().items():
+        if (wl or {}).get("checkpoint") == name:
+            return w
+    m = re.search(r"spec(\d\d)", name)
+    for w in workloads():
+        if m and label(w) == f"spec{m.group(1)}":
+            return w
+    return None
+
+
+def context_workload(spec: dict) -> str | None:
+    """The workload a (lowered) run is labelled / scored / compared as: run.workload, else the
+    workload of an explicit exec checkpoint set, else None (= the default workload)."""
+    info = spec.get("checkpoint_set") or {}
+    if spec.get("workload") or not info.get("path") or info.get("implied"):
+        return spec.get("workload")
+    return workload_of_checkpoint(info.get("name"))
+
+
+def checkpoint_index(spec: dict) -> dict | None:
+    """The catalog index of an exec run with an explicit run.checkpoint, else None."""
+    info = spec.get("checkpoint_set") or {}
+    if spec.get("mode") != "exec" or not info.get("path") or info.get("implied"):
+        return None
+    from . import ckpt
+    return ckpt.index(Path(info["path"]))
+
+
+def _lower_checkpoint(spec: dict) -> None:
+    from . import ckpt
+    want, implied = spec.get("checkpoint"), implied_checkpoint(spec)
+    if not want:
+        spec["checkpoint_set"] = {"name": implied, "implied": True} if implied else None
+        return
+    if spec["mode"] == "trace":
+        if Path(str(want)).name != implied:
+            raise PresetError(f"run.checkpoint={want}: trace runs replay the traces of workload "
+                              f"{spec.get('workload') or default_workload()} (made from {implied or 'an unknown set'}); "
+                              f"run.checkpoint selects images for exec runs (set run.mode=exec, or drop it)")
+        spec["checkpoint_set"] = {"name": implied, "implied": True}
+        return
+    if spec.get("executor") == "perf_trigger":
+        raise PresetError("run.checkpoint needs executor: points (perf_trigger takes gcpt_path / json_path)")
+    try:
+        idx = ckpt.runnable(str(want))
+    except ckpt.CkptError as error:
+        raise PresetError(str(error)) from None
+    spec["checkpoint"] = idx["name"]
+    spec["checkpoint_set"] = ckpt.provenance(idx)
+    spec["checkpoint_file"] = "${point.checkpoint}"
 
 
 def default_workload() -> str | None:
@@ -231,6 +310,7 @@ def lower_run(spec: dict, build_spec: dict | None) -> dict:
     spec["mode"] = run_mode(spec, build_spec)
     if spec.get("workload"):
         workload(spec["workload"])
+    _lower_checkpoint(spec)
     if spec.get("cores_per_point") is None:
         threads = ((build_spec or {}).get("options") or {}).get("threads", 1)
         spec["cores_per_point"] = int(threads or 1)

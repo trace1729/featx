@@ -371,7 +371,8 @@ class Scheduler:
                 task.jobs = [Job(name="perf_trigger", rel="run/.perf_trigger", cores=1, mem_gb=2, local=True)]
             else:
                 names = ptmod.resolve(spec)
-                ptmod.write_config(names, rdir / "run" / "points.json")
+                ck = presets.checkpoint_index(spec)
+                ptmod.write_config(names, rdir / "run" / "points.json", ck["insts"] if ck else None)
                 task.jobs = [Job(name=n, rel=f"run/{n}", cores=int(spec.get("cores_per_point", 1)),
                                  mem_gb=float(spec.get("mem_gb_per_point", 8))) for n in names]
         elif task.kind == "post":

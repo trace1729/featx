@@ -139,7 +139,8 @@ featx submit NODE build --set build.tool=verilator --set build.options.chiseldb=
 | `args` | `""` | extra emu arguments |
 | `env` | `{}` | exported before the emu, e.g. `{TRACERTL_WP_MEM: future}` |
 | `trace_root`, `trace_file` | spec06 v1 | trace mode input; `trace_file` is a template over the point vars |
-| `checkpoint_file` | spec06 legacy | exec mode input (`-i`); the workload sets it |
+| `checkpoint` | `null` | exec mode: a checkpoint set name (`featx ckpt list`) or set dir; it gives the points and their images (see `featx help checkpoints`). `null` = the workload's own set via `checkpoint_file` |
+| `checkpoint_file` | the workload's | exec mode input (`-i`); the workload sets it; a `checkpoint` set replaces it |
 | `exec.diff` | NEMU `.so` | `--diff <so>`; `null` gives `--no-diff` |
 | `exec.gcpt_restorer` | `gcpt.bin` | `-r <bin>`, passed only for `.gz` checkpoints |
 | `dramsim3_home` | DRAMsim3 checkout | `<dir>/build` is put on `LD_LIBRARY_PATH` (the emu links libdramsim3); `null` = none |
@@ -161,10 +162,11 @@ A point name is `<bench>_<cp>_<weight>`; the bench may itself contain `_`.
 
 1. The selected set is `points` ∪ `points_file` (one name per line, `#` comments) ∪ `suite`
    (`{config: <spec json>, benchmarks: [...]}` or just the JSON path).
-2. If none of these select anything and a `workload` is set, the run takes all of the workload's
-   manifest points.
+2. If none of these select anything, an exec run with `checkpoint` takes all of the set's points;
+   otherwise, if a `workload` is set, the run takes all of the workload's manifest points.
 3. `benchmarks: [...]` then keeps only the points of these benchmarks. Names are the manifest's
-   `benchmark` column (`mcf`, not `505.mcf_r`). Submit fails if the filter drops a point named in
+   `benchmark` column (`mcf`, not `505.mcf_r`), or a prefix of a benchmark up to `_` / `.`
+   (`500.perlbench` selects `500.perlbench_rate_refrate_00_checkspam`). Submit fails if the filter drops a point named in
    `points` (or `--point`), or leaves nothing of a non-empty selection; the error lists the
    benchmarks it saw. An inherited filter usually needs `--set run.benchmarks=null`.
 4. `coverage: c` (0 < c ≤ 1) keeps, per benchmark, the heaviest points (ties: lower checkpoint
@@ -172,7 +174,8 @@ A point name is `<bench>_<cp>_<weight>`; the bench may itself contain `_`.
    the `spec06-0.3c.json` (143 points) / `spec17-0.3c.json` (70 points) sets. Names keep their
    weights, so baselines still match. It can't be combined with explicit `points`/`--point`;
    `null` or `1` = no filter.
-5. With a workload, every point must be in its manifest. Otherwise submit fails and names the
+5. With a checkpoint set, every point must be one of the set's; otherwise, with a workload, every
+   point must be in its manifest. Otherwise submit fails and names the
    missing points; an inherited `suite`/`points` usually needs `null` in the node's layer.
 6. `featx submit --point NAME` replaces `points`, `points_file` and `suite` for that submit.
    `benchmarks` and the workload check still apply to the names it gives.
@@ -196,6 +199,8 @@ Each entry has:
   (spec06: the checkpoint `cluster-0-0.json`; spec17: `featx/defaults/insts/`, taken from the
   NEMU profiling logs; spec26: the checkpoint `checkpoints_all.json`; relative paths are under
   `featx/defaults/`);
+- `checkpoint`: the checkpoint set the traces were made from (`featx ckpt list` shows it as
+  `traced_by`); an exec run without `run.checkpoint` is recorded and compared as that set;
 - `run:` keys, which become a recipe layer right above the package defaults, so any recipe
   layer still wins.
 
@@ -238,7 +243,7 @@ Available in every recipe:
 |---|---|
 | `${node.path}`, `${node.name}`, `${node.id}`, `${node.dir}` | the node |
 | `${featx.root}`, `${featx.home}` | `$FEATX_ROOT`, the featx code dir |
-| `${util}`, `${tools}` | `toolsets/util`, the analysis scripts dir |
+| `${util}`, `${tools}` | featx's `bin/` (runwatch.sh, add-worktree.sh), `analysis_dir` |
 | `${date}` | today, `YYYYMMDD` |
 | `${worktree}`, `${repo}`, `${branch}`, `${sub.<name>}` | the node's own worktree (unset without one) |
 | `${scripts}` | the runset's snapshot of the inherited helper scripts |
@@ -255,7 +260,10 @@ Post steps:
 - `${post.<step>}`, `${step}`, `${python}`, `${plugin.scripts}`;
 - every `with:` parameter;
 - `${workload}`, `${workload.label}`, `${workload.reference}`, `${workload.insts}`. These are
-  taken from the runset's run recipe; without a workload they are `spec06` and `exec-0903`.
+  taken from the runset's run recipe; an exec run with only a `checkpoint` set uses the workload
+  of the same SPEC version; otherwise the `default_workload`;
+- `${checkpoint}` (the run's checkpoint set, explicit or the workload's) and
+  `${checkpoint.insts}` (that set's `{bench: {insts, points}}` json, else `${workload.insts}`).
 
 Shell environment of every job:
 - `$FX_TMP`: a node-local temp dir;
@@ -403,7 +411,7 @@ SPEC score the way perf_trigger --report computes it (finished points only, cpi 
 | `self` | `${run}` | this runset's point dirs (label "self"; its scores are the top-level summary keys) |
 | `baselines` | `{}` | label: point-dir root map (or a list of baseline names / runset refs), scored on the same points; adds <label>.spec_per_ghz and <label>.score_err_pct |
 | `points` | `${points_config}` | collector JSON or one point name per line (default this runset's points) |
-| `insts` | `${workload.insts}` | per-benchmark instruction count json {bench: {insts, points}} (default the workload's featx.yaml `insts`; weights listed there are used as perf_trigger uses them) |
+| `insts` | `${checkpoint.insts}` | per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json, else the workload's featx.yaml `insts`; weights listed there are used as perf_trigger uses them) |
 | `frequency` | `3.0` | GHz used for time and score |
 | `spec_version` | `auto` | auto \| 06 \| 17 \| 26 |
 | `label` | `${workload.label}` | workload label for spec_version auto (default the run's workload label) |
@@ -447,5 +455,55 @@ featx baseline rm NAME [--force]     # refused while a recipe refers to it, unle
 Older roots spell weights shortened (`GemsFDTD_10619_0.03475`); `perf-keys` matches such a dir to
 the 6-digit point name (`..._0.034750`) by numeric weight.
 
-The seeds are `exec-0903` (SPEC06) and `exec-0903-spec17`. Post steps refer to a baseline as
-`@baseline(NAME)` or by name in a `baselines:` list.
+The site profile's baselines (nfs-share: `exec-0903` for SPEC06, `exec-0903-spec17`) are
+overlaid per entry by `$FEATX_ROOT/baselines.yaml`; `rm` of a site entry hides it. Post steps
+refer to a baseline as `@baseline(NAME)` or by name in a `baselines:` list.
+
+An optional `checkpoint:` field names the checkpoint set the baseline ran. When a post step
+compares a runset with a baseline or another runset of a different set, it prints a warning and
+its `summary.json` gets `ckpt_mismatch: true` (+ `ckpt_mismatch_with`); the point overlap is
+compared as usual.
+
+## checkpoints — Checkpoint sets (exec mode)
+
+`checkpoints.roots` (featx.yaml; the nfs-share site lists `/nfs/home/share/checkpoints_profiles`
+and its `legacy/`) holds the SimPoint checkpoint sets. A sub-directory whose name contains
+`spec<NN>` is a set; the name is its version.
+
+```bash
+featx ckpt list [--spec 06] [--all] [--json]   # runnable sets; --all adds multi-hart / broken ones
+featx ckpt show SET [--bench mcf]              # points, weights, image files
+featx ckpt rescan                              # rebuild the cached indexes
+featx submit NODE run --bin <exec emu> --set run.mode=exec \
+    --set run.checkpoint=spec06_gcc16_rva23_novec_260820 [--set run.coverage=0.3]
+```
+
+Layouts, in this order:
+
+| layout | images | weights json |
+|---|---|---|
+| modern | `checkpoint/<bench>/<cp>/_<cp>_<w>[_memory_].zstd` | `json/checkpoints_all.json` (with insts) |
+| legacy0 | `checkpoint-0-0-0/<bench>/<cp>/_<cp>_<w>_.zstd` | `checkpoint-0-0-0/cluster-0-0.json` (with insts) |
+| take_cpt | `take_cpt/<bench>_<cp>_<w>/0/_<cp>_.gz` or `take_cpt/<bench>/<cp>/_<cp>_<w>_.gz` | `simpoint_summary.json` (weights only) |
+
+The weights json decides the points; each needs its image. A point is `<bench>_<cp>_<w>` with the
+weight at 6 decimals, as in the trace manifests and result dirs. Images in a dir but not in the
+json (tiny weights the profiler dropped) are counted as `extra` and not used.
+
+With `run.mode: exec` and `run.checkpoint: SET`:
+- the points are the set's (`benchmarks`, `coverage`, `points` select among them; see
+  `featx help points`), and `${checkpoint_file}` is each point's image;
+- `.gz` images get `-r ${exec.gcpt_restorer}`;
+- `run/points.json` carries the set's insts, so `spec-score` weighs with them;
+- `experiment.yaml` records `run.checkpoint_set` (name, path, layout, weights json and its sha256);
+- the leaderboard puts it in its own class (`ckpt=SET`).
+
+Without `run.checkpoint`, an exec run uses the workload's `checkpoint_file` template unchanged
+and is recorded as the workload's `checkpoint` set. Refused: a multi-hart set (featx runs
+single-core emus), a broken set (dangling `take_cpt` link, no images), `run.checkpoint` in trace
+mode other than the set the workload's traces were made from, and `run.checkpoint` with
+`executor: perf_trigger`.
+
+featx does not check that a set's ISA (rv64gcb, rva23, vector) matches the emu; pick a binary
+built for it. Indexes are cached in `$FEATX_ROOT/cache/ckpt/` and rebuilt when a set's dir,
+weights json or image dir changes.

@@ -233,6 +233,26 @@ def runsets(ref: str) -> list[dict]:
     return [context.runset_summary(entry, rs, tasks) for rs in tree.runsets(entry)]
 
 
+# ------------------------------------------------------------- checkpoints
+def checkpoints(spec: str | None = None, refresh: bool = False, all_sets: bool = True) -> list[dict]:
+    """Summaries of the checkpoint sets under checkpoints.roots (all_sets=False: runnable only)."""
+    from . import ckpt
+    rows = ckpt.catalog(refresh=refresh, spec=spec)
+    return rows if all_sets else [r for r in rows if r["runnable"]]
+
+
+def checkpoint_show(name: str, bench: str | None = None, refresh: bool = False) -> dict:
+    """One set: its summary plus points (filtered to a benchmark) and per-bench insts."""
+    from . import ckpt, points
+    idx = ckpt.get(name, refresh)
+    pts = {n: p for n, p in idx["points"].items() if not bench or points.bench_selected(p["bench"], [bench])}
+    if bench and not pts:
+        raise KeyError(f"checkpoint set {idx['name']}: no benchmark {bench!r} "
+                       f"(has {', '.join(sorted({p['bench'] for p in idx['points'].values()}))})")
+    return {**ckpt.summary(idx), "points": pts,
+            "insts": {b: v for b, v in idx["insts"].items() if not bench or b in {p["bench"] for p in pts.values()}}}
+
+
 # ------------------------------------------------------------- baselines
 def baselines_list() -> dict:
     return baselines.load()

@@ -44,10 +44,11 @@ def by_coverage(names: list[str], coverage: float) -> list[str]:
 
 
 def resolve(spec: dict, strict: bool = False) -> list[str]:
-    """points ∪ points_file ∪ suite; none of them + a workload = all the workload's points.
+    """points ∪ points_file ∪ suite; none of them + an exec run.checkpoint set = all the set's
+    points, + a workload = all the workload's points.
     `benchmarks` then keeps only those benchmarks, and `coverage` (0 < c ≤ 1) only the
     heaviest points of each benchmark up to that weight. With a workload every point must
-    be in its manifest. strict (submit validation): `benchmarks` may not drop a point named
+    be in its manifest (with a checkpoint set, in the set). strict (submit validation): `benchmarks` may not drop a point named
     explicitly in `points`, nor leave nothing of a non-empty selection; `coverage` may not
     be combined with explicit points."""
     from . import presets
@@ -63,14 +64,17 @@ def resolve(spec: dict, strict: bool = False) -> list[str]:
             suite = {"config": suite}
         names += from_suite(suite["config"], suite.get("benchmarks"))
     wl = spec.get("workload")
-    if wl and not names:
+    ck = presets.checkpoint_index(spec)
+    if ck is not None and not names:
+        names = list(ck["points"])
+    elif wl and not names:
         names = presets.workload_points(spec)
     benches = spec.get("benchmarks") or []
     if benches:
         selected = names
-        names = [n for n in names if parse(n)["bench"] in benches]
+        names = [n for n in names if bench_selected(parse(n)["bench"], benches)]
         if strict:
-            dropped = [n for n in explicit if parse(n)["bench"] not in benches]
+            dropped = [n for n in explicit if not bench_selected(parse(n)["bench"], benches)]
             if dropped:
                 raise presets.PresetError(
                     f"benchmarks={benches} drops {len(dropped)} point(s) given by points/--point: "
@@ -95,22 +99,30 @@ def resolve(spec: dict, strict: bool = False) -> list[str]:
                 "(an inherited coverage? set it to null: --set run.coverage=null)")
         if coverage < 1:
             names = by_coverage(names, coverage)
-    if wl:
-        known = presets.manifest(wl)
+    if ck is not None or wl:
+        known = ck["points"] if ck is not None else presets.manifest(wl)
+        where = f"checkpoint set {ck['name']}" if ck is not None else f"workload {wl}"
         missing = [n for n in names if known and n not in known]
         if missing:
             raise presets.PresetError(
-                f"{len(missing)} point(s) are not in workload {wl}: {', '.join(missing[:5])}"
+                f"{len(missing)} point(s) are not in {where}: {', '.join(missing[:5])}"
                 f"{' ...' if len(missing) > 5 else ''} (an inherited suite/points? set it to null)")
     return list(dict.fromkeys(names))
 
 
-def write_config(names: list[str], path: Path) -> Path:
-    """Spec-config JSON (collect_gsim_spec_perf.py --config format) for exactly these points."""
+def bench_selected(bench: str, wanted: list[str]) -> bool:
+    """`benchmarks` entries match a benchmark exactly or as a prefix up to '_' / '.'
+    ("500.perlbench" selects 500.perlbench_rate_refrate_00_checkspam...)."""
+    return any(bench == w or bench.startswith((f"{w}_", f"{w}.")) for w in wanted)
+
+
+def write_config(names: list[str], path: Path, insts: dict | None = None) -> Path:
+    """Spec-config JSON (collect_gsim_spec_perf.py --config format) for exactly these points;
+    `insts` = per-benchmark instruction counts (a checkpoint set's), else "0"."""
     data: dict = {}
     for name in names:
         p = parse(name)
-        data.setdefault(p["bench"], {"insts": "0", "points": {}})["points"][p["cp"]] = p["weight"]
+        data.setdefault(p["bench"], {"insts": (insts or {}).get(p["bench"], "0"), "points": {}})["points"][p["cp"]] = p["weight"]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
     return path

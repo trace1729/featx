@@ -22,10 +22,15 @@ Variables: everything from recipes.base_context plus
   workload, its analysis suite label, its default baseline name (spec06 / exec-0903 without a
   workload) and its per-benchmark instruction-count json (spec-score);
   they are substituted before @baseline(..) references are resolved.
+  ${checkpoint} / ${checkpoint.insts}: the run's checkpoint set (run.checkpoint, else its
+  workload's) and the set's {bench: {insts, points}} json (the workload's insts if it has none).
+  A step comparing with a baseline / runset of another checkpoint set gets ckpt_mismatch: true
+  (and ckpt_mismatch_with) in its summary.json.
 """
 
 from __future__ import annotations
 
+import json
 import shlex
 from pathlib import Path
 
@@ -35,6 +40,15 @@ from .. import baselines, config, presets, recipes, store
 
 MANIFEST_DIR = Path(__file__).parent / "manifests"
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
+
+MERGE_PY = r'''
+import json, os, sys
+path, note = sys.argv[1], json.loads(sys.argv[2])
+data = json.load(open(path)) if os.path.isfile(path) else {}
+if isinstance(data, dict):
+    data.update(note)
+    json.dump(data, open(path, "w"), indent=2)
+'''
 
 FLATTEN_PY = r'''
 import json, sys
@@ -168,6 +182,7 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     if "@baseline()" in repr(params):
         raise ValueError(f"post step {step_name!r}: workload {wl_ctx['workload']!r} has no reference baseline; "
                          f"set the step's with.reference / baselines")
+    mismatch = checkpoint_mismatch(params, wl_ctx["checkpoint"], tree)
     params = baselines.resolve_refs(params, tree)
     for _ in range(3):   # params may reference each other and ctx
         params = recipes.substitute(params, {**ctx, **_flat_params(params)})
@@ -179,6 +194,10 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
         src = src if src.startswith("/") else str(out_dir / src)
         lines.append(f"[ -f {shlex.quote(str(out_dir / 'summary.json'))} ] || python3 - "
                      f"{shlex.quote(src)} {shlex.quote(str(out_dir / 'summary.json'))} <<'FXEOF'\n{FLATTEN_PY}\nFXEOF")
+    if mismatch:
+        note = json.dumps({"checkpoint": wl_ctx["checkpoint"], "ckpt_mismatch": True, "ckpt_mismatch_with": mismatch})
+        lines.append(f"echo {shlex.quote('featx: checkpoint set differs from ' + json.dumps(mismatch))} >&2")
+        lines.append(f"python3 -c {shlex.quote(MERGE_PY)} {shlex.quote(str(out_dir / 'summary.json'))} {shlex.quote(note)}")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "params.yaml").write_text(yaml.safe_dump({"plugin": man.get("name", step_name),
                                                           "with": params}, sort_keys=False))
@@ -186,11 +205,41 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     return "\n".join(lines) + "\n", env
 
 
+def _run_recipe(runset_dir: Path) -> dict:
+    return ((store.read_yaml(runset_dir / "experiment.yaml") or {}).get("recipes") or {}).get("run") or {}
+
+
 def workload_context(runset_dir: Path) -> dict:
-    run = ((store.read_yaml(runset_dir / "experiment.yaml") or {}).get("recipes") or {}).get("run") or {}
-    wl = run.get("workload")
+    from .. import ckpt
+    run = _run_recipe(runset_dir)
+    wl = presets.context_workload(run)
+    insts = presets.insts(wl)
+    ck = presets.run_checkpoint(run) or ""
     return {"workload": wl or "", "workload.label": presets.label(wl),
-            "workload.reference": presets.reference(wl) or "", "workload.insts": presets.insts(wl)}
+            "workload.reference": presets.reference(wl) or "", "workload.insts": insts,
+            "checkpoint": ck, "checkpoint.insts": ckpt.insts_path(ck) or insts}
+
+
+def checkpoint_mismatch(params, mine: str, tree) -> dict:
+    """label/ref -> checkpoint set, for the @baseline / @run / @runset references in `params`
+    whose set is known and differs from this run's."""
+    if not mine:
+        return {}
+    out = {}
+    for m in baselines.REF_RE.finditer(repr(params)):
+        kind, arg = m.group(1), m.group(2).strip()
+        other = None
+        if kind == "baseline":
+            other = (baselines.load().get(arg) or {}).get("checkpoint")
+        elif kind in ("run", "runset") and arg != "self":
+            try:
+                entry, rs = tree.find_runset(arg)
+                other = presets.run_checkpoint(rs.recipes.get("run") or {})
+            except Exception:  # noqa: BLE001 - resolve_refs reports bad refs
+                other = None
+        if other and other != mine:
+            out[arg] = other
+    return out
 
 
 def _flat_params(params: dict) -> dict:
