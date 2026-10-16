@@ -501,8 +501,9 @@ With `run.mode: exec` and `run.checkpoint: SET`:
 Without `run.checkpoint`, an exec run uses the workload's `checkpoint_file` template unchanged
 and is recorded as the workload's `checkpoint` set. Refused: a multi-hart set (featx runs
 single-core emus), a broken set (dangling `take_cpt` link, no images), `run.checkpoint` in trace
-mode other than the set the workload's traces were made from, and `run.checkpoint` with
-`executor: perf_trigger`.
+mode other than the set the workload's traces were made from, `run.checkpoint` with
+`executor: perf_trigger`, and a `run.workload` of another SPEC version than the set (the
+workload labels and scores the run; set it to a matching workload or `null`).
 
 featx does not check that a set's ISA (rv64gcb, rva23, vector) matches the emu; pick a binary
 built for it. Indexes are cached in `$FEATX_ROOT/cache/ckpt/` and rebuilt when a set's dir,

@@ -26,6 +26,7 @@ from __future__ import annotations
 import copy
 import csv
 import functools
+import re
 import shlex
 from pathlib import Path
 
@@ -207,7 +208,6 @@ def run_checkpoint(spec: dict) -> str | None:
 
 def workload_of_checkpoint(name: str | None) -> str | None:
     """The workload traced from set `name`, else the first one of its SPEC version (label)."""
-    import re
     if not name:
         return None
     for w, wl in workloads().items():
@@ -257,6 +257,11 @@ def _lower_checkpoint(spec: dict) -> None:
         idx = ckpt.runnable(str(want))
     except ckpt.CkptError as error:
         raise PresetError(str(error)) from None
+    wl = spec.get("workload")
+    if wl and idx.get("label") and re.fullmatch(r"spec\d\d", label(wl)) and label(wl) != idx["label"]:
+        # the workload labels / scores the run and picks its reference baseline
+        raise PresetError(f"run.checkpoint={idx['name']} is {idx['label']} but run.workload={wl} is {label(wl)}; "
+                          f"set run.workload to a {idx['label']} workload or null")
     spec["checkpoint"] = idx["name"]
     spec["checkpoint_set"] = ckpt.provenance(idx)
     spec["checkpoint_file"] = "${point.checkpoint}"

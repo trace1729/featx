@@ -263,7 +263,33 @@ export interface GcReport {
   total_human: string;
 }
 
-export type Baselines = Record<string, { root: string; description?: string; binary?: string }>;
+export type Baselines = Record<string, { root: string; description?: string; binary?: string; checkpoint?: string }>;
+
+/** GET /checkpoints: one SimPoint checkpoint set (run.checkpoint for exec runs). */
+export interface CheckpointSet {
+  name: string;
+  path: string;
+  spec: string | null;
+  label: string | null;
+  layout: string | null;
+  multihart: boolean;
+  json: string | null;
+  has_insts: boolean;
+  benches: number;
+  missing: number;
+  extra: number;
+  restorer_needed: boolean;
+  error: string;
+  n_points: number;
+  runnable: boolean;
+  traced_by: string[];
+}
+
+export interface DoctorReport {
+  checks: { check: string; status: "ok" | "warn" | "fail"; detail: string }[];
+  counts: Record<string, number>;
+  ok: boolean;
+}
 
 export interface DocsIndex {
   path: string;

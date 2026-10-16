@@ -7,8 +7,8 @@ import { AddNodeDialog, MoveDialog, RemoveDialog } from "../components/NodeDialo
 import { Markdown } from "../components/FileViewer";
 import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { ConfigView, NodeContext, RunsetSummary } from "../types";
-import { NO_PRESETS, deepMerge, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
+import type { CheckpointSet, ConfigView, NodeContext, RunsetSummary } from "../types";
+import { NO_PRESETS, checkpointGroups, deepMerge, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
 
 const VERDICTS = ["open", "supported", "refuted", "inconclusive"];
@@ -118,7 +118,8 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
   };
   const setQuick = (q: QuickPresets) => setForm({ quick: q });
   const config = useQuery({ queryKey: ["config"], queryFn: () => api.get<ConfigView>("/config"), staleTime: 60000 });
-  const workloads = Object.entries((config.data?.effective.workloads ?? {}) as Record<string, { description?: string }>);
+  const workloadMap = (config.data?.effective.workloads ?? {}) as Record<string, { description?: string; label?: string; checkpoint?: string }>;
+  const workloads = Object.entries(workloadMap);
   let parsed: Record<string, unknown> = {};
   let parseError: string | null = null;
   try {
@@ -148,6 +149,16 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
     ["on", "on"],
     ["off", "off"],
   ];
+  // exec runs pick a checkpoint set; only sets of the chosen workload's SPEC version run with it
+  const mode = String(quick.mode || run.mode || build.mode || "");
+  const showCheckpoint = mode === "exec" || !!quick.checkpoint;
+  const checkpoints = useQuery({ queryKey: ["checkpoints"], queryFn: () => api.get<CheckpointSet[]>("/checkpoints"), staleTime: 300000, enabled: showCheckpoint });
+  const wlName = (quick.workload || run.workload || "") as string;
+  const wlSpec = /spec(\d\d)/.exec(workloadMap[wlName]?.label ?? wlName)?.[1] ?? null;
+  const ckptGroups = checkpointGroups(checkpoints.data ?? [], wlSpec);
+  const ckptInherit = run.checkpoint
+    ? `inherit (${String(run.checkpoint)})`
+    : `inherit (${workloadMap[wlName || String(config.data?.effective.default_workload ?? "")]?.checkpoint ?? "the workload's"} — the workload's)`;
   const customCoverage = quick.coverage !== "" && !COVERAGES.includes(quick.coverage);
   const inheritedSpecScore = !!((post.steps ?? {}) as Record<string, unknown>)["spec-score"];
   const list = (s: string) => parseCsv(s.replace(/\s+/g, ","))[0]?.filter(Boolean) ?? [];
@@ -200,6 +211,32 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
           workloads.map(([name, w]) => [name, w.description ? `${name} — ${w.description}` : name]),
           run.workload,
           "all its points unless points / benchmarks narrow them",
+        )}
+        {showCheckpoint && (
+          <>
+            <span className="muted small">checkpoint</span>
+            <select
+              value={quick.checkpoint}
+              title={`exec runs: the SimPoint checkpoint set (run.checkpoint)${wlSpec ? `; spec${wlSpec} sets only, as the workload is ${wlName}` : ""}`}
+              onChange={(e) => setQuick({ ...quick, checkpoint: e.target.value })}
+            >
+              <option value="">{ckptInherit}</option>
+              {quick.checkpoint && !ckptGroups.some(([, sets]) => sets.some((c) => c.name === quick.checkpoint)) && <option value={quick.checkpoint}>{quick.checkpoint}</option>}
+              {ckptGroups.map(([spec, sets]) => (
+                <optgroup key={spec} label={`spec${spec}`}>
+                  {sets.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name} ({c.n_points} points{c.restorer_needed ? ", .gz" : ""}{c.has_insts ? "" : ", no insts"})
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            {checkpoints.isError && <span className="error small">checkpoints: {(checkpoints.error as Error).message}</span>}
+            <Link className="small" to="/docs/checkpoints">
+              sets
+            </Link>
+          </>
         )}
         <span className="muted small">coverage</span>
         <select

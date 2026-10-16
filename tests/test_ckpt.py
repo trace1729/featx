@@ -171,6 +171,9 @@ def test_run_checkpoint_refusals_and_implied(sets, nfs_site):
         _spec(mode="trace", workload="spec06", checkpoint="spec06_modern_a")
     with pytest.raises(presets.PresetError, match="perf_trigger"):
         _spec(mode="exec", checkpoint="spec06_modern_a", executor="perf_trigger")
+    with pytest.raises(presets.PresetError, match="is spec17 but run.workload=spec06 is spec06"):
+        _spec(mode="exec", workload="spec06", checkpoint="spec17_take_c")
+    assert _spec(mode="exec", workload="spec06", checkpoint="spec06_modern_a")["checkpoint"] == "spec06_modern_a"
     # without run.checkpoint the workload's template stays and its set is recorded
     spec = _spec(mode="exec", workload="spec17")
     assert spec["checkpoint_set"] == {"name": "spec17_rv64gcb_o2_20m", "implied": True}

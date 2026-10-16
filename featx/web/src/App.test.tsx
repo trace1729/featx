@@ -20,7 +20,13 @@ const FIXTURES: Record<string, unknown> = {
     scripts_dir: "/r/tree/wpe/scripts", scripts: [], runsets: [], runset_count: 0,
   },
   "/config": { path: "/r/featx.yaml", user_text: "", user: {}, defaults_text: "", restart_keys: [],
-    effective: { workloads: { spec06: { description: "SPEC06" }, spec17: { description: "SPEC17" } } } },
+    effective: { workloads: { spec06: { description: "SPEC06", label: "spec06", checkpoint: "spec06_base" }, spec17: { description: "SPEC17", label: "spec17", checkpoint: "spec17_o2" } }, default_workload: "spec06" } },
+  "/checkpoints": [
+    { name: "spec06_base", path: "/ck/spec06_base", spec: "06", label: "spec06", layout: "legacy0", multihart: false, json: "/j", has_insts: true, benches: 29, missing: 0, extra: 0, restorer_needed: false, error: "", n_points: 1090, runnable: true, traced_by: ["spec06"] },
+    { name: "spec17_new", path: "/ck/spec17_new", spec: "17", label: "spec17", layout: "modern", multihart: false, json: "/j", has_insts: true, benches: 20, missing: 0, extra: 0, restorer_needed: false, error: "", n_points: 1783, runnable: true, traced_by: [] },
+    { name: "spec17_2harts", path: "/ck/spec17_2harts", spec: "17", label: "spec17", layout: "modern", multihart: true, json: "/j", has_insts: true, benches: 20, missing: 0, extra: 0, restorer_needed: false, error: "", n_points: 10, runnable: false, traced_by: [] },
+  ],
+  "/doctor": { checks: [{ check: "data root", status: "ok", detail: "/r" }, { check: "git.repo", status: "warn", detail: "unset" }], counts: { ok: 1, warn: 1, fail: 0 }, ok: true },
   "/help": { path: "/featx/docs/reference.md", topics: [{ topic: "concepts", title: "Nodes" }, { topic: "run", title: "Run recipe keys" }] },
   "/help/run": { topic: "run", text: "## run — Run recipe keys\n\n| key | default |\n|---|---|\n| `mode` | `null` |\n" },
   "/leaderboard": {
@@ -144,6 +150,27 @@ describe("App", () => {
     const workload = select("spec17");
     fireEvent.change(workload, { target: { value: "spec17" } });
     expect(await screen.findByText(/--set build.mode=exec --set run.mode=exec --set run.workload=spec17/, { selector: "span" })).toBeTruthy();
+    // exec: a checkpoint set of the workload's SPEC version, multi-hart sets left out
+    const ckpt = await waitFor(() => {
+      const el = select("spec17_new (1783 points)");
+      if (!el) throw new Error("no checkpoint select yet");
+      return el;
+    });
+    expect(ckpt.textContent).toContain("inherit (spec17_o2 — the workload's)");
+    expect(ckpt.textContent).not.toContain("spec06_base");
+    expect(ckpt.textContent).not.toContain("2harts");
+    fireEvent.change(ckpt, { target: { value: "spec17_new" } });
+    expect(await screen.findByText(/--set run.checkpoint=spec17_new/, { selector: "span" })).toBeTruthy();
+  });
+
+  it("lists checkpoint sets and the doctor report in settings", async () => {
+    setToken("t0k");
+    renderAt("/settings");
+    expect(await screen.findByText("spec17_new")).toBeTruthy();
+    expect(screen.queryByText("spec17_2harts")).toBeNull();
+    fireEvent.click(screen.getByLabelText(/multi-hart \/ broken/));
+    expect(await screen.findByText("multi-hart (not runnable)")).toBeTruthy();
+    expect(await screen.findByText("1 ok, 1 warn, 0 fail")).toBeTruthy();
   });
 
   it("scrolls a long jobs table in its own box", async () => {

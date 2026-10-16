@@ -3,6 +3,7 @@ import type { TreeRow } from "./types";
 import {
   NO_PRESETS,
   buildTree,
+  checkpointGroups,
   countsText,
   deepMerge,
   fmtBytes,
@@ -107,6 +108,24 @@ describe("presetOverrides", () => {
     });
     expect(presetOverrides(q, ["run"])).toEqual({ run: { mode: "exec", workload: "spec17", W: 1000000 } });
     expect(presetOverrides(NO_PRESETS, ["build", "run", "post"])).toEqual({});
+    const ck = { ...NO_PRESETS, mode: "exec", checkpoint: "spec06_x" };
+    expect(presetOverrides(ck, ["run"])).toEqual({ run: { mode: "exec", checkpoint: "spec06_x" } });
+    expect(setFlags(presetOverrides(ck, ["run"]))).toContain("--set run.checkpoint=spec06_x");
+  });
+});
+
+describe("checkpointGroups", () => {
+  const set = (name: string, spec: string | null, runnable = true) => ({ name, spec, runnable });
+  const sets = [set("spec17_b", "17"), set("spec06_z", "06"), set("spec06_a", "06"), set("spec06_2harts", "06", false)];
+  it("groups runnable sets by SPEC version, sorted", () => {
+    expect(checkpointGroups(sets).map(([k, v]) => [k, v.map((s) => s.name)])).toEqual([
+      ["06", ["spec06_a", "spec06_z"]],
+      ["17", ["spec17_b"]],
+    ]);
+  });
+  it("keeps only the workload's version", () => {
+    expect(checkpointGroups(sets, "17").map(([k]) => k)).toEqual(["17"]);
+    expect(checkpointGroups(sets, "26")).toEqual([]);
   });
   it("lets the typed overrides win and renders --set flags", () => {
     const merged = deepMerge({ run: { W: 1, workload: "spec06" } }, parseOverrides("run.W=5\nrun.points=[a_1_0.1]"));

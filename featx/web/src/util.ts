@@ -166,6 +166,8 @@ export interface QuickPresets {
   chiseldb: string;
   chiselmap: string;
   workload: string;
+  /** exec runs: a checkpoint set name (run.checkpoint) */
+  checkpoint: string;
   W: string;
   I: string;
   /** "" inherit, "full" = every point (run.coverage null), else a fraction in (0, 1] */
@@ -174,7 +176,7 @@ export interface QuickPresets {
   specScore: string;
 }
 
-export const NO_PRESETS: QuickPresets = { tool: "", mode: "", chiseldb: "", chiselmap: "", workload: "", W: "", I: "", coverage: "", specScore: "" };
+export const NO_PRESETS: QuickPresets = { tool: "", mode: "", chiseldb: "", chiselmap: "", workload: "", checkpoint: "", W: "", I: "", coverage: "", specScore: "" };
 
 /** Presets -> recipe overrides for the selected stages. The mode goes to the build when it is
  * built in this submit (the run follows it), and to the run as well so a --bin run checks it. */
@@ -195,6 +197,7 @@ export function presetOverrides(q: QuickPresets, kinds: string[]): Record<string
     if (q[opt]) put("build", ["options", opt], q[opt] === "on");
   }
   if (q.workload) put("run", ["workload"], q.workload);
+  if (q.checkpoint) put("run", ["checkpoint"], q.checkpoint);
   for (const key of ["W", "I"] as const) {
     const v = q[key].replace(/[_,]/g, "").trim();
     if (v) put("run", [key], /^\d+$/.test(v) ? Number(v) : v);
@@ -218,6 +221,17 @@ export function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>
 }
 
 /** Overrides -> the equivalent `featx submit --set kind.key=value` flags. */
+/** Runnable checkpoint sets by SPEC version ("06", "17", ...), only `spec`'s when given. */
+export function checkpointGroups<T extends { spec: string | null; runnable: boolean; name: string }>(sets: T[], spec?: string | null): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const s of sets) {
+    if (!s.runnable || (spec && s.spec !== spec)) continue;
+    const key = s.spec ?? "?";
+    groups.set(key, [...(groups.get(key) ?? []), s]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v.sort((x, y) => x.name.localeCompare(y.name))]);
+}
+
 export function setFlags(overrides: Record<string, unknown>): string[] {
   const out: string[] = [];
   const walk = (prefix: string, v: unknown) => {
