@@ -304,12 +304,13 @@ def provenance(idx: dict) -> dict:
             "json_sha256": idx["json_sha256"], "points": len(idx["points"])}
 
 
-def insts_path(name: str | None) -> str:
-    """The set's {bench: {insts, points}} json, else the insts of a workload traced from it."""
+def insts_path(name: str | None, path: str | None = None) -> str:
+    """The set's {bench: {insts, points}} json, else the insts of a workload traced from it.
+    `path`: the set dir a runset recorded (a set given as a path is not under the roots)."""
     if not name:
         return ""
     try:
-        idx = get(name)
+        idx = index(Path(path)) if path and Path(path).is_dir() else get(name)
     except CkptError:
         idx = None
     if idx and idx.get("has_insts") and idx.get("json"):

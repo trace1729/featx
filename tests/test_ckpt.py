@@ -187,6 +187,10 @@ def test_run_checkpoint_refusals_and_implied(sets, nfs_site):
     assert ckpt.insts_path("spec06_modern_a").endswith("checkpoints_all.json")
     assert ckpt.insts_path("spec17_take_c") == ""                    # no insts, no workload traced from it
     assert ckpt.insts_path("spec17_rv64gcb_o2_20m") == presets.insts("spec17")
+    # a set given by path (not under the roots) has its insts too
+    update_layer(nfs_site, checkpoints={"roots": []})
+    assert ckpt.insts_path("spec06_modern_a") == ""
+    assert ckpt.insts_path("spec06_modern_a", str(sets / "spec06_modern_a")).endswith("checkpoints_all.json")
 
 
 def test_leaderboard_class_has_the_checkpoint(root, sets):

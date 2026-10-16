@@ -487,3 +487,12 @@ featx/ckpt.py `_HARTS` 改为 `(?<![a-z0-9])\d+harts?(?![a-z])|dual_core`：数�
 rv64...），harts 后不能紧跟字母，下划线/日期/结尾都可以。对 spec06_gcc16_rv64gcb_2harts_260818、
 ..._4harts_260924、..._dual_core_...、single_core、普通单核集合逐一验证结果正确；tests/test_ckpt.py 的
 spec06_2harts_e（无 manifest）覆盖此路径。
+
+## 2026-10-17 02:30 以路径给出的 checkpoint 集合，spec-score 拿到了别的集合的 insts
+问题与解决方案总结:
+在全新"同事"环境（新 venv 装 wheel、新 HOME、featx init --site nfs-share）里跑冒烟：exec 模式，run.checkpoint 给的是一个不在 checkpoints.roots 下的目录路径（spec06_fake，自带 json/checkpoints_all.json 及 insts）。perf-keys 正常并标出 ckpt_mismatch，但 spec-score 失败："no insts for ok in .../spec06_gcc15_rv64gcb_base_260122/.../cluster-0-0.json"。原因有两层：(1) post 的 ${checkpoint.insts} 由 ckpt.insts_path(集合名) 求得，按名字在 roots 里找集合；路径给出的集合不在 roots 里，查找失败；(2) 失败后回退到 ${workload.insts}，也就是 spec06 默认集合的 insts。这次因为 bench 名对不上才报错。若 bench 名相同（例如 spec17 o3_20m 这类不带 insts 的 take_cpt 集合，回退到 o2_20m 的 insts），就会静默地用另一套编译产物的指令数去算分。解决：insts_path 增加 path 参数，优先按 runset 记录的 checkpoint_set.path 建索引；显式 run.checkpoint 集合不再回退到工作负载的 insts，没有就留空，由 spec_score.py 明确报错并提示传 with.insts。隐式集合（未设 run.checkpoint）保持原行为。
+代码修改说明:
+- featx/ckpt.py insts_path(name, path=None)：path 是存在的目录时用 index(Path(path))，否则按名字 get(name)；其余逻辑不变。
+- featx/post/plugins.py workload_context：读 run.checkpoint_set，调用 insts_path(ck, info["path"])。只有当集合是隐式的（没有 path，或 implied=True）时，空结果才回退到 ${workload.insts}。
+- featx/post/scripts/spec_score.py：insts 为空时的报错补充说明"run.checkpoint 集合（如 take_cpt）可能没有 insts"。
+- spec-score manifest 参数说明、reference.md 的 variables 与 checkpoints 两节同步更新；tests/test_ckpt.py 新增断言：roots 为空时，按名字查不到 insts，按路径能查到。

@@ -18,8 +18,9 @@ params:
   baselines: "label: point-dir root map (or a list of baseline names / runset refs), scored on the same
     points; adds <label>.spec_per_ghz and <label>.score_err_pct"
   points: collector JSON or one point name per line (default this runset's points)
-  insts: "per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json, else the workload's
-    featx.yaml `insts`; weights listed there are used as perf_trigger uses them)"
+  insts: "per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json; a run without
+    run.checkpoint falls back to the workload's featx.yaml `insts`, a take_cpt run.checkpoint set has
+    none, so pass it here; weights listed there are used as perf_trigger uses them)"
   frequency: GHz used for time and score
   spec_version: auto | 06 | 17 | 26
   label: workload label for spec_version auto (default the run's workload label)

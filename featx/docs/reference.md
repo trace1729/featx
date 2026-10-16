@@ -263,7 +263,8 @@ Post steps:
   taken from the runset's run recipe; an exec run with only a `checkpoint` set uses the workload
   of the same SPEC version; otherwise the `default_workload`;
 - `${checkpoint}` (the run's checkpoint set, explicit or the workload's) and
-  `${checkpoint.insts}` (that set's `{bench: {insts, points}}` json, else `${workload.insts}`).
+  `${checkpoint.insts}` (that set's `{bench: {insts, points}}` json; without one, `${workload.insts}`
+  for the workload's own set and empty for an explicit `run.checkpoint` set).
 
 Shell environment of every job:
 - `$FX_TMP`: a node-local temp dir;
@@ -411,7 +412,7 @@ SPEC score the way perf_trigger --report computes it (finished points only, cpi 
 | `self` | `${run}` | this runset's point dirs (label "self"; its scores are the top-level summary keys) |
 | `baselines` | `{}` | label: point-dir root map (or a list of baseline names / runset refs), scored on the same points; adds <label>.spec_per_ghz and <label>.score_err_pct |
 | `points` | `${points_config}` | collector JSON or one point name per line (default this runset's points) |
-| `insts` | `${checkpoint.insts}` | per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json, else the workload's featx.yaml `insts`; weights listed there are used as perf_trigger uses them) |
+| `insts` | `${checkpoint.insts}` | per-benchmark instruction count json {bench: {insts, points}} (default the run checkpoint set's json; a run without run.checkpoint falls back to the workload's featx.yaml `insts`, a take_cpt run.checkpoint set has none, so pass it here; weights listed there are used as perf_trigger uses them) |
 | `frequency` | `3.0` | GHz used for time and score |
 | `spec_version` | `auto` | auto \| 06 \| 17 \| 26 |
 | `label` | `${workload.label}` | workload label for spec_version auto (default the run's workload label) |
@@ -494,7 +495,8 @@ With `run.mode: exec` and `run.checkpoint: SET`:
 - the points are the set's (`benchmarks`, `coverage`, `points` select among them; see
   `featx help points`), and `${checkpoint_file}` is each point's image;
 - `.gz` images get `-r ${exec.gcpt_restorer}`;
-- `run/points.json` carries the set's insts, so `spec-score` weighs with them;
+- `run/points.json` carries the set's insts, so `spec-score` weighs with them (take_cpt sets
+  have no insts: `spec-score` then needs `with.insts`, another set's counts are never used);
 - `experiment.yaml` records `run.checkpoint_set` (name, path, layout, weights json and its sha256);
 - the leaderboard puts it in its own class (`ckpt=SET`).
 

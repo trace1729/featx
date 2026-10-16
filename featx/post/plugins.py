@@ -23,7 +23,8 @@ Variables: everything from recipes.base_context plus
   workload) and its per-benchmark instruction-count json (spec-score);
   they are substituted before @baseline(..) references are resolved.
   ${checkpoint} / ${checkpoint.insts}: the run's checkpoint set (run.checkpoint, else its
-  workload's) and the set's {bench: {insts, points}} json (the workload's insts if it has none).
+  workload's) and the set's {bench: {insts, points}} json (an implied set without one: the
+  workload's insts; an explicit run.checkpoint set without one: empty).
   A step comparing with a baseline / runset of another checkpoint set gets ckpt_mismatch: true
   (and ckpt_mismatch_with) in its summary.json.
 """
@@ -215,9 +216,13 @@ def workload_context(runset_dir: Path) -> dict:
     wl = presets.context_workload(run)
     insts = presets.insts(wl)
     ck = presets.run_checkpoint(run) or ""
+    info = run.get("checkpoint_set") or {}
+    ck_insts = ckpt.insts_path(ck, info.get("path"))
+    if not ck_insts and not (info.get("path") and not info.get("implied")):
+        ck_insts = insts          # an explicit set's points don't take another set's insts
     return {"workload": wl or "", "workload.label": presets.label(wl),
             "workload.reference": presets.reference(wl) or "", "workload.insts": insts,
-            "checkpoint": ck, "checkpoint.insts": ckpt.insts_path(ck) or insts}
+            "checkpoint": ck, "checkpoint.insts": ck_insts}
 
 
 def checkpoint_mismatch(params, mine: str, tree) -> dict:

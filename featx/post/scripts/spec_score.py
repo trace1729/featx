@@ -196,7 +196,8 @@ def main():
         runs.append((label, root))
     if not args.insts or not os.path.isfile(args.insts):
         sys.exit(f"spec_score: insts json {args.insts!r} not found; set with.insts "
-                 "(the workload's featx.yaml `insts` key gives the default)")
+                 "(the workload's featx.yaml `insts` key gives the default; a run.checkpoint set without "
+                 "insts, e.g. take_cpt, has none)")
     raw = json.load(open(args.insts))
     insts = {b: float(v["insts"]) for b, v in raw.items() if "insts" in v}
     weights = {b: v.get("points") or {} for b, v in raw.items()}
