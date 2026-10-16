@@ -323,7 +323,7 @@ def test_max_total_cores_pends_until_jobs_finish(root, fake_emu, monkeypatch):
     make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
     s = sched()
     first = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
-    service.recipe_set("t/sched/x", "run", {"points": ["hang_4_0.5", "hang_5_0.5"]})
+    service.recipe_set("t/sched/x", "run", {"trace_root": str(fake_emu[1]), "points": ["hang_4_0.5", "hang_5_0.5"]})
     second = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
     calls = []
     monkeypatch.setattr(executor, "launch", lambda *a, **kw: calls.append(a) or (True, ""))
@@ -383,7 +383,7 @@ def test_priority_takes_freed_cores_first(root, fake_emu, monkeypatch):
     make_node(fake_emu, ["hang_1_0.5", "hang_2_0.5", "hang_3_0.5"])
     s = sched()
     old = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))["tasks"][0]["id"]
-    service.recipe_set("t/sched/x", "run", {"points": ["hang_4_0.5", "hang_5_0.5"]})
+    service.recipe_set("t/sched/x", "run", {"trace_root": str(fake_emu[1]), "points": ["hang_4_0.5", "hang_5_0.5"]})
     res = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), priority=5)
     new = res["tasks"][0]["id"]
     assert s.tasks[new].priority == 5 and s.task_view(s.tasks[new])["priority"] == 5

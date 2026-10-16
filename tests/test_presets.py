@@ -44,10 +44,12 @@ def _build(overrides=None):
     if "t/b" not in [e.rel for e in tree.by_id.values()]:
         tree.add("t/b", parents=True)
         tree = Tree()
-    return presets.lower_build(recipes.effective(tree, tree.get("t/b"), "build", overrides))
+    # ${paths.*} substituted as at submit (${worktree} left as is: the key below has it literally)
+    spec = recipes.substitute(recipes.effective(tree, tree.get("t/b"), "build", overrides), recipes.path_vars())
+    return presets.lower_build(spec)
 
 
-def test_default_build_lowers_to_pre_presets_args_and_key(root):
+def test_default_build_lowers_to_pre_presets_args_and_key(migrated):
     spec = _build()
     assert spec["tool"] == "gsim" and spec["mode"] == "trace" and spec["type"] == "gsim-two-step"
     assert spec["gsim"]["step1_args"] == PRE_PRESETS_BUILD["gsim"]["step1_args"]
@@ -70,7 +72,7 @@ def test_build_options_mode_and_raw_args(root):
     assert presets.key_recipe(spec) != presets.key_recipe(_build())
 
 
-def test_verilator_build_script(root):
+def test_verilator_build_script(migrated):
     spec = _build({"tool": "verilator", "verilator": {"args": "EXTRA=1"}})
     assert spec["type"] == "verilator"
     assert spec["verilator"]["make_args"].startswith("NUM_CORES=1 RTL_SUFFIX=sv TRACERTL_MODE=1")
@@ -184,7 +186,7 @@ def test_failed_submit_leaves_no_runset(toy_workload):
     assert Tree().runsets(Tree().get("t/w")) == []
 
 
-def test_post_workload_label_and_missing_reference(toy_workload, tmp_path):
+def test_post_workload_label_and_missing_reference(nfs_site, toy_workload, tmp_path):
     tree = Tree()
     entry = tree.get("t/w")
     rdir = entry.dir / "20261013-1"
@@ -196,7 +198,7 @@ def test_post_workload_label_and_missing_reference(toy_workload, tmp_path):
         plugins.render(tree, task, "pair", {}, rdir, rdir / "post" / "pair")
     cmd, _ = plugins.render(tree, task, "pair", {"with": {"reference": "/some/ref"}}, rdir, rdir / "post" / "pair")
     assert "ensure_collected.py /some/ref" in cmd
-    # no workload: the spec06 label and the exec-0903 baseline, as before presets
+    # no workload: the site's default_workload (spec06: the exec-0903 baseline), as before presets
     store.write_yaml(rdir / "experiment.yaml", {"recipes": {"run": {}}})
     cmd, _ = plugins.render(tree, task, "pair", {}, rdir, rdir / "post" / "pair")
     assert "--suite spec06" in cmd and "/0903/spec06-1.0c/execution" in cmd

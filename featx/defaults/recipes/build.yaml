@@ -26,8 +26,8 @@ env:
 patches: []
 # tool: gsim -> step 1 `make gsim`, step 2 `make -C difftest emu GSIM=1`
 gsim:
-  gsim_bin: /nfs/share/bin/gsim
-  dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  gsim_bin: ${paths.gsim}
+  dramsim3_home: ${paths.dramsim3}
   jobs: 64
   step1_args: ""     # raw make args after the generated ones (they win)
   step2_args: ""
@@ -35,8 +35,8 @@ gsim:
   reuse_build_from: null
 # tool: verilator -> `make emu` (Chisel elaboration + Verilator)
 verilator:
-  bin_dir: /nfs/home/gongkaichen/verilator/bin   # prepended to PATH
-  dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  bin_dir: ${paths.verilator_bin}   # prepended to PATH ("" = PATH as is)
+  dramsim3_home: ${paths.dramsim3}
   jobs: 64
   args: ""           # raw make args after the generated ones (they win)
 # tool: script -> bash body run in workdir; must leave ${artifact}.

@@ -744,7 +744,7 @@ def help_cmd(topic: Optional[str] = typer.Argument(None, help="topic, plugin nam
 
 # =================================================================== daemon
 def _runwatch() -> list[str]:
-    return [str(config.util_dir() / "runwatch.sh")]
+    return [str(config.BIN_DIR / "runwatch.sh")]
 
 
 @daemon_app.command("start")
@@ -758,7 +758,7 @@ def daemon_start(foreground: bool = typer.Option(False, "--fg")):
     exe = Path(sys.executable).parent / "featxd"
     if foreground:
         os.execv(str(exe), [str(exe)])
-    host = config.settings()["daemon"]["host"]
+    host = config.settings()["daemon"].get("host") or "localhost"
     rw_dir = config.root() / ".runwatch"
     env = f"FEATX_ROOT={shlex.quote(str(config.root()))} RUNWATCH_DIR={shlex.quote(str(rw_dir))}"
     if os.environ.get("FEATX_WT_ROOT"):

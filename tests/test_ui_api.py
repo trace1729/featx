@@ -102,7 +102,7 @@ def test_config_validation_and_roundtrip(root):
     assert r["changed"] == ["daemon", "liveness", "retry"] and r["restart_needed"] == ["daemon"]
     assert config.settings()["retry"]["max_infra_attempts"] == 7
     v = config.config_view()
-    assert v["user"]["daemon"] == {"port": 9999} and v["effective"]["daemon"]["host"] == "node024"
+    assert v["user"]["daemon"] == {"port": 9999} and v["effective"]["daemon"]["host"] is None
 
 
 def test_config_cli_set(root):

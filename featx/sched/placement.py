@@ -1,32 +1,17 @@
-"""Host selection. Reuses util/codex_dispatch.py's probe and score; adds capacity
-accounting for jobs featx launched since the last probe (load average lags by minutes)."""
+"""Host selection. Probes and scores hosts with hostprobe (vendored codex_dispatch); adds
+capacity accounting for jobs featx launched since the last probe (load average lags by minutes)."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import socket
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
 
 from .. import config
-
-_cd = None
-
-
-def codex_dispatch():
-    global _cd
-    if _cd is None:
-        path = config.util_dir() / "codex_dispatch.py"
-        spec = importlib.util.spec_from_file_location("featx_codex_dispatch", path)
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod   # @dataclass resolves annotations via sys.modules[cls.__module__]
-        spec.loader.exec_module(mod)
-        _cd = mod
-    return _cd
+from . import hostprobe
 
 
 LOCAL_NAMES = {"localhost", "local", socket.gethostname().split(".")[0]}
@@ -37,7 +22,7 @@ def is_local(host: str) -> bool:
 
 
 def probe_local():
-    cd = codex_dispatch()
+    cd = hostprobe
     proc = subprocess.run(["python3", "-"], input=cd.REMOTE_PROBE, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, timeout=10, check=False)
     return cd.ServerLoad.from_probe(socket.gethostname().split(".")[0], json.loads(proc.stdout))
@@ -46,7 +31,7 @@ def probe_local():
 @dataclass
 class HostState:
     host: str
-    load: object | None = None          # codex_dispatch.ServerLoad
+    load: object | None = None          # hostprobe.ServerLoad
     probed_at: float = 0.0
     error: str | None = None
     bad_until: float = 0.0
@@ -60,7 +45,7 @@ class Placement:
 
     def pool(self) -> list[str]:
         s = config.settings()
-        hosts = list(s.get("hosts") or codex_dispatch().DEFAULT_HOSTS)
+        hosts = list(s.get("hosts") or ["localhost"])
         excl = set(s.get("exclude_hosts") or [])
         return [h for h in hosts if h not in excl]
 
@@ -74,7 +59,7 @@ class Placement:
         remote = [h for h in stale if not is_local(h)]
         loads, errors = ([], {})
         if remote:
-            loads, errors = codex_dispatch().probe_all(remote, timeout)
+            loads, errors = hostprobe.probe_all(remote, timeout)
         for h in stale:
             if is_local(h):
                 try:

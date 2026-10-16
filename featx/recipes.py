@@ -1,10 +1,11 @@
 """Recipe inheritance and ${var} substitution.
 
 Effective recipe for (node, kind) = deep merge, later wins:
-  package defaults/recipes/<kind>.yaml -> $FEATX_ROOT/recipes/<kind>.yaml
-  -> each ancestor's recipes/<kind>.yaml (root first) -> the node's own.
+  package defaults/recipes/<kind>.yaml -> featx.yaml recipe_defaults.<kind> (site / user layer)
+  -> $FEATX_ROOT/recipes/<kind>.yaml -> each ancestor's recipes/<kind>.yaml (root first)
+  -> the node's own.
 Dicts merge recursively, lists replace, `key: null` deletes. A run recipe that names a
-`workload` gets that workload's run keys as a layer right above the package defaults; a
+`workload` gets that workload's run keys as a layer right above the defaults; a
 legacy build `type:` is read as `tool:` (featx/presets.py).
 
 Substitution only touches ${name} where name is known (dotted names allowed), so shell
@@ -35,6 +36,9 @@ def layers(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -
     if kind not in RECIPE_KINDS:
         raise TreeError(f"recipe kind must be one of {RECIPE_KINDS}")
     out = [("featx-defaults", _defaults(kind))]
+    site = (config.settings().get("recipe_defaults") or {}).get(kind)
+    if site:
+        out.append(("recipe_defaults", site))
     user = store.read_yaml(config.root() / "recipes" / f"{kind}.yaml")
     if user:
         out.append(("root", user))
@@ -51,7 +55,8 @@ def layers(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -
         for _src, data in out:
             merged = config.deep_merge(merged, data)
         if merged.get("workload"):
-            out.insert(1, (f"workload:{merged['workload']}", presets.workload_layer(merged["workload"])))
+            at = 2 if len(out) > 1 and out[1][0] == "recipe_defaults" else 1
+            out.insert(at, (f"workload:{merged['workload']}", presets.workload_layer(merged["workload"])))
     return out
 
 
@@ -114,10 +119,13 @@ def base_context(tree: Tree, entry: Entry, runset_dir: Path | None = None, runse
         "node.dir": str(entry.dir),
         "featx.root": str(config.root()),
         "featx.home": str(config.REPO_DIR),
-        "util": s["util_dir"],
-        "tools": s["analysis_dir"],
+        "featx.bin": str(config.BIN_DIR),
+        "util": str(config.BIN_DIR),       # was toolsets/util; runwatch.sh / add-worktree.sh live here now
+        "tools": s.get("analysis_dir") or "",
+        "git.repo": (s.get("git") or {}).get("repo") or "",
         "date": store.today(),
     }
+    ctx.update(path_vars(s))
     if entry.node.git:
         ctx["worktree"] = entry.node.git.worktree
         ctx["repo"] = entry.node.git.repo
@@ -132,6 +140,16 @@ def base_context(tree: Tree, entry: Entry, runset_dir: Path | None = None, runse
         ctx["bin"] = str(runset_dir / "bin" / "emu")
         ctx["scripts"] = str(runset_dir / "scripts")
     return ctx
+
+
+def path_vars(s: dict | None = None) -> dict:
+    """${paths.<name>} for every featx.yaml `paths` entry; unset ones are "" (so `diff:` /
+    `gcpt_restorer:` read as off). paths.xiangshan falls back to git.repo."""
+    s = s if s is not None else config.settings()
+    out = {f"paths.{k}": ("" if v is None else str(v)) for k, v in (s.get("paths") or {}).items()}
+    if not out.get("paths.xiangshan"):
+        out["paths.xiangshan"] = (s.get("git") or {}).get("repo") or ""
+    return out
 
 
 def script_layers(tree: Tree, entry: Entry) -> list[Path]:

@@ -28,7 +28,7 @@ def _rules(path: str) -> dict:
 
 def rules_path() -> str:
     user = config.root() / "classify.yaml"
-    return str(user if user.is_file() else config.CONFIG_DIR / "classify.yaml")
+    return str(user if user.is_file() else config.DEFAULTS_DIR / "classify.yaml")
 
 
 def tail_text(path: Path, nbytes: int = TAIL_BYTES, skip_perf: bool = True) -> str:

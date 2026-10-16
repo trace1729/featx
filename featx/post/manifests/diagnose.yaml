@@ -2,6 +2,7 @@ name: diagnose
 description: >-
   diagnose_top_ipc_gaps.py: per-point TopDown reports for the N largest IPC gaps vs a
   reference (ranking.csv, topdown_nodes.csv, summary.md, points/*.md).
+requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 after: [collect]
 with:
   trace: ${post.collect}/points.csv
@@ -9,14 +10,14 @@ with:
   config: ${points_config}
   suite: ${workload.label}
   top_n: 10
-  repo_root: /nfs/home/gongkaichen/tracertl/OpenXiangshan
+  repo_root: ${paths.xiangshan}
 params:
   trace: this runset's collected points.csv
   reference: reference (default the workload's reference baseline)
   config: points (default this runset's points)
   suite: label (default the run's workload label)
   top_n: how many largest-IPC-gap points get a report
-  repo_root: XiangShan checkout for the TopDown definitions
+  repo_root: XiangShan checkout for the TopDown definitions (default paths.xiangshan, else git.repo)
 outputs:
   ranking.csv: points ranked by IPC gap
   topdown_nodes.csv: TopDown node deltas of the ranked points

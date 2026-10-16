@@ -1,4 +1,4 @@
-"""Launch/poll/kill jobs through bin/featx-exec. A job dir holds .fx/<attempt>/ state:
+"""Launch/poll/kill jobs through featx/bin/featx-exec. A job dir holds .fx/<attempt>/ state:
 cmd.sh, host, pid, start, heartbeat, end, exit_code (+ stdout_name/stderr_name)."""
 
 from __future__ import annotations
@@ -9,7 +9,8 @@ import subprocess
 from pathlib import Path
 
 from .. import config, store
-from .placement import codex_dispatch, is_local
+from . import hostprobe
+from .placement import is_local
 
 ARCHIVE_NAMES = ("simulator_out.txt", "simulator_err.txt", "log")
 
@@ -44,7 +45,7 @@ def prepare(job_dir: Path, attempt: int, script: str, stdout_name: str = "log",
 
 
 def ssh_base(host: str) -> list[str]:
-    return codex_dispatch().ssh_base(host, 8)
+    return hostprobe.ssh_base(host, 8)
 
 
 def launch(host: str, job_dir: Path, attempt: int, env: dict | None = None) -> tuple[bool, str]:

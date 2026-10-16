@@ -3,19 +3,20 @@ description: >-
   compare_gsim_spec_points.py: pair this runset's collected points with a reference
   (baseline name / point-dir root / collector dir; raw roots are collected once and cached
   under $FEATX_ROOT/compare/collect-cache restricted to this runset's points).
+requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 after: [collect]
 with:
   trace: ${post.collect}/points.csv
   reference: "@baseline(${workload.reference})"
   config: ${points_config}
   suite: ${workload.label}
-  topdown_config: /nfs/home/gongkaichen/tracertl/OpenXiangshan/scripts/top-down/configs.py
+  topdown_config: ${paths.xiangshan}/scripts/top-down/configs.py
 params:
   trace: this runset's collected points.csv (default ${post.collect}/points.csv)
   reference: point-dir root, collector dir or @baseline/@run ref (default the workload's reference baseline)
   config: points to pair (default this runset's points)
   suite: label (default the run's workload label)
-  topdown_config: XiangShan top-down configs.py
+  topdown_config: XiangShan top-down configs.py (default from paths.xiangshan, else git.repo)
 outputs:
   points.csv: paired trace/execution rows per point, sorted by |IPC delta|
   benchmarks.csv: per-benchmark trace_/execution_<metric> and deltas

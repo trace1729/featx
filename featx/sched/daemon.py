@@ -2,7 +2,7 @@
 (guarded by $FEATX_ROOT/.daemon.lock); discovered through $FEATX_ROOT/daemon.json.
 
 Start under runwatch on the configured host:
-  RUNWATCH_DIR=$FEATX_ROOT/.runwatch runwatch.sh start featxd -- <venv>/bin/featxd
+  RUNWATCH_DIR=$FEATX_ROOT/.runwatch featx/bin/runwatch.sh start featxd -- <venv>/bin/featxd
 """
 
 from __future__ import annotations

@@ -67,7 +67,7 @@ def test_cli_help_and_plugins(root):
     assert run(cli.app, ["plugin", "show", "nope"]).exit_code == 1
 
 
-def test_baseline_rm_refuses_users(root, tmp_path):
+def test_baseline_rm_refuses_users(nfs_site, tmp_path):
     res = tmp_path / "res"
     res.mkdir()
     service.baseline_add("mine", str(res), "x")
@@ -100,7 +100,7 @@ def test_bin_import_mode(root, tmp_path):
         service.bin_import(str(emu), "x", "rtl")
 
 
-def test_rest_docs_and_baseline_delete(root, tmp_path):
+def test_rest_docs_and_baseline_delete(nfs_site, tmp_path):
     d = daemon.Daemon(port=1)
     c = TestClient(daemon.build_app(d))
     h = {"X-Featx-Token": d.token}

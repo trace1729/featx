@@ -1,7 +1,13 @@
 """Locations and settings.
 
-The data root defaults to /nfs/share/gkc/featx and can be redirected with FEATX_ROOT
-(tests use a tmp dir). Settings = package defaults deep-merged with $FEATX_ROOT/featx.yaml.
+The data root is $FEATX_ROOT, else the path in ~/.config/featx/root (written by `featx init`),
+else ~/.local/share/featx. Settings, later wins:
+  package defaults (featx/defaults/featx.yaml)
+  -> the site profile named by `site:` (featx/sites/<name>.yaml or a YAML path): shared,
+     cluster-wide values (workloads, checkpoint roots, tools on shared storage, hosts)
+  -> $FEATX_ROOT/featx.yaml (the user layer: personal paths, ports, caps)
+  -> FEATX_WT_ROOT.
+${root} and ${home} in string values expand to the data root and the user's home.
 """
 
 from __future__ import annotations
@@ -9,17 +15,38 @@ from __future__ import annotations
 import copy
 import functools
 import os
+import re
 from pathlib import Path
 
 import yaml
 
 PKG_DIR = Path(__file__).resolve().parent
-REPO_DIR = PKG_DIR.parent
+REPO_DIR = PKG_DIR.parent          # ${featx.home}: holds featx/ (a checkout or site-packages)
 DEFAULTS_DIR = PKG_DIR / "defaults"
-BIN_DIR = REPO_DIR / "bin"
-CONFIG_DIR = REPO_DIR / "config"
+SITES_DIR = PKG_DIR / "sites"
+BIN_DIR = PKG_DIR / "bin"          # featx-exec, runwatch.sh, add-worktree.sh
+DOCS_DIR = PKG_DIR / "docs"
 
-DEFAULT_ROOT = "/nfs/share/gkc/featx"
+# Keys whose values are free-form mappings (any names below them).
+FREEFORM = ("workloads", "recipe_defaults", "baselines")
+
+
+class ConfigError(RuntimeError):
+    pass
+
+
+def config_home() -> Path:
+    """Per-user featx config dir: the token and the root pointer."""
+    return Path(os.environ.get("FEATX_CONFIG_HOME") or Path.home() / ".config" / "featx")
+
+
+def default_root() -> Path:
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(data) / "featx"
+
+
+def root_pointer() -> Path:
+    return config_home() / "root"
 
 
 def deep_merge(base, over):
@@ -38,8 +65,30 @@ def deep_merge(base, over):
     return out
 
 
+@functools.lru_cache(maxsize=4)
+def _pointed_root(pointer: str) -> str | None:
+    try:
+        text = Path(pointer).read_text().strip()
+    except OSError:
+        return None
+    return text or None
+
+
 def root() -> Path:
-    return Path(os.environ.get("FEATX_ROOT", DEFAULT_ROOT))
+    env = os.environ.get("FEATX_ROOT")
+    if env:
+        return Path(env)
+    pointed = _pointed_root(str(root_pointer()))
+    return Path(pointed) if pointed else default_root()
+
+
+def set_root_pointer(path: Path) -> Path:
+    ptr = root_pointer()
+    ptr.parent.mkdir(parents=True, exist_ok=True)
+    ptr.write_text(str(path) + "\n")
+    _pointed_root.cache_clear()
+    reload_settings()
+    return ptr
 
 
 def tree_root() -> Path:
@@ -75,19 +124,70 @@ def lock_path() -> Path:
 
 
 def token_path() -> Path:
-    return Path(os.environ.get("FEATX_TOKEN_FILE", Path.home() / ".config" / "featx" / "token"))
+    return Path(os.environ.get("FEATX_TOKEN_FILE") or config_home() / "token")
+
+
+# ------------------------------------------------------------- site profiles
+def sites() -> list[str]:
+    return sorted(p.stem for p in SITES_DIR.glob("*.yaml"))
+
+
+def site_path(name: str) -> Path:
+    """A site name (featx/sites/<name>.yaml) or a path to a YAML file."""
+    if "/" in name or name.endswith((".yaml", ".yml")):
+        return Path(name).expanduser()
+    return SITES_DIR / f"{name}.yaml"
+
+
+def site_layer(name: str | None) -> dict:
+    if not name:
+        return {}
+    path = site_path(name)
+    if not path.is_file():
+        raise ConfigError(f"site profile {name!r} not found ({path}); known: {', '.join(sites()) or 'none'}")
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"site profile {path}: expected a mapping")
+    data.pop("site", None)
+    return data
+
+
+_EXPAND_RE = re.compile(r"\$\{(root|home)\}")
+
+
+def expand(obj, values: dict):
+    """${root} / ${home} in every string of obj (other ${...} pass through)."""
+    if isinstance(obj, str):
+        return _EXPAND_RE.sub(lambda m: values[m.group(1)], obj)
+    if isinstance(obj, dict):
+        return {k: expand(v, values) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand(v, values) for v in obj]
+    return obj
+
+
+def _read_layer(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path}: expected a mapping")
+    return data
 
 
 @functools.lru_cache(maxsize=8)
 def _settings_for(root_str: str) -> dict:
-    base = yaml.safe_load((DEFAULTS_DIR / "featx.yaml").read_text()) or {}
-    user = Path(root_str) / "featx.yaml"
-    if user.is_file():
-        base = deep_merge(base, yaml.safe_load(user.read_text()) or {})
+    base = defaults()
+    user = _read_layer(Path(root_str) / "featx.yaml")
+    site = os.environ.get("FEATX_SITE") or user.get("site")
+    if site:
+        base = deep_merge(base, site_layer(site))
+    base = deep_merge(base, user)
+    base["site"] = site or None
     env_wt = os.environ.get("FEATX_WT_ROOT")
     if env_wt:
         base["wt_root"] = env_wt
-    return base
+    return expand(base, {"root": root_str, "home": str(Path.home())})
 
 
 def settings() -> dict:
@@ -102,8 +202,20 @@ def wt_root() -> Path:
     return Path(settings()["wt_root"])
 
 
-def util_dir() -> Path:
-    return Path(settings()["util_dir"])
+def paths() -> dict:
+    """Tool and checkout paths (featx.yaml `paths`); unset ones are None."""
+    return dict(settings().get("paths") or {})
+
+
+def require(dotted: str) -> str:
+    """A settings value that must be set (e.g. git.repo), with a hint when it is not."""
+    node = settings()
+    for part in dotted.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    if node in (None, ""):
+        raise ConfigError(f"{dotted} is not set; set it in {user_layer_path()} "
+                          f"(featx config set {dotted}=...) or pick a site profile (featx init --site ...)")
+    return node
 
 
 def ensure_layout() -> None:
@@ -123,20 +235,40 @@ def user_layer_path() -> Path:
     return root() / "featx.yaml"
 
 
-def validate_user_layer(data, schema=None, prefix: str = "") -> list[str]:
-    """The user layer may only override keys that exist in the defaults, with the same type
-    (int/float interchangeable; None deletes a key, see deep_merge)."""
-    schema = defaults() if schema is None else schema
+def schema(site: str | None = None) -> dict:
+    """What a user layer may set: the defaults plus the keys the site profile adds."""
+    base = defaults()
+    try:
+        return deep_merge(base, site_layer(site)) if site else base
+    except ConfigError:
+        return base
+
+
+def validate_user_layer(data, schema_=None, prefix: str = "") -> list[str]:
+    """The user layer may only override keys that exist in the defaults (or the site profile),
+    with the same type (int/float interchangeable; None deletes a key, see deep_merge). A key
+    whose default is null takes any value; the FREEFORM sections take any names."""
+    if schema_ is None:
+        if isinstance(data, dict) and data.get("site"):
+            try:
+                site_layer(data["site"])
+            except ConfigError as error:
+                return [f"site: {error}"]
+        schema_ = schema(data.get("site") if isinstance(data, dict) else None)
     if not isinstance(data, dict):
         return [f"{prefix or 'top level'}: expected a mapping, got {type(data).__name__}"]
     errors = []
     for key, value in data.items():
         path = f"{prefix}{key}"
-        if key not in schema:
-            errors.append(f"{path}: unknown key (known: {', '.join(sorted(schema))})")
+        if key not in schema_:
+            errors.append(f"{path}: unknown key (known: {', '.join(sorted(schema_))})")
             continue
-        want = schema[key]
-        if value is None:
+        want = schema_[key]
+        if value is None or want is None:
+            continue
+        if not prefix and key in FREEFORM:
+            if not isinstance(value, dict):
+                errors.append(f"{path}: expected a mapping, got {type(value).__name__}")
             continue
         if isinstance(want, dict):
             errors += validate_user_layer(value, want, path + ".")
@@ -154,9 +286,13 @@ def validate_user_layer(data, schema=None, prefix: str = "") -> list[str]:
 def config_view() -> dict:
     path = user_layer_path()
     text = path.read_text() if path.is_file() else ""
+    site = settings().get("site")
+    site_file = site_path(site) if site else None
     return {"path": str(path), "user_text": text, "user": yaml.safe_load(text) or {} if text else {},
             "defaults_text": (DEFAULTS_DIR / "featx.yaml").read_text(), "effective": settings(),
-            "restart_keys": list(RESTART_KEYS)}
+            "site": site, "site_path": str(site_file) if site_file else None,
+            "site_text": site_file.read_text() if site_file and site_file.is_file() else "",
+            "sites": sites(), "root": str(root()), "restart_keys": list(RESTART_KEYS)}
 
 
 def write_user_layer(text: str) -> dict:
@@ -193,10 +329,12 @@ def set_user_key(key: str, value) -> dict:
         node.pop(parts[-1], None)
     else:
         node[parts[-1]] = value
-    schema = defaults()
-    for part in parts:
-        if not isinstance(schema, dict) or part not in schema:
+    node = schema(data.get("site"))
+    for i, part in enumerate(parts):
+        if not isinstance(node, dict) or part not in node:
+            if i and parts[0] in FREEFORM:
+                break
             raise ValueError(f"{key}: unknown key")
-        schema = schema[part]
+        node = node[part]
     text = yaml.safe_dump(data, sort_keys=False) if data else ""
     return write_user_layer(text)

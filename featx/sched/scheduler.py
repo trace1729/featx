@@ -300,6 +300,11 @@ class Scheduler:
                 raise SchedError("run recipe selects no points (set points / points_file / suite / workload)")
             if spec.get("executor") == "perf_trigger" and not spec["perf_trigger"].get("json_path"):
                 raise SchedError("perf_trigger executor needs perf_trigger.json_path")
+            if (spec.get("executor") == "points" and spec.get("mode") == "trace" and not spec.get("command")
+                    and "${trace_root}" in str(spec.get("trace_file") or "") and not spec.get("trace_root")):
+                raise SchedError("trace mode: run.trace_root is unset (select a run.workload, or set trace_root / trace_file)")
+            if spec.get("executor") == "perf_trigger" and not spec["perf_trigger"].get("main"):
+                raise SchedError("perf_trigger executor needs perf_trigger.main (paths.perf_trigger in featx.yaml)")
             emu = str(spec.get("emu", ""))
             from_build = prev is not None and prev.kind == "build"
             if not from_build and "${bin}" not in emu and not Path(emu).is_file():
@@ -312,7 +317,9 @@ class Scheduler:
             if not steps:
                 raise SchedError("post recipe has no steps")
             for name, st in steps.items():
-                plugins.manifest(name, st)
+                why = plugins.requirement_error(name, plugins.manifest(name, st))
+                if why:
+                    raise SchedError(why)
 
     # ========================================================== materialize
     def _deps_state(self, task: Task) -> str:

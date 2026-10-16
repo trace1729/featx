@@ -46,7 +46,7 @@ def main() -> int:
                 except FileNotFoundError:
                     pass
     key = hashlib.sha256(json.dumps([str(ref.resolve()), cfg, args.suite, args.N, stamp]).encode()).hexdigest()[:16]
-    root = Path(os.environ.get("FEATX_ROOT", "/nfs/share/gkc/featx"))
+    root = Path(os.environ["FEATX_ROOT"])
     out = root / "compare" / "collect-cache" / key
     out.mkdir(parents=True, exist_ok=True)
     with open(out / ".lock", "w") as lock:
@@ -54,8 +54,10 @@ def main() -> int:
         if not (out / "points.csv").is_file():
             (out / "config.json").write_text(cfg)
             (out / "source").write_text(str(ref.resolve()) + "\n")
-            tools = os.environ.get("FEATX_TOOLS",
-                                   "/nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis")
+            tools = os.environ.get("FEATX_TOOLS")
+            if not tools:
+                print("ensure_collected: FEATX_TOOLS (featx.yaml analysis_dir) is not set", file=sys.stderr)
+                return 2
             proc = subprocess.run([sys.executable, f"{tools}/collect_gsim_spec_perf.py", "-r", str(ref),
                                    "--config", str(out / "config.json"), "--suite", args.suite,
                                    "-N", str(args.N), "-o", str(out)],

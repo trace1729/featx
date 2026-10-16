@@ -7,6 +7,8 @@ Manifest (featx/post/manifests/<name>.yaml, overridable in $FEATX_ROOT/plugins/<
   after:   default step dependencies (only those present in the recipe are kept)
   cmd:     bash template; must leave summary.json (flat metrics) in ${out} — or name a
            JSON file with `summary_from:` that featx flattens into summary.json.
+  requires: featx.yaml keys that must be set (e.g. [analysis_dir]); the plugin is refused
+           at submit with a hint while one is unset.
 
 A recipe step can also skip the manifest and give its own `cmd:` (plus optional `with:`,
 `after:`, `summary_from:`), e.g. to call a node helper script: cmd: bash ${scripts}/stats.sh ${run} ${out}
@@ -82,6 +84,27 @@ def manifest(step_name: str, step: dict | None) -> dict:
     return get(step.get("plugin", step_name))
 
 
+def missing_requirements(man: dict) -> list[str]:
+    """The manifest's `requires:` settings keys that are unset."""
+    s = config.settings()
+    out = []
+    for key in man.get("requires") or []:
+        node = s
+        for part in str(key).split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        if node in (None, "", [], {}):
+            out.append(str(key))
+    return out
+
+
+def requirement_error(step_name: str, man: dict) -> str | None:
+    missing = missing_requirements(man)
+    if not missing:
+        return None
+    return (f"post step {step_name!r}: plugin {man.get('name', step_name)} needs {', '.join(missing)} "
+            f"in featx.yaml (featx config set {missing[0]}=<path>); see featx plugin show {man.get('name', step_name)}")
+
+
 def step_after(steps: dict, name: str) -> list[str]:
     st = steps[name] or {}
     deps = st.get("after")
@@ -118,6 +141,9 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     """Return (bash command, env) for one post step."""
     step = step or {}
     man = manifest(step_name, step)
+    why = requirement_error(step_name, man)
+    if why:
+        raise ValueError(why)
     entry = tree.get(task.node_id)
     ctx = recipes.base_context(tree, entry, runset_dir, task.runset_name)
     ctx.update({
@@ -156,7 +182,7 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "params.yaml").write_text(yaml.safe_dump({"plugin": man.get("name", step_name),
                                                           "with": params}, sort_keys=False))
-    env = {"FEATX_ROOT": str(config.root()), "FEATX_TOOLS": config.settings()["analysis_dir"]}
+    env = {"FEATX_ROOT": str(config.root()), "FEATX_TOOLS": config.settings().get("analysis_dir") or ""}
     return "\n".join(lines) + "\n", env
 
 

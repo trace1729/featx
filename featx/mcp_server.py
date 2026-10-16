@@ -1,7 +1,7 @@
 """featx MCP server (stdio). Tree/recipe/script/worktree/result tools work on the data root
 directly; task and event tools go through featxd.
 
-Register:  claude mcp add featx -- /nfs/home/gongkaichen/tracertl/toolsets/featx/.venv/bin/featx-mcp
+Register:  claude mcp add featx -- <featx install>/.venv/bin/featx-mcp   (featx init prints the line)
 """
 
 from __future__ import annotations

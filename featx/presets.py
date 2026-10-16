@@ -183,24 +183,33 @@ def point_vars(spec: dict, name: str) -> dict:
     return {f"point.{k}": v for k, v in (("trace", row.get("trace")), ("checkpoint", row.get("checkpoint"))) if v}
 
 
+def default_workload() -> str | None:
+    """The workload a run without run.workload is labelled / scored / compared as."""
+    name = config.settings().get("default_workload")
+    return name if name and name in workloads() else None
+
+
 def label(name: str | None) -> str:
+    name = name or default_workload()
     if not name:
-        return "spec06"
+        return ""
     return str(workload(name).get("label") or name)
 
 
 def insts(name: str | None) -> str:
     """The workload's per-benchmark instruction-count json (spec-score); relative paths are
     under featx/defaults/."""
-    path = workload(name or "spec06").get("insts") or ""
+    name = name or default_workload()
+    path = (workload(name).get("insts") or "") if name else ""
     if path and not path.startswith("/"):
         path = str(config.DEFAULTS_DIR / path)
     return path
 
 
 def reference(name: str | None) -> str | None:
+    name = name or default_workload()
     if not name:
-        return "exec-0903"
+        return None
     return workload(name).get("reference")
 
 
@@ -255,6 +264,9 @@ def point_command(spec: dict, ctx: dict) -> tuple[str, dict[str, str]]:
         if diff:
             inputs["diff reference"] = str(diff)
     else:
+        if "${trace_root}" in str(spec.get("trace_file") or "") and not (ctx.get("trace_root") or spec.get("trace_root")):
+            raise PresetError("trace mode: run.trace_root is unset (select a run.workload, or set "
+                              "trace_root / trace_file)")
         trace = recipes.substitute(spec["trace_file"], ctx)
         ctx["trace_file"] = trace
         inputs = {"trace file": trace}

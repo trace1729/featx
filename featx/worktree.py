@@ -5,7 +5,7 @@ Only branches featx created (`managed`) are renamed by `node mv` and deleted by
 `node rm --drop-worktrees`; adopted worktrees keep their user branch. Records written
 before `managed` existed count as featx's when they carry the old "featx/" prefix.
 
-Creation goes through util/add-worktree-with-shared-submodules.sh (submodules shared by
+Creation goes through featx/bin/add-worktree.sh (vendored util/add-worktree-with-shared-submodules.sh) (submodules shared by
 symlink). Submodules listed in settings git.submodule_worktrees (default TraceRTL) are
 then replaced by a real submodule worktree on their own branch, so code changes there
 are isolated too — the same layout the hand-made trace-wpe-* worktrees use.
@@ -61,7 +61,7 @@ def default_path(rel: str) -> Path:
 
 
 def _script() -> Path:
-    return config.util_dir() / "add-worktree-with-shared-submodules.sh"
+    return config.BIN_DIR / "add-worktree.sh"
 
 
 def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = None,
@@ -73,7 +73,7 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
     if entry.node.git and not adopt:
         raise TreeError(f"{entry.rel} already has a worktree: {entry.node.git.worktree}")
     gset = config.settings()["git"]
-    repo = str(Path(repo or gset["repo"]).resolve())
+    repo = str(Path(repo or config.require("git.repo")).resolve())
     base = base or gset["base"]
     branch = branch or default_branch(entry.rel)
     wt_path = Path(path) if path else default_path(entry.rel)

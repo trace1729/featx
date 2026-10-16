@@ -12,14 +12,16 @@ W: 20000000
 I: 40000000
 args: ""                    # extra emu arguments
 env: {}                     # exported before the emu (e.g. TRACERTL_WP_MEM: future)
-trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+trace_root: null            # the workload's (or recipe_defaults') trace dir
 trace_file: ${trace_root}/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.trace.zstd
-# exec mode: the checkpoint image of a point (${point.checkpoint} = the workload manifest's)
-checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
+# exec mode: a checkpoint set (featx ckpt list) gives the points and their images; without one,
+# checkpoint_file is the image of a point (${point.checkpoint} = the workload manifest's).
+checkpoint: null
+checkpoint_file: null
 exec:
-  diff: /nfs/share/gkc/wpe-synthetic_PA/0903/bin/riscv64-nemu-interpreter-so   # --diff <so>; null = --no-diff
-  gcpt_restorer: /nfs/home/share/ci-workloads/old-gcpt-restorer/gcpt.bin      # -r, for .gz images
-dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  diff: ${paths.nemu_diff}              # --diff <so>; "" / null = --no-diff
+  gcpt_restorer: ${paths.gcpt_restorer} # -r, for .gz images
+dramsim3_home: ${paths.dramsim3}
 # Points: explicit names <bench>_<cp>_<weight>, a file with one per line, and/or a suite
 # (their union); with a workload and none of them, all of the workload's points.
 points: []
@@ -42,8 +44,8 @@ commands:
     --dramsim3-outdir "$FX_TMP/dramsim3" --force-dump-result ${db_args} ${args}
 # executor: perf_trigger
 perf_trigger:
-  main: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr-after-anchor/1010/perf_trigger/main.py
-  gcpt_path: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+  main: ${paths.perf_trigger}
+  gcpt_path: null
   json_path: null
   emu_wrapper: null
   servers: null             # comma list; null = featx picks the least-loaded hosts

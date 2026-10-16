@@ -1,24 +1,42 @@
-# Built-in defaults. Override any key in $FEATX_ROOT/featx.yaml (deep-merged).
-wt_root: /nfs/home/gongkaichen/tracertl/featx-wt
-util_dir: /nfs/home/gongkaichen/tracertl/toolsets/util
-analysis_dir: /nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis
+# Built-in defaults: only values that hold on any machine. Shared, cluster-wide values come
+# from a site profile (`site:`, featx/sites/<name>.yaml), personal ones from the user layer
+# $FEATX_ROOT/featx.yaml (`featx init` writes it; deep-merged, later wins).
+# ${root} = the data root, ${home} = your home dir.
+
+# Site profile: a name under featx/sites/ (e.g. nfs-share) or a path to a YAML file.
+site: null
+
+wt_root: ${root}/worktrees     # node worktrees go to <wt_root>/<node path>
+# Dir of the spec_trace_compare analysis scripts (collect_gsim_spec_perf.py, ...). The collect /
+# pair / diagnose / branch-mpki post plugins need it; null disables them.
+analysis_dir: null
+
+# Tools and checkouts that recipes and plugins use as ${paths.<name>} (null = unset).
+paths:
+  gsim: gsim               # gsim binary (build tool: gsim); a bare name is looked up in PATH
+  verilator_bin: null      # dir prepended to PATH for tool: verilator (null = PATH as is)
+  dramsim3: null           # DRAMsim3 checkout with build/ (WITH_DRAMSIM3 builds and their runs)
+  nemu_diff: null          # exec mode: --diff reference .so (null = --no-diff)
+  gcpt_restorer: null      # exec mode: -r restorer for .gz checkpoints
+  perf_trigger: null       # run executor perf_trigger: its main.py
+  xiangshan: null          # XiangShan checkout with scripts/top-down (pair, diagnose); null = git.repo
 
 git:
-  repo: /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim
+  repo: null               # the XiangShan repo node worktrees are created from (required for worktrees)
   base: main
   branch_prefix: ""        # node worktree branch = <prefix><node path>, e.g. wpe/overlay/smoke
   # Submodules that get their own worktree+branch (code changes land there);
-  # every other submodule is shared via symlink (add-worktree-with-shared-submodules.sh).
+  # every other submodule is shared via symlink (featx/bin/add-worktree.sh).
   submodule_worktrees: [TraceRTL]
 
 daemon:
-  host: node024
+  host: null               # where `featx daemon start` runs featxd (null = this host)
   port: 8765
   bind: 0.0.0.0
   tick_seconds: 5
 
-# Hosts featx may place jobs on. Empty = util/codex_dispatch.py DEFAULT_HOSTS.
-hosts: []
+# Hosts featx may place jobs on (passwordless ssh, same paths everywhere); [localhost] runs here.
+hosts: [localhost]
 exclude_hosts: []
 
 placement:
@@ -44,35 +62,18 @@ retry:
 # (the point list and ${point.checkpoint} / ${point.trace}); run: keys layered under every run
 # recipe; label: the post plugins' `suite`; reference: their default baseline (null = none,
 # post steps that compare must set with.reference); insts: per-benchmark instruction counts
-# {bench: {insts, points}} for spec-score (relative paths are under featx/defaults/).
-# Add a workload in $FEATX_ROOT/featx.yaml.
-workloads:
-  spec06:
-    description: SPEC CPU2006, 55 benchmarks, 1090 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec06-v1/_manifest.tsv
-    label: spec06
-    reference: exec-0903
-    insts: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/cluster-0-0.json
-    run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
-      # the manifest's checkpoint column points at a moved directory; legacy/ has them all
-      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
-  spec17:
-    description: SPEC CPU2017, 31 benchmarks, 590 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec17-v1/_manifest.tsv
-    label: spec17
-    reference: exec-0903-spec17
-    # from legacy/spec17_rv64gcb_o2_20m logs/profiling "total guest instructions" + simpoint_summary.json
-    insts: insts/spec17_rv64gcb_o2_20m.json
-    run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec17-v1
-      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec17_rv64gcb_o2_20m/take_cpt/${point.name}/0/_${point.cp}_.gz
-  spec26:
-    description: SPEC CPU2026 (v1 traces), 1529 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec26-v1/_manifest.tsv
-    label: spec26
-    reference: null
-    insts: /nfs/home/share/checkpoints_profiles/spec26_gcc15_rv64gc_base_260517/json/checkpoints_all.json
-    run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec26-v1
-      checkpoint_file: ${point.checkpoint}
+# {bench: {insts, points}} for spec-score (relative paths are under featx/defaults/);
+# checkpoint: the checkpoint set (featx ckpt list) the workload's traces were made from.
+workloads: {}
+# The workload a run without run.workload is labelled / scored / compared as (post plugins).
+default_workload: null
+
+# Checkpoint sets for exec runs (run.checkpoint): dirs whose sub-dirs spec<NN>* are sets.
+checkpoints:
+  roots: []
+
+# Named result roots seeded into $FEATX_ROOT/baselines.yaml ({name: {root, description, ...}}).
+baselines: {}
+
+# Recipe keys layered right above the package recipe defaults ({build: {...}, run: {...}}).
+recipe_defaults: {}

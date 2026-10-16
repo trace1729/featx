@@ -1,7 +1,7 @@
 """Named result roots (baselines.yaml) and reference resolution for post steps.
 
 A baseline is {root: <dir of point dirs>, description, binary?, collected?: <collector out
-dir with points.csv>}. In post `with:` values (and compare args) these forms resolve:
+dir with points.csv>, checkpoint?: the checkpoint set its points come from}. In post `with:` values (and compare args) these forms resolve:
   @baseline(NAME)            -> baseline root (point dirs)
   @baseline(NAME).collected  -> its collected dir (if registered)
   @runset(REF)               -> runset dir      REF = <node path or id>/<YYYYMMDD-n>
@@ -18,47 +18,42 @@ from . import config, store
 
 REF_RE = re.compile(r"@(baseline|runset|run|post)\(([^()]*)\)(\.collected)?")
 
-SEED = {
-    "exec-0903": {"root": "/nfs/share/gkc/wpe-synthetic_PA/0903/spec06-1.0c/execution",
-                  "description": "XiangShan execution-driven reference (synthetic-PA 0903 campaign), 20M+20M"},
-    "exec-0903-spec17": {"root": "/nfs/share/gkc/wpe-synthetic_PA/0903/spec17-1.0c/execution",
-                         "description": "XiangShan execution-driven SPEC17 reference (0903), 20M+20M; "
-                                        "579/590 points completed, lbm_400000000 named 5.1e-05"},
-    "nowpe-0912": {"root": "/nfs/share/gkc/wpe-NEMU_PA/0912/spec06-1.0c/trace",
-                   "description": "TraceRTL, NEMU PA, no wrong-path emulation (0912 unified binary)"},
-    "overlay-0928": {"root": "/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/0928/spec06-1.0c/trace",
-                     "description": "TraceRTL overlay WPE, NEMU PA (0928)",
-                     "binary": "/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/0928/bin/trace-emu-wpe-gsim"},
-    "real-1007": {"root": "/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/1007/spec06-1.0c/trace",
-                  "description": "TraceRTL real WPE (past-instance wp addresses, 1007)"},
-    "memfut-1010": {"root": "/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/1010/spec06-1.0c/trace",
-                    "description": "TraceRTL real WPE + A' future-instance wp addresses (1010)"},
-}
-
-
 def path() -> Path:
     return config.root() / "baselines.yaml"
 
 
+def _own() -> dict:
+    return store.read_yaml(path()) or {}
+
+
 def load() -> dict:
-    data = store.read_yaml(path())
-    if data is None:
-        data = dict(SEED)
-        if config.root().is_dir():
-            store.write_yaml(path(), data)
+    """featx.yaml `baselines` (the site profile's shared roots + the user layer) overlaid per
+    entry by $FEATX_ROOT/baselines.yaml (`featx baseline add`); a null entry there hides one."""
+    shared = config.settings().get("baselines") or {}
+    own = _own()
+    data = {}
+    for name in [*shared, *(n for n in own if n not in shared)]:
+        if name in own and own[name] is None:
+            continue
+        entry = {**(shared.get(name) or {}), **(own.get(name) or {})}
+        if entry.get("root"):
+            data[name] = entry
     return data
 
 
 def add(name: str, root: str, description: str = "", **extra) -> dict:
-    data = load()
+    data = _own()
     data[name] = {"root": root, "description": description, **{k: v for k, v in extra.items() if v}}
     store.write_yaml(path(), data)
-    return data[name]
+    return load()[name]
 
 
 def remove(name: str) -> None:
-    data = load()
-    data.pop(name, None)
+    data = _own()
+    if name in (config.settings().get("baselines") or {}):
+        data[name] = None
+    else:
+        data.pop(name, None)
     store.write_yaml(path(), data)
 
 

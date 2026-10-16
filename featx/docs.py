@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import config
 
-REFERENCE = config.REPO_DIR / "docs" / "reference.md"
+REFERENCE = config.DOCS_DIR / "reference.md"
 BEGIN, END = "<!-- plugins:begin (generated: python -m featx.docs) -->", "<!-- plugins:end -->"
 HEAD_RE = re.compile(r"^## (\S+) — (.+)$", re.M)
 

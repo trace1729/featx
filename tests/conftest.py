@@ -29,6 +29,38 @@ def root(tmp_path, monkeypatch):
     config.reload_settings()
 
 
+def update_layer(root, **keys):
+    """Deep-merge keys into the test user layer $FEATX_ROOT/featx.yaml and reload."""
+    path = root / "featx.yaml"
+    data = config.deep_merge(yaml.safe_load(path.read_text()) or {}, keys)
+    path.write_text(yaml.safe_dump(data))
+    config.reload_settings()
+    return data
+
+
+@pytest.fixture
+def nfs_site(root, tmp_path):
+    """The committed nfs-share site profile (workloads spec06/17/26, shared baselines) with the
+    test hosts; nothing under /nfs is read unless a test resolves points."""
+    update_layer(root, site="nfs-share", hosts=["localhost"], analysis_dir=str(tmp_path / "analysis"))
+    return root
+
+
+# The pre-portability package defaults of gongkaichen's setup: `featx init --adopt` writes
+# these into his user layer, and bincache keys of existing builds must not change.
+MIGRATED = {
+    "site": "nfs-share",
+    "paths": {"dramsim3": "/nfs/home/gongkaichen/tracertl/DRAMsim3",
+              "verilator_bin": "/nfs/home/gongkaichen/verilator/bin"},
+}
+
+
+@pytest.fixture
+def migrated(root):
+    update_layer(root, **MIGRATED)
+    return root
+
+
 FAKE_EMU = r'''#!/usr/bin/env bash
 # fake emu: behaviour chosen by the bench name in the trace (or exec checkpoint) path
 echo "$*" > argv.txt
