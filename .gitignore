@@ -5,3 +5,8 @@ __pycache__/
 build/
 node_modules/
 *.tsbuildinfo
+# local, never committed
+token
+analyses/
+intent.md
+featx/web/node_modules

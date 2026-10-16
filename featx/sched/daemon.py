@@ -126,7 +126,8 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.get("/health")
     def health():
         return {"ok": True, "host": socket.gethostname().split(".")[0], "pid": os.getpid(),
-                "started": d.started, "last_tick": sched.last_tick, "root": str(config.root())}
+                "started": d.started, "last_tick": sched.last_tick, "root": str(config.root()),
+                "token_file": str(config.token_path())}
 
     @app.get("/status")
     def status():
@@ -335,7 +336,8 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.get("/plugins")
     def plugins_list():
         from ..post import plugins
-        return plugins.available()
+        return {name: {**man, "missing": plugins.missing_requirements(man)}
+                for name, man in plugins.available().items()}
 
     # /help, not /docs: that is FastAPI's own API page
     @app.get("/help")
@@ -360,6 +362,11 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.put("/config")
     def config_put(body: dict = Body(...)):
         return locked(config.write_user_layer, body["text"])
+
+    @app.get("/doctor")
+    def doctor_get(ssh: bool = False):
+        from .. import doctor
+        return doctor.run(ssh=ssh)
 
     @app.post("/config/set")
     def config_set(body: dict = Body(...)):

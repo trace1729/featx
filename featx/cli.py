@@ -69,7 +69,7 @@ def guarded(fn):
         try:
             return fn(*a, **kw)
         except (TreeError, ApiError, DaemonDown, KeyError, ValueError, FileNotFoundError, TimeoutError,
-                PermissionError) as error:
+                PermissionError, config.ConfigError) as error:
             fail(str(error).strip("'\""))
     return wrap
 
@@ -558,6 +558,49 @@ def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric",
         typer.echo("\nother metrics: " + ", ".join(others))
 
 
+# ===================================================================== init
+@app.command()
+@guarded
+def init(root: Optional[str] = typer.Option(None, "--root", help="data root (default: the current one, "
+                                             "~/.local/share/featx for a new user)"),
+         site: Optional[str] = typer.Option(None, "--site", help="site profile: featx/sites/<name>.yaml "
+                                             "or a YAML path (e.g. nfs-share)"),
+         repo: Optional[str] = typer.Option(None, "--repo", help="your XiangShan checkout (git.repo)"),
+         daemon_host: Optional[str] = typer.Option(None, "--daemon-host", help="host featxd runs on"),
+         port: Optional[int] = typer.Option(None, "--port", help="featxd port (default 8765 + uid % 200)"),
+         adopt: bool = typer.Option(False, "--adopt", help="the root has a featx.yaml: merge into it"),
+         set_: List[str] = typer.Option([], "--set", help="more user-layer keys: key.sub=value")):
+    """Create (or adopt) a data root: its featx.yaml, the root pointer and the API token."""
+    from . import bootstrap
+    r = bootstrap.init(root, site, repo, daemon_host, port, adopt, parse_kv(set_))
+    typer.echo(f"{'adopted' if r['adopted'] else 'created'} {r['root']}  (user layer {r['user_layer']})")
+    typer.echo(yaml.safe_dump(r["written"], sort_keys=False).rstrip() if r["written"] else "(no keys changed)")
+    if r["pointer"]:
+        typer.echo(f"root pointer: {r['pointer']}")
+    typer.echo("\nnext:")
+    for line in bootstrap.next_steps():
+        typer.echo("  " + line)
+
+
+@app.command()
+@guarded
+def doctor(ssh: bool = typer.Option(True, "--ssh/--no-ssh", help="also ssh to every host"),
+           as_json: bool = typer.Option(False, "--json")):
+    """Check the configured paths, tools and hosts (ok / warn / fail)."""
+    from . import doctor as doc
+    r = doc.run(ssh=ssh)
+    if as_json:
+        out(r)
+    else:
+        colors = {"ok": typer.colors.GREEN, "warn": typer.colors.YELLOW, "fail": typer.colors.RED}
+        for c in r["checks"]:
+            typer.secho(f"{c['status']:4s}  {c['check']:32s} {c['detail']}", fg=colors[c["status"]])
+        typer.echo(f"\n{r['counts']['ok']} ok, {r['counts']['warn']} warn, {r['counts']['fail']} fail  "
+                   f"(root {config.root()}, site {config.settings().get('site') or 'none'})")
+    if not r["ok"]:
+        raise typer.Exit(1)
+
+
 # =================================================================== config
 @config_app.command("show")
 @guarded
@@ -713,7 +756,9 @@ def plugin_list():
     from .post import plugins
     for name, man in sorted(plugins.available().items()):
         desc = " ".join(str(man.get("description") or "").split())
-        typer.echo(f"{name:14s} {desc[:100]}{'...' if len(desc) > 100 else ''}")
+        missing = plugins.missing_requirements(man)
+        off = f"[off: set {', '.join(missing)}] " if missing else ""
+        typer.echo(f"{name:14s} {off}{desc[:100]}{'...' if len(desc) > 100 else ''}")
 
 
 @plugin_app.command("show")

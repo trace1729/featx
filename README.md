@@ -5,23 +5,71 @@ worktrees, builds, runs, logs and results live. A single daemon (`featxd`) sched
 build/run/post tasks across the cluster. An MCP server gives an LLM the same functions as the CLI:
 read context, submit, wait for failures, log the analysis, relaunch.
 
-- Code: `toolsets/featx` (Python 3.12, uv venv in `.venv`)
-- Data: `/nfs/share/gkc/featx` (`$FEATX_ROOT`)
-- Worktrees: `/nfs/home/gongkaichen/tracertl/featx-wt/<category>/<feature>/<sub>` (branch `<path>`, e.g. `wpe/overlay/smoke`; `git.branch_prefix` adds a prefix)
+Everyone runs their own featx: their own data root, daemon, port, token and worktrees. Shared
+inputs (traces, checkpoints, tools, reference result roots) come from a site profile; the
+`nfs-share` profile (`featx/sites/nfs-share.yaml`) has the cluster's `/nfs/share` and
+`/nfs/home/share` values.
 
 ## Install
 
 ```bash
-cd toolsets/featx
-uv venv .venv && uv pip install --python .venv/bin/python -e . \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple
-export PATH=$PWD/.venv/bin:$PATH          # featx, featxd, featx-mcp
-featx daemon start                         # on node024 under runwatch (ssh if needed)
+git clone <featx repo> featx && cd featx           # on a path every host sees (NFS): jobs run featx-exec from it
+uv venv .venv && uv pip install --python .venv/bin/python -e .
+#   (a PyPI mirror: add --index-url https://pypi.tuna.tsinghua.edu.cn/simple, or set UV_INDEX_URL)
+export PATH=$PWD/.venv/bin:$PATH                  # featx, featxd, featx-mcp
+featx init --site nfs-share --repo ~/path/to/XiangShan --daemon-host <host> \
+    --set paths.dramsim3=<DRAMsim3 checkout with build/> \
+    --set analysis_dir=<spec_trace_compare/03_analysis>   # optional: the collect/pair/diagnose plugins
+featx doctor                                      # every path, tool and host: ok / warn / fail
+featx daemon start
 claude mcp add featx -- $PWD/.venv/bin/featx-mcp
 ```
 
+`featx init` creates the data root (default `~/.local/share/featx`, or `--root DIR`), writes its
+user layer `featx.yaml`, the root pointer `~/.config/featx/root` (so the CLI and the MCP server
+find the root without `$FEATX_ROOT`) and the API token `~/.config/featx/token`. The default
+port is 8765 + uid % 200, so users sharing a daemon host don't collide.
+
+Requirements: passwordless ssh to the `hosts` of the site profile (restrict them with
+`exclude_hosts` or replace them with `hosts:` in your layer), and the featx checkout, the data
+root and the worktree root on paths all hosts see.
+
+### Configuration layers
+
+`featx config show effective` is the merge of, later wins:
+
+1. `featx/defaults/featx.yaml`: portable defaults only (`hosts: [localhost]`, tools from PATH);
+2. the site profile named by `site:` (a name under `featx/sites/` or a YAML path): workloads,
+   checkpoint roots, shared tools (`paths.gsim`, `paths.nemu_diff`, ...), hosts, baselines and
+   `recipe_defaults` (recipe keys layered above the package recipe defaults);
+3. `$FEATX_ROOT/featx.yaml`: your keys (`git.repo`, `wt_root`, `paths.dramsim3`, `daemon`, caps);
+4. `FEATX_ROOT`, `FEATX_SITE`, `FEATX_WT_ROOT` in the environment.
+
+Recipes see the tool paths as `${paths.<name>}`. A post plugin that needs an external tool
+declares `requires:` (e.g. `analysis_dir`); without it the plugin is listed as off and a submit
+using it is refused with the key to set.
+
+### Migrating an existing root
+
+An existing root keeps its data; only its `featx.yaml` gains the keys the package no longer
+hardcodes:
+
+```bash
+featx init --adopt --root /nfs/share/gkc/featx --site nfs-share --daemon-host node024 \
+    --repo /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim \
+    --set wt_root=/nfs/home/gongkaichen/tracertl/featx-wt \
+    --set analysis_dir=/nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis \
+    --set paths.dramsim3=/nfs/home/gongkaichen/tracertl/DRAMsim3 \
+    --set paths.verilator_bin=/nfs/home/gongkaichen/verilator/bin \
+    --set paths.xiangshan=/nfs/home/gongkaichen/tracertl/OpenXiangshan
+```
+
+The resolved recipes (and so the bincache keys of existing builds) stay the same. The old
+`bin/featx-exec`, `config/` and `docs/` paths are symlinks into the package, for jobs and
+daemons started before the move.
+
 Optional watchdog (crontab):
-`*/5 * * * * /nfs/home/gongkaichen/tracertl/toolsets/featx/.venv/bin/featx daemon watchdog`.
+`*/5 * * * * <featx>/.venv/bin/featx daemon watchdog`.
 Jobs keep running while the daemon is down. On restart it re-adopts them from NFS state.
 `daemon.json` is refreshed every 5 s by its own thread. That thread stops only if the scheduler
 loop makes no progress for 10 min, so the watchdog still restarts a hung daemon. Launches use ssh
@@ -41,9 +89,9 @@ with `featx config set placement.max_total_cores=200` or the Capacity panel of t
 
 ```
 $FEATX_ROOT/
-  featx.yaml                 overrides of featx/defaults/featx.yaml (hosts, liveness, retry ...)
+  featx.yaml                 your layer over the defaults + site profile (featx init writes it)
   daemon.json                daemon host/port/pid/heartbeat (CLI + MCP discover it here)
-  baselines.yaml             named result roots (exec-0903, overlay-0928, ...)
+  baselines.yaml             your named result roots, over the site profile's `baselines`
   bincache/<key>/emu         built or imported binaries (+ manifest.json)
   events/inbox.jsonl         failure / retry / task_done / runset_done ... events
   tasks/<id>.json            task state (written only by the daemon)
@@ -81,7 +129,7 @@ featx node set wpe/real/after --verdict supported --evidence wpe/real/after/2026
 
 ## Reference and presets
 
-`docs/reference.md` documents recipe keys, variables, point selection, reference forms and every
+`featx/docs/reference.md` documents recipe keys, variables, point selection, reference forms and every
 post plugin's parameters, outputs and dependencies. The same text is available as:
 
 - `featx help` (topic list) and `featx help <topic|plugin|all>` on the CLI;
@@ -110,8 +158,8 @@ featxd serves a React app at `/ui/` from the committed bundle `featx/web/dist`. 
 node runtime. `featx ui` prints the URL, the tunnel command and the token location.
 
 ```bash
-ssh -N -L 8765:node024:8765 <login-node>       # or a VS Code port forward of node024:8765
-# open http://localhost:8765/ui/ and paste the token from: cat ~/.config/featx/token
+ssh -N -L <port>:<daemon host>:<port> <login-node>   # or a VS Code port forward
+# open http://localhost:<port>/ui/ and paste the token from: cat ~/.config/featx/token
 ```
 
 Pages:
@@ -158,7 +206,7 @@ npm run build      # tsc + vite -> featx/web/dist (commit it; a running featxd p
 
 ## Failure handling
 
-Every failed job is classified by `config/classify.yaml`.
+Every failed job is classified by `featx/defaults/classify.yaml` (`$FEATX_ROOT/classify.yaml` overrides it).
 
 - **infra** (ssh 255, host down, OOM kill, stale heartbeat): retried automatically on another
   host, at most `retry.max_infra_attempts` times. The scheduler kills the old attempt's leftover
@@ -176,7 +224,8 @@ code change. Each has a `cmd` template and default parameters (`with`), and must
 `summary.json`. Built-in plugins:
 
 - `perf-keys`: formal-window IPC/counters vs baselines.
-- `collect`, `pair`, `diagnose`, `branch-mpki`: wrap `microarch/spec_trace_compare/03_analysis`.
+- `collect`, `pair`, `diagnose`, `branch-mpki`: wrap the `spec_trace_compare/03_analysis` scripts
+  (`requires: [analysis_dir]`).
 - `spec-score`: the SPEC score as `perf_trigger --report` computes it (SPECxx/GHz, int/fp, @f GHz,
   minimal coverage), optionally against baselines on the same points (`<label>.score_err_pct`).
   Instruction counts come from the workload's `insts` json in `featx.yaml`. Add it with

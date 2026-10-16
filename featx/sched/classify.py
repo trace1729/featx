@@ -1,4 +1,4 @@
-"""Failure classification from log tails (rules in config/classify.yaml)."""
+"""Failure classification from log tails (rules in featx/defaults/classify.yaml, or $FEATX_ROOT/classify.yaml)."""
 
 from __future__ import annotations
 

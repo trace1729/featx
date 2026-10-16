@@ -63,7 +63,7 @@ recipe_defaults:
     perf_trigger:
       gcpt_path: /nfs/share/gkc/traces/nemu-trace-spec06-v1
 
-# Shared result roots (readable by everyone); seeded into each user's baselines.yaml.
+# Shared result roots (readable by everyone); $FEATX_ROOT/baselines.yaml overlays them per entry.
 baselines:
   exec-0903:
     root: /nfs/share/gkc/wpe-synthetic_PA/0903/spec06-1.0c/execution
