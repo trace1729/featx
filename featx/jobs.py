@@ -83,8 +83,12 @@ def build_script(task_id: str, spec: dict) -> str:
         else:
             out.append('echo "== step1 make gsim $(date)"\n')
             out.append(f"{timeout}make gsim -j{jobs} {common} {g.get('step1_args', '')}\n")
-            out.append('echo "== step1 rc=$? $(date)"\n')
+            out.append('step1_rc=$?\n')
+            out.append('echo "== step1 rc=$step1_rc $(date)"\n')
             out.append("[ -d build/gsim-compile ] || { echo 'featx: artifact missing: build/gsim-compile (step1 failed)'; exit 1; }\n")
+            out.append('if [ "$step1_rc" -ne 0 ]; then\n'
+                       '  echo "featx: GSIM step1 did not produce a final emulator; continuing with step2 relink (step1 rc=$step1_rc)" >&2\n'
+                       'fi\n')
         out.append('echo "== step2 difftest emu $(date)"\n')
         out.append(f"{timeout}make -C difftest emu -j{jobs} {common} DESIGN_DIR=\"$PWD\" {g.get('step2_args', '')}\n")
         out.append('rc=$?\necho "== step2 rc=$rc $(date)"\n[ $rc -eq 0 ] || exit $rc\n')
