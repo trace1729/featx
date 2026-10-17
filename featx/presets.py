@@ -64,9 +64,11 @@ def build_tool(spec: dict) -> str:
 
 
 def build_mode(spec: dict) -> str:
-    mode = spec.get("mode") or "trace"
+    mode = spec.get("mode") or ("trace" if config.settings().get("trace_enabled", False) else "exec")
     if mode not in MODES:
         raise PresetError(f"build.mode must be trace|exec, got {mode!r}")
+    if mode == "trace" and not config.settings().get("trace_enabled", False):
+        raise PresetError("trace is disabled (trace_enabled=false); use build.mode=exec or enable trace")
     return mode
 
 
@@ -163,7 +165,7 @@ def _manifest(path: str, mtime: float) -> dict[str, dict]:
 
 def manifest(name: str | None) -> dict[str, dict]:
     """point name -> manifest row (suite, benchmark, point, weight, checkpoint, trace, ...)."""
-    if not name:
+    if not name or not config.settings().get("trace_enabled", False):
         return {}
     path = workload(name).get("manifest")
     if not path:
@@ -241,6 +243,9 @@ def checkpoint_index(spec: dict) -> dict | None:
 def _lower_checkpoint(spec: dict) -> None:
     from . import ckpt
     want, implied = spec.get("checkpoint"), implied_checkpoint(spec)
+    if not config.settings().get("trace_enabled", False) and spec["mode"] == "exec" and not want:
+        # Resolve points from the checkpoint catalog, without opening a trace manifest.
+        want = implied
     if not want:
         spec["checkpoint_set"] = {"name": implied, "implied": True} if implied else None
         return
@@ -302,9 +307,11 @@ def run_mode(spec: dict, build_spec: dict | None) -> str:
     mode = spec.get("mode")
     built = build_mode(build_spec) if build_spec else None
     if mode is None:
-        return built or "trace"
+        mode = built or ("trace" if config.settings().get("trace_enabled", False) else "exec")
     if mode not in MODES:
         raise PresetError(f"run.mode must be trace|exec, got {mode!r}")
+    if mode == "trace" and not config.settings().get("trace_enabled", False):
+        raise PresetError("trace is disabled (trace_enabled=false); use run.mode=exec or enable trace")
     if built and built != mode:
         raise PresetError(f"run.mode={mode} but the build is mode={built}; set build.mode (the run follows it)")
     return mode

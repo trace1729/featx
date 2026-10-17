@@ -20,6 +20,7 @@ def root(tmp_path, monkeypatch):
     monkeypatch.setenv("FEATX_DIRECT", "1")
     (r / "featx.yaml").write_text(yaml.safe_dump({
         "hosts": ["localhost"],
+        "trace_enabled": True,  # Most integration tests exercise trace; opt in explicitly.
         "liveness": {"heartbeat_interval": 1, "dead_after": 4, "launch_grace": 15},
         "retry": {"max_infra_attempts": 1, "max_design_relaunches": 2},
     }))
@@ -42,17 +43,23 @@ def update_layer(root, **keys):
 def nfs_site(root, tmp_path):
     """The committed nfs-share site profile (workloads spec06/17/26, shared baselines) with the
     test hosts; nothing under /nfs is read unless a test resolves points."""
-    update_layer(root, site="nfs-share", hosts=["localhost"], analysis_dir=str(tmp_path / "analysis"))
+    update_layer(root, site="nfs-share", hosts=["localhost"], analysis_dir=str(tmp_path / "analysis"),
+                 workloads={"spec06": {"reference": "exec-reference"},
+                            "spec17": {"reference": "exec-reference-spec17"}},
+                 baselines={"exec-reference": {"root": "/shared/baselines/spec06/exec",
+                                               "checkpoint": "spec06_gcc15_rv64gcb_base_260122"},
+                            "exec-reference-spec17": {"root": "/shared/baselines/spec17/exec",
+                                                      "checkpoint": "spec17_rv64gcb_o2_20m"}})
     return root
 
 
-# The pre-portability package defaults of gongkaichen's setup: `featx init --adopt` writes
+# The pre-portability package defaults of a legacy installation: `featx init --adopt` writes
 # these into that user layer, and bincache keys of existing builds must not change.
 MIGRATED = {
     "site": "nfs-share",
     "share": "/nfs/share",
-    "paths": {"dramsim3": "/nfs/home/gongkaichen/tracertl/DRAMsim3",
-              "verilator_bin": "/nfs/home/gongkaichen/verilator/bin"},
+    "paths": {"dramsim3": "/opt/DRAMsim3",
+              "verilator_bin": "/opt/verilator/bin"},
 }
 
 

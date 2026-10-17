@@ -7,7 +7,7 @@ else ~/.local/share/featx. Settings, later wins:
      cluster-wide values (workloads, checkpoint roots, tools on shared storage, hosts)
   -> $FEATX_ROOT/featx.yaml (the user layer: personal paths, ports, caps)
   -> FEATX_WT_ROOT.
-${root}, ${home} and ${share} in string values expand to the data root, the user's home and
+${root}, ${home}, ${USER} and ${share} in string values expand to the data root, the user's home, login name and
 the `share:` setting (the shared storage mount a site profile's paths sit under).
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import getpass
 import os
 import re
 from pathlib import Path
@@ -163,18 +164,18 @@ def detect_site() -> str | None:
         except (OSError, yaml.YAMLError):
             continue
         detect = data.get("detect") if isinstance(data, dict) else None
-        values = {"share": str(data.get("share") or "").rstrip("/")}
+        values = {"share": str(data.get("share") or "").rstrip("/"), "USER": os.environ.get("USER") or getpass.getuser()}
         if detect and all(Path(expand(p, values, data.get("share_fallbacks") or [])).exists()
                           for p in detect):
             return name
     return None
 
 
-_EXPAND_RE = re.compile(r"\$\{(root|home|share)\}")
+_EXPAND_RE = re.compile(r"\$\{(root|home|share|USER)\}")
 
 
 def expand(obj, values: dict, share_fallbacks=()):
-    """${root} / ${home} / ${share} in every string of obj (other ${...}, and ones whose value
+    """${root} / ${home} / ${USER} / ${share} in every string of obj (other ${...}, and ones whose value
     is unset, pass through). Shared paths use the first existing primary/fallback path;
     if none exists, retain the primary path so diagnostics name the requested input."""
     if isinstance(obj, str):
@@ -225,8 +226,14 @@ def _settings_for(root_str: str) -> dict:
     if env_wt:
         base["wt_root"] = env_wt
     share = str(base.get("share") or "").rstrip("/")
-    base = expand(base, {"root": root_str, "home": str(Path.home()), "share": share},
+    base = expand(base, {"root": root_str, "home": str(Path.home()), "share": share, "USER": os.environ.get("USER") or getpass.getuser()},
                   base.get("share_fallbacks") or [])
+    if not base.get("trace_enabled", False):
+        git = base.get("git") or {}
+        git["submodule_worktrees"] = [s for s in git.get("submodule_worktrees", []) if s != "TraceRTL"]
+        recipe_defaults = base.setdefault("recipe_defaults", {})
+        for kind in ("build", "run"):
+            recipe_defaults.setdefault(kind, {})["mode"] = "exec"
     paths = base.get("paths")
     if isinstance(paths, dict) and paths.get("nemu_diff") is None:
         nemu = repo_nemu((base.get("git") or {}).get("repo"))

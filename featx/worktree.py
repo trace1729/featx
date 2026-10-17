@@ -98,7 +98,8 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
             if why:
                 raise TreeError(f"{why}; pass --branch <name>")
         wt_path.parent.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.run(["bash", str(_script()), repo, base, branch, "--path", str(wt_path)],
+        env = {**os.environ, "FEATX_TRACE_ENABLED": "1" if config.settings().get("trace_enabled", False) else "0"}
+        proc = subprocess.run(["bash", str(_script()), repo, base, branch, "--path", str(wt_path)], env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
         if proc.returncode != 0:
             raise TreeError(f"add-worktree failed: {proc.stderr.strip() or proc.stdout.strip()}")

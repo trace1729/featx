@@ -1,6 +1,5 @@
-"""SPEC reference times (seconds), vendored verbatim from perf_trigger
-(/nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr-after-anchor/1010/perf_trigger/modules/spec.py,
-SPEC_REFTIME, copied 2026-10-15). Keys: version "06"/"17"/"26" -> "int"/"fp" -> full name."""
+"""SPEC reference times (seconds), copied from perf_trigger/modules/spec.py
+(SPEC_REFTIME, copied 2026-10-15). Keys: version "06"/"17"/"26" -> "int"/"fp" -> full name."""
 
 # Reference time extracted from:
 #   cpu2006v99/benchspec/CPU2006/<testcase>/data/ref/reftime

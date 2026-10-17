@@ -27,6 +27,21 @@ def _json(p: Path, data) -> None:
     _touch(p, json.dumps(data))
 
 
+def test_exec_only_never_opens_trace_manifest(sets, root, tmp_path, monkeypatch):
+    update_layer(root, trace_enabled=False, workloads={"exec-only": {
+        "checkpoint": "spec06_modern_a", "manifest": str(tmp_path / "missing.tsv"),
+    }})
+
+    def no_manifest(*args):
+        pytest.fail("exec-only run opened a trace manifest")
+
+    monkeypatch.setattr(presets, "manifest", no_manifest)
+    spec = presets.lower_run({"workload": "exec-only", "commands": {"exec": "echo ${point.checkpoint}"}}, None)
+    names = points.resolve(spec, strict=True)
+    assert names
+    assert presets.point_vars(spec, names[0])["point.checkpoint"].endswith(".zstd")
+
+
 @pytest.fixture
 def sets(root, tmp_path):
     """Two roots of synthetic sets, one of each layout plus multi-hart / broken ones."""

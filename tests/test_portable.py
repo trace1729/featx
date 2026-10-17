@@ -69,7 +69,7 @@ def test_share_moves_every_site_path(root, tmp_path, monkeypatch):
     assert all(r.startswith("/nfs/share/") for r in s["checkpoints"]["roots"])
     assert "${share}" not in repr(s)
     update_layer(root, share="/nfs/share")
-    assert config.settings()["workloads"]["spec06"]["manifest"].startswith("/nfs/share/gkc/traces/")
+    assert config.settings()["workloads"]["spec06"]["manifest"].startswith(f"/nfs/share/{os.environ.get('USER') or config.getpass.getuser()}/traces/")
 
 
 def test_shared_path_fallback(root, tmp_path):
@@ -87,9 +87,20 @@ def test_shared_path_fallback(root, tmp_path):
     (primary / "tool").touch()
     config.reload_settings()
     assert config.settings()["paths"]["gsim"] == str(primary / "tool")
+
     (primary / "tool").unlink()
     update_layer(root, share_fallbacks=[])
     assert config.settings()["paths"]["gsim"] == str(primary / "tool")
+
+
+def test_site_uses_current_user(root, tmp_path, monkeypatch):
+    monkeypatch.setenv("USER", "example-user")
+    update_layer(root, site="nfs-share", share=str(tmp_path), share_fallbacks=[])
+    s = config.settings()
+    assert s["workloads"]["spec06"]["manifest"].startswith(str(tmp_path / "example-user" / "traces"))
+    assert s["hosts"] == ["localhost"]
+    assert not s["baselines"]
+    assert s["workloads"]["spec06"].get("reference") is None
 
 
 def test_site_detection_uses_shared_fallback(tmp_path, monkeypatch):
@@ -118,6 +129,57 @@ def test_nemu_diff_defaults_to_the_repo_ready_to_run(root, tmp_path):
     assert config.settings()["paths"]["nemu_diff"] == "/other.so"
     update_layer(root, paths={"nemu_diff": ""})                         # explicitly off
     assert recipes.path_vars()["paths.nemu_diff"] == ""
+
+
+def test_dramsim_shared_default_and_override(root, tmp_path):
+    fallback = tmp_path / "fallback"
+    dram = fallback / "ci-workloads" / "DRAMsim3"
+    (dram / "build").mkdir(parents=True)
+    update_layer(root, site="nfs-share", share=str(tmp_path / "primary"), share_fallbacks=[str(fallback)])
+    assert config.settings()["paths"]["dramsim3"] == str(dram)
+    update_layer(root, paths={"dramsim3": "/custom/dram"})
+    assert config.settings()["paths"]["dramsim3"] == "/custom/dram"
+
+
+def test_exec_only_configuration(root, tmp_path):
+    from featx import presets
+
+    update_layer(root, workloads={"w": {"manifest": str(tmp_path / "missing.tsv"),
+                                       "run": {"trace_root": str(tmp_path / "missing-traces")}}})
+    result = CliRunner().invoke(cli.app, ["init", "--adopt", "--site", "none", "--no-trace"])
+    assert result.exit_code == 0, result.output
+    s = config.settings()
+    assert s["trace_enabled"] is False
+    assert "TraceRTL" not in s["git"]["submodule_worktrees"]
+    tree = Tree()
+    entry = tree.add("exec-only")
+    assert recipes.effective(tree, entry, "build")["mode"] == "exec"
+    assert presets.run_mode({}, None) == "exec"
+    checks = {c["check"] for c in doctor.local_checks()}
+    assert "workload w: manifest" not in checks
+    assert "workload w: trace_root" not in checks
+    with pytest.raises(presets.PresetError, match="trace is disabled"):
+        presets.build_mode({"mode": "trace"})
+    with pytest.raises(presets.PresetError, match="trace is disabled"):
+        presets.run_mode({"mode": "trace"}, None)
+
+
+def test_trace_is_opt_in(root):
+    from featx import presets
+
+    update_layer(root, trace_enabled=None)
+    assert config.settings()["trace_enabled"] is False
+    assert presets.build_mode({}) == "exec"
+    assert presets.run_mode({}, None) == "exec"
+    assert "TraceRTL" not in config.settings()["git"]["submodule_worktrees"]
+    tree = Tree()
+    entry = tree.add("default-exec")
+    assert recipes.effective(tree, entry, "build")["mode"] == "exec"
+    result = CliRunner().invoke(cli.app, ["init", "--adopt", "--site", "none", "--trace"])
+    assert result.exit_code == 0, result.output
+    assert config.settings()["trace_enabled"] is True
+    assert presets.build_mode({}) == "trace"
+    assert "TraceRTL" in config.settings()["git"]["submodule_worktrees"]
 
 
 def test_detect_site(tmp_path, monkeypatch):
@@ -288,13 +350,19 @@ def test_resources_live_in_the_package():
 
 
 def test_package_has_no_personal_paths():
-    """Nothing names a user's home; only the site profile names cluster hosts."""
+    """Public tracked files must not contain home directories or internal host names."""
+    import re
+    import subprocess
+
+    patterns = [re.compile(r"/nfs/home/(?!share(?:/|\b))[A-Za-z0-9_.-]+"),
+                re.compile(r"\bnode\d{3}\b")]
+    result = subprocess.run(["git", "ls-files", "-z"], cwd=config.REPO_DIR,
+                            check=True, capture_output=True, text=True)
     hits = []
-    for p in config.PKG_DIR.rglob("*"):
-        if p.is_dir() or "web" in p.relative_to(config.PKG_DIR).parts[:1] or p.suffix in (".pyc",):
+    for name in result.stdout.split("\0"):
+        if not name or name.startswith("featx/web/dist/"):
             continue
-        text = p.read_text(errors="ignore")
-        for word in ("gongkaichen", "node024"):
-            if word in text and not (word == "node024" and p.parent.name == "sites"):
-                hits.append(f"{p.relative_to(config.PKG_DIR)}: {word}")
+        text = (config.REPO_DIR / name).read_text(errors="ignore")
+        if any(pattern.search(text) for pattern in patterns):
+            hits.append(name)
     assert not hits, hits

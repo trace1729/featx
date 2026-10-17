@@ -74,6 +74,7 @@ MODULES_FILE="$WT_PATH/.gitmodules"
 if [[ -f "$MODULES_FILE" ]]; then
     while IFS= read -r sub_path; do
         [[ -n "$sub_path" ]] || continue
+        [[ "${FEATX_TRACE_ENABLED:-0}" == 0 && "$sub_path" == TraceRTL ]] && continue
         src="$REPO/$sub_path"
         dst="$WT_PATH/$sub_path"
 

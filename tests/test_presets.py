@@ -30,7 +30,7 @@ env:
 patches: []
 gsim:
   gsim_bin: /nfs/share/bin/gsim
-  dramsim3_home: /nfs/home/gongkaichen/tracertl/DRAMsim3
+  dramsim3_home: /opt/DRAMsim3
   jobs: 64
   step1_args: EMU_THREADS=1 TRACERTL_MODE=1 WITH_DRAMSIM3=1 WITH_CONSTANTIN=0 WITH_CHISELDB=0 EMU_OPTIMIZE=-O3
   step2_args: SIM_TOP=SimTop NUM_CORES=1 RTL_SUFFIX=sv TRACERTL_MODE=1 WITH_DRAMSIM3=1 EMU_THREADS=1 WITH_CHISELDB=1 WITH_CONSTANTIN=0 EMU_OPTIMIZE=-O3
@@ -79,7 +79,7 @@ def test_verilator_build_script(migrated):
     assert spec["verilator"]["make_args"].endswith("EXTRA=1")
     spec["workdir"] = "/wd"
     script = jobs.build_script("T", spec)
-    assert "export PATH=/nfs/home/gongkaichen/verilator/bin:$PATH" in script
+    assert "export PATH=/opt/verilator/bin:$PATH" in script
     assert "make emu -j64 DRAMSIM3_HOME=" in script and "make gsim" not in script
     assert "gsim" not in presets.key_recipe(spec) and "verilator" in presets.key_recipe(spec)
 
@@ -94,7 +94,7 @@ def test_legacy_type_and_bad_tool(root):
         _build({"tool": "vcs"})
 
 
-def test_run_mode_follows_build():
+def test_run_mode_follows_build(root):
     assert presets.run_mode({"mode": None}, None) == "trace"
     assert presets.run_mode({"mode": None}, {"mode": "exec"}) == "exec"
     with pytest.raises(presets.PresetError, match="build is mode=trace"):
@@ -108,7 +108,7 @@ def _run_spec(**kw):
     return presets.lower_run(spec, None)
 
 
-def test_exec_point_command():
+def test_exec_point_command(root):
     ctx = {"point.name": "b_1_0.5", "point.bench": "b", "point.cp": "1", "point.weight": "0.5",
            "emu": "/emu", "W": 1, "I": 2, "args": ""}
     spec = _run_spec(mode="exec", checkpoint_file="/ck/${point.bench}/_${point.cp}_.gz", dump_db=True,
@@ -134,8 +134,9 @@ def toy_workload(root, tmp_path):
     tsv.write_text("suite\tbenchmark\tpoint\tweight\tcheckpoint\ttrace\tmax_instr\n" + "".join(
         f"{s}\t{b}\t{p}\t{w}\t/ck/{b}/{p}.gz\t/tr/{b}/{p}\t0\n" for s, b, p, w in rows))
     data = yaml.safe_load((root / "featx.yaml").read_text())
-    data["workloads"] = {"toy": {"manifest": str(tsv), "label": "toy-label", "reference": None,
-                                 "run": {"trace_root": "/toy-traces", "checkpoint_file": "${point.checkpoint}"}}}
+    data["workloads"] = config.deep_merge(data.get("workloads") or {}, {
+        "toy": {"manifest": str(tsv), "label": "toy-label", "reference": None,
+                "run": {"trace_root": "/toy-traces", "checkpoint_file": "${point.checkpoint}"}}})
     (root / "featx.yaml").write_text(yaml.safe_dump(data))
     config.reload_settings()
     Tree().add("t/w", parents=True)
@@ -198,10 +199,10 @@ def test_post_workload_label_and_missing_reference(nfs_site, toy_workload, tmp_p
         plugins.render(tree, task, "pair", {}, rdir, rdir / "post" / "pair")
     cmd, _ = plugins.render(tree, task, "pair", {"with": {"reference": "/some/ref"}}, rdir, rdir / "post" / "pair")
     assert "ensure_collected.py /some/ref" in cmd
-    # no workload: the site's default_workload (spec06: the exec-0903 baseline), as before presets
+    # no workload: the site's default_workload (spec06: the exec-reference baseline), as before presets
     store.write_yaml(rdir / "experiment.yaml", {"recipes": {"run": {}}})
     cmd, _ = plugins.render(tree, task, "pair", {}, rdir, rdir / "post" / "pair")
-    assert "--suite spec06" in cmd and "/0903/spec06-1.0c/execution" in cmd
+    assert "--suite spec06" in cmd and "/baselines/spec06/exec" in cmd
     # spec-score: no baselines by default, the spec06 insts json, and the workload label
     cmd, _ = plugins.render(tree, task, "spec-score", {}, rdir, rdir / "post" / "spec-score")
     assert f"--runs self={rdir / 'run'}  --points" in cmd     # empty baselines

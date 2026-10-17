@@ -607,10 +607,14 @@ def init(root: Optional[str] = typer.Option(None, "--root", help="data root (def
          daemon_host: Optional[str] = typer.Option(None, "--daemon-host", help="host featxd runs on"),
          port: Optional[int] = typer.Option(None, "--port", help="featxd port (default 8765 + uid % 200)"),
          adopt: bool = typer.Option(False, "--adopt", help="the root has a featx.yaml: merge into it"),
+         trace: Optional[bool] = typer.Option(None, "--trace/--no-trace", help="enable TraceRTL integration (default: disabled, exec-only)"),
          set_: List[str] = typer.Option([], "--set", help="more user-layer keys: key.sub=value")):
     """Create (or adopt) a data root: its featx.yaml, the root pointer and the API token."""
     from . import bootstrap
-    r = bootstrap.init(root, site, repo, daemon_host, port, adopt, parse_kv(set_))
+    extra = parse_kv(set_)
+    if trace is not None:
+        extra["trace_enabled"] = trace
+    r = bootstrap.init(root, site, repo, daemon_host, port, adopt, extra)
     typer.echo(f"{tr('adopted' if r['adopted'] else 'created')} {r['root']}  (user layer {r['user_layer']})")
     typer.echo(yaml.safe_dump(r["written"], sort_keys=False).rstrip() if r["written"] else "(no keys changed)")
     if r["site_detected"]:

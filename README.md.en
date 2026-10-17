@@ -7,8 +7,8 @@ read context, submit, wait for failures, log the analysis, relaunch.
 
 Everyone runs their own featx: their own data root, daemon, port, token and worktrees. Shared
 inputs (traces, checkpoints, tools, reference result roots) come from a site profile; the
-`nfs-share` profile (`featx/sites/nfs-share.yaml`) has the cluster's `/nfs/share` and
-`/nfs/home/share` values.
+`nfs-share` profile (`featx/sites/nfs-share.yaml`) is a configurable example using `/nfs/share`
+and `/nfs/home/share` as shared mount prefixes. Set your own task hosts and reference baselines.
 
 ## Install
 
@@ -29,6 +29,17 @@ claude mcp add featx -- $PWD/.venv/bin/featx-mcp
 user layer `featx.yaml`, the root pointer `~/.config/featx/root` (so the CLI and the MCP server
 find the root without `$FEATX_ROOT`) and the API token `~/.config/featx/token`. The default
 port is 8765 + uid % 200, so users sharing a daemon host don't collide.
+
+Trace is disabled by default (`trace_enabled: false`). Builds and runs default to exec;
+worktrees skip TraceRTL, and doctor skips trace manifests and trace directories. Points
+come from the checkpoint catalog without `.trace.zstd` files. Compressed checkpoint images
+still need their decompression dependencies. To enable trace, pass `featx init --trace`, or
+run `featx config set trace_enabled=true` and restart the daemon. `--no-trace` explicitly
+disables trace.
+
+The `nfs-share` profile defaults DRAMsim3 to `${share}/ci-workloads/DRAMsim3` (with `build/`),
+including shared-path fallback. Override `paths.dramsim3` for another checkout;
+new installations also prefer `DRAMSIM3_HOME` when set.
 
 Requirements: passwordless ssh to the `hosts` of the site profile (restrict them with
 `exclude_hosts` or replace them with `hosts:` in your layer), and the featx checkout, the data
@@ -55,19 +66,22 @@ Recipes see the tool paths as `${paths.<name>}`. A post plugin that needs an ext
 declares `requires:` (e.g. `analysis_dir`); without it the plugin is listed as off and a submit
 using it is refused with the key to set.
 
+The public site uses `${share}/${USER}/...` for user data (`${USER}` is the current
+user), defaults to `hosts: [localhost]`, and includes no personal experiment baselines.
+Keep deployment-specific values in a private YAML outside the checkout and select it
+with `site: /path/to/private-site.yaml`. Local `problem-analysis.log` is ignored by Git.
+
 ### Migrating an existing root
 
 An existing root keeps its data; only its `featx.yaml` gains the keys the package no longer
 hardcodes:
 
 ```bash
-featx init --adopt --root /nfs/share/gkc/featx --site nfs-share --daemon-host node024 \
-    --repo /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim \
-    --set wt_root=/nfs/home/gongkaichen/tracertl/featx-wt \
-    --set analysis_dir=/nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis \
-    --set paths.dramsim3=/nfs/home/gongkaichen/tracertl/DRAMsim3 \
-    --set paths.verilator_bin=/nfs/home/gongkaichen/verilator/bin \
-    --set paths.xiangshan=/nfs/home/gongkaichen/tracertl/OpenXiangshan
+featx init --adopt --root /shared/$USER/featx --site nfs-share --daemon-host <host> \
+    --repo ~/src/XiangShan \
+    --set wt_root=/shared/$USER/worktrees \
+    --set paths.dramsim3=/opt/DRAMsim3 \
+    --set paths.verilator_bin=/opt/verilator/bin
 ```
 
 The resolved recipes (and so the bincache keys of existing builds) stay the same. The old
@@ -118,7 +132,7 @@ symlink so old absolute paths keep resolving.
 ```bash
 featx node add wpe/real/after -p -H "after-anchor pick lowers astar error" --worktree
 featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after workload=spec06
-featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [overlay-0928]}}
+featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [my-reference]}}
 featx submit wpe/real/after                      # build -> run -> post, new runset
 featx tree                                       # status/ETA per node
 featx ps ; featx eta ; featx logs <task> -j <point> -f

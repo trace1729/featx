@@ -93,6 +93,13 @@ top-level key. Substitution only replaces `${name}` where `name` is a known vari
 
 ## build — Build recipe keys
 
+Trace is disabled by default (`trace_enabled: false`). Builds/runs default to exec,
+TraceRTL worktree management and trace checks in doctor are skipped, and points are
+resolved from checkpoint sets without trace manifests. Enable trace explicitly with
+`featx init --trace` or `featx config set trace_enabled=true`. `--no-trace` disables it. Restart the daemon after
+changing this setting. The nfs-share profile defaults `paths.dramsim3` to
+`${share}/ci-workloads/DRAMsim3` (with `build/`), with shared-path fallback.
+
 | key | default | meaning |
 |---|---|---|
 | `tool` | `gsim` | `gsim` (two-step gsim build), `verilator` (`make emu`) or `script`. The legacy `type: gsim-two-step\|script` still works. |
@@ -187,8 +194,8 @@ final set in the collector's JSON format.
 
 | name | points | label | reference baseline |
 |---|---|---|---|
-| `spec06` | 1090 (55 benchmarks) | `spec06` | `exec-0903` |
-| `spec17` | 590 (31 benchmarks) | `spec17` | `exec-0903-spec17` |
+| `spec06` | 1090 (55 benchmarks) | `spec06` | configure your reference |
+| `spec17` | 590 (31 benchmarks) | `spec17` | configure your reference |
 | `spec26` | 1529 | `spec26` | none: post steps that compare need `with.reference` |
 
 Each entry has:
@@ -211,7 +218,7 @@ The manifest gives `${point.trace}` and `${point.checkpoint}`. Add or change a w
 
 ```yaml
 steps:
-  pk: {plugin: perf-keys, baselines: [exec-0903, wpe/overlay/smoke/20261013-3]}
+  pk: {plugin: perf-keys, baselines: [exec-reference, wpe/overlay/smoke/20261013-3]}
   col: {plugin: collect}
   pr: {plugin: pair, after: [col], with: {reference: /some/collected/dir}}
   stats: {cmd: "bash ${scripts}/stats.sh ${run} ${out}", after: [pk]}
@@ -477,8 +484,9 @@ featx baseline rm NAME [--force]     # refused while a recipe refers to it, unle
 Older roots spell weights shortened (`GemsFDTD_10619_0.03475`); `perf-keys` matches such a dir to
 the 6-digit point name (`..._0.034750`) by numeric weight.
 
-The site profile's baselines (nfs-share: `exec-0903` for SPEC06, `exec-0903-spec17`) are
-overlaid per entry by `$FEATX_ROOT/baselines.yaml`; `rm` of a site entry hides it. Post steps
+The public nfs-share profile ships without experiment baselines. Register your own with
+`featx baseline add NAME ROOT` and set the workload's `reference` if needed. Custom site
+profiles can provide baselines, overlaid per entry by `$FEATX_ROOT/baselines.yaml`; `rm` of a site entry hides it. Post steps
 refer to a baseline as `@baseline(NAME)` or by name in a `baselines:` list.
 
 An optional `checkpoint:` field names the checkpoint set the baseline ran. When a post step

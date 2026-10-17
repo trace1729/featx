@@ -7,9 +7,9 @@ import { setToken } from "./api";
 
 const now = Date.now() / 1000;
 const FIXTURES: Record<string, unknown> = {
-  "/health": { ok: true, host: "node024", pid: 1, started: "2026-10-12T10:00:00", last_tick: now, root: "/r" },
+  "/health": { ok: true, host: "worker-a", pid: 1, started: "2026-10-12T10:00:00", last_tick: now, root: "/r" },
   "/status": { started: "", last_tick: now, tick_errors: [], tasks: { queued: 1, running: 2, succeeded: 3, failed: 0, cancelled: 0 }, jobs_per_host: {}, unacked_events: 4 },
-  "/hosts": [{ host: "node024", featx_jobs: 2, free_cores: 40, free_mem_gb: 300, cores: 128, load1: 80, bad: false }],
+  "/hosts": [{ host: "worker-a", featx_jobs: 2, free_cores: 40, free_mem_gb: 300, cores: 128, load1: 80, bad: false }],
   "/tree": [
     { id: "1", path: "wpe", name: "wpe", depth: 0, kind: "category", verdict: "open", status: "active", hypothesis: "", worktree: false, runsets: 0, latest: null, tasks: {}, active: [], eta_s: null },
     { id: "2", path: "wpe/overlay", name: "overlay", depth: 1, kind: "feature", verdict: "supported", status: "active", hypothesis: "h", worktree: true, runsets: 2, latest: "20261012-2", tasks: { run: "running" }, active: ["run"], eta_s: 600 },
@@ -44,7 +44,7 @@ const FIXTURES: Record<string, unknown> = {
     tasks: [{ id: "T1", kind: "run", name: "run", state: "succeeded", counts: { succeeded: 1090 }, failure: null }] },
   "/tasks/T1": { id: "T1", kind: "run", node: "wpe/overlay", runset: "20261013-1", state: "succeeded", note: "", after: [],
     counts: { succeeded: 1090 }, failure: null, created: "", blocked: false, design_relaunches: 0, outputs: {}, eta_s: null,
-    jobs: Array.from({ length: 1090 }, (_, i) => ({ name: `bench_${i}_0.001000`, state: "succeeded", host: "node024", attempt: 1,
+    jobs: Array.from({ length: 1090 }, (_, i) => ({ name: `bench_${i}_0.001000`, state: "succeeded", host: "worker-a", attempt: 1,
       rc: 0, progress: {}, failure: null, eta_s: null })) },
   "/tasks/T1/log": { path: "/r/log", exists: true, tail: "done" },
 };

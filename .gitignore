@@ -8,4 +8,5 @@ node_modules/
 # local, never committed
 token
 analyses/
+problem-analysis.log
 featx/web/node_modules

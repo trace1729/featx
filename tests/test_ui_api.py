@@ -98,7 +98,7 @@ def test_config_validation_and_roundtrip(root):
     before = (root / "featx.yaml").read_text()          # a rejected write leaves the file alone
     assert yaml.safe_load(before)["hosts"] == ["localhost"]
 
-    r = config.write_user_layer("hosts: [localhost]\nretry: {max_infra_attempts: 7}\ndaemon: {port: 9999}\n")
+    r = config.write_user_layer("hosts: [localhost]\ntrace_enabled: true\nretry: {max_infra_attempts: 7}\ndaemon: {port: 9999}\n")
     assert r["changed"] == ["daemon", "liveness", "retry"] and r["restart_needed"] == ["daemon"]
     assert config.settings()["retry"]["max_infra_attempts"] == 7
     v = config.config_view()
@@ -245,7 +245,7 @@ def test_rest_ui_endpoints(root, monkeypatch, tmp_path):
     assert c.get("/config", headers=h).json()["user"]["hosts"] == ["localhost"]
     r = c.put("/config", json={"text": "bogus: 1\n"}, headers=h)
     assert r.status_code == 400 and "unknown key" in r.json()["error"]
-    r = c.put("/config", json={"text": "hosts: [localhost]\nplacement: {reserve_cores: 1}\n"}, headers=h)
+    r = c.put("/config", json={"text": "hosts: [localhost]\ntrace_enabled: true\nplacement: {reserve_cores: 1}\n"}, headers=h)
     assert r.status_code == 200 and r.json()["changed"] == ["liveness", "placement", "retry"]
 
     r = c.get("/files", params={"path": f"tree/{ref}/post/pk/summary.json"}, headers=h)

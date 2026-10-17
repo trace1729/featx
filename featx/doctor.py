@@ -93,13 +93,14 @@ def local_checks() -> list[dict]:
     known = ckpt.set_dirs()
     for name, wl in (s.get("workloads") or {}).items():
         wl = wl or {}
-        out.append(_path(f"workload {name}: manifest", wl.get("manifest")))
+        if s.get("trace_enabled", False):
+            out.append(_path(f"workload {name}: manifest", wl.get("manifest")))
         if wl.get("checkpoint"):
             out.append(_item(f"workload {name}: checkpoint", OK if wl["checkpoint"] in known else WARN,
                              wl["checkpoint"] if wl["checkpoint"] in known else
                              f"{wl['checkpoint']}: not a set under checkpoints.roots"))
         run = wl.get("run") or {}
-        if run.get("trace_root"):
+        if s.get("trace_enabled", False) and run.get("trace_root"):
             out.append(_path(f"workload {name}: trace_root", run["trace_root"], "dir"))
         insts = wl.get("insts")
         if insts:

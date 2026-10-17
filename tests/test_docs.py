@@ -76,7 +76,7 @@ def test_baseline_rm_refuses_users(nfs_site, tmp_path):
     with pytest.raises(TreeError, match="used by a/b"):
         service.baseline_rm("mine")
     with pytest.raises(TreeError, match="used by workload:spec06"):
-        service.baseline_rm("exec-0903")
+        service.baseline_rm("exec-reference")
     with pytest.raises(TreeError, match="unknown baseline"):
         service.baseline_rm("nope")
     # a name that is only a substring of a recipe word is not a use
@@ -84,7 +84,7 @@ def test_baseline_rm_refuses_users(nfs_site, tmp_path):
                        merge=False)
     assert service.baseline_rm("mine") == {"removed": "mine", "used_by": []}
     assert "mine" not in baselines.load()
-    r = CliRunner().invoke(cli.app, ["baseline", "rm", "exec-0903", "--force"])
+    r = CliRunner().invoke(cli.app, ["baseline", "rm", "exec-reference", "--force"])
     assert r.exit_code == 0 and json.loads(r.output)["used_by"] == ["workload:spec06"]
 
 
@@ -109,8 +109,8 @@ def test_rest_docs_and_baseline_delete(nfs_site, tmp_path):
     assert c.get("/help/run", headers=h).json()["text"].startswith("## run")
     assert c.get("/help/nope", headers=h).status_code == 400
     assert "perf-keys" in c.get("/plugins", headers=h).json()
-    assert c.delete("/baselines/exec-0903", headers=h).status_code == 400
-    assert c.delete("/baselines/exec-0903", params={"force": True}, headers=h).json()["removed"] == "exec-0903"
+    assert c.delete("/baselines/exec-reference", headers=h).status_code == 400
+    assert c.delete("/baselines/exec-reference", params={"force": True}, headers=h).json()["removed"] == "exec-reference"
 
 
 def test_mcp_docs_tool(root):

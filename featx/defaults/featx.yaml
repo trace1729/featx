@@ -1,7 +1,7 @@
 # Built-in defaults: only values that hold on any machine. Shared, cluster-wide values come
 # from a site profile (`site:`, featx/sites/<name>.yaml), personal ones from the user layer
 # $FEATX_ROOT/featx.yaml (`featx init` writes it; deep-merged, later wins).
-# ${root} = the data root, ${home} = your home dir, ${share} = the `share:` value below.
+# ${root} = data root, ${home} = home dir, ${share} = shared mount, ${USER} = current user.
 
 # Site profile: a name under featx/sites/ (e.g. nfs-share) or a path to a YAML file.
 site: null
@@ -10,6 +10,8 @@ site: null
 share: null
 # Alternate mounts for ${share}/... paths, checked when the primary path is missing.
 share_fallbacks: []
+# TraceRTL integration is opt-in; enable explicitly with featx init --trace.
+trace_enabled: false
 
 wt_root: ${root}/worktrees     # node worktrees go to <wt_root>/<node path>
 # Dir of the spec_trace_compare analysis scripts (collect_gsim_spec_perf.py, ...) the collect /
