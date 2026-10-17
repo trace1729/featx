@@ -4,6 +4,7 @@
 
 featx 是一个面向功能探索和实验任务的本地调度系统：它用树形结构管理 feature、代码上下文、构建、运行、日志和后处理，并通过 CLI、MCP 和 Web UI 与人和 AI 协作。
 
+
 - 主界面
 
 ![](assets/ui1.png)
@@ -12,6 +13,27 @@ featx 是一个面向功能探索和实验任务的本地调度系统：它用�
 
 ![](assets/ui2.png)
 
+
+### 动机
+
+- 功能探索会产生大量 worktree 和 branch，需要人工记住每个分支的用途。
+- 构建和运行日志分散在不同目录，难以回溯和比较。
+- 多个测试任务需要同时运行时，手动脚本需要打开多个终端。
+    - Agent 自己轮询 build 和运行状态会消耗 token，也会拖慢开发过程。
+    - CI 并不总是方便使用，本地任务仍然需要统一调度。
+- 切换 session 或模型提供商时，需要反复向 Agent 注入之前的上下文。
+
+### 实现策略
+
+- 使用树形结构管理开发上下文，每个 feature 或 subfeature 都是树上的一个节点。
+    - 节点关联对应的 worktree、branch、构建产物、运行日志、实验数据和结论。
+    - 每个 feature 可以定义 build、run、post recipe，并创建多个 runset。
+- featx 负责构建、运行、后处理、任务调度、状态监控和上下文记录。
+    - 提供 CLI、MCP 和 Web UI；人和 Agent 使用同一套任务状态和日志。
+    - 运行进度、资源占用、失败原因和后处理结果集中展示。
+
+
+
 ## 安装方式
 
 ### Agent
@@ -19,7 +41,7 @@ featx 是一个面向功能探索和实验任务的本地调度系统：它用�
 可以直接告诉 Agent：
 
 ```text
-帮我配置这个项目 https://github.com/trace1729/featx.git 。请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
+帮我配置这个项目 (https://github.com/trace1729/featx.git) 请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
 ```
 
 Agent 通常会完成以下步骤：
@@ -71,8 +93,8 @@ featx daemon start
 我要查看前端控制台。请启动或检查 featxd，告诉我 Web UI 地址和访问 token 的位置。
 ```
 
-Agent 可以通过 MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
-提交任务后，Agent 可使用 CLI的 featx wait 或者 MCP 的`task_wait` 等待任务完成，避免反复轮询任务状态。
+Agent 可以通过 CLI/ MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
+提交任务后，Agent 可使用 CLI 的 featx wait 或者 MCP 的`task_wait` 等待任务完成，避免反复轮询任务状态。
 
 ### Manual
 
@@ -113,37 +135,7 @@ featx ui
 
 按照输出建立 SSH tunnel，然后在浏览器打开 `/ui/`。Web UI 可以查看树、任务、runset、实时日志、后处理报告和容量配置。
 
-## 详细介绍
 
-### 动机
-
-- 功能探索会产生大量 worktree 和 branch，需要人工记住每个分支的用途。
-- 构建和运行日志分散在不同目录，难以回溯和比较。
-- 多个测试任务需要同时运行时，手动脚本需要打开多个终端。
-- Agent 自己轮询 build 和运行状态会消耗 token，也会拖慢开发过程。
-- CI 并不总是方便使用，本地任务仍然需要统一调度。
-- 切换 session 或模型提供商时，需要反复向 Agent 注入之前的上下文。
-
-### 解决方案
-
-- 使用树形结构管理开发上下文，每个 feature 或 subfeature 都是树上的一个节点。
-- 节点关联对应的 worktree、branch、构建产物、运行日志、实验数据和结论。
-- 每个 feature 可以定义 build、run、post recipe，并创建多个 runset。
-- featx 负责构建、运行、后处理、任务调度、状态监控和上下文记录。
-- 提供 CLI、MCP 和 Web UI；人和 Agent 使用同一套任务状态和日志。
-- 运行进度、资源占用、失败原因和后处理结果集中展示。
-
-### 工作方式
-
-1. 人/Agent 明确实验目的、约束和预期结果。
-2. 创建 feature 节点，填写 hypothesis、recipe 和必要的上下文。
-3. Agent 根据约束在该节点的 worktree 中实现代码。
-4. 人/Agent 审查代码和输入，确认实验内容。
-5. Agent 向 featx 提交 build、run、post 任务。
-6. featxd 在可用主机上调度任务，保存日志和产物。
-7. 人/Agent 查看结果，判断是否支持假设，并把结论记录在节点或 runset 中。
-
-代码、脚本或参数发生变化时，应创建新的 derived runset；只进行基础设施重试时，可以保留在同一个 runset 中。
 
 ## 附录
 
@@ -184,9 +176,23 @@ featx daemon status                  # 查看 daemon 状态
 featx daemon stop                    # 停止 daemon
 ```
 
-### 一个典型工作流
+### 工作流
+
+```
+通用工作流
+1. 人/Agent 明确实验目的、约束和预期结果。
+2. 创建 feature 节点，填写 hypothesis、recipe 和必要的上下文。
+3. Agent 根据约束在该节点的 worktree 中实现代码。
+4. 人/Agent 审查代码和输入，确认实验内容。
+5. Agent 向 featx 提交 build、run、post 任务。
+6. featxd 在可用主机上调度任务，保存日志和产物。
+7. 人/Agent 查看结果，判断是否支持假设，并把结论记录在节点或 runset 中。
+
+代码、脚本或参数发生变化时，应创建新的 derived runset；只进行基础设施重试时，可以保留在同一个 runset 中。
+```
 
 ```bash
+具体例子
 # 1. 创建探索节点
 featx node add frontend/bpu/cursor -p \
   -H "评估 anchor 之后的连续指令选择" --worktree
