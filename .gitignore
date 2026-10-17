@@ -8,5 +8,4 @@ node_modules/
 # local, never committed
 token
 analyses/
-intent.md
 featx/web/node_modules
