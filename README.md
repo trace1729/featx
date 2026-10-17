@@ -77,7 +77,7 @@ featx daemon start
 
 安装完成后，可以用 `featx config show effective` 查看最终配置，用 `featx daemon status` 查看调度器状态。
 
-`featx init` 未指定 `--site` 时自动检测站点；`--site none` 禁用检测。共享存储挂载不同时，用 `featx config set share=/your/shared/mount` 调整路径。未配置 `paths.nemu_diff` 时使用代码仓库 `ready-to-run/` 下可用的 NEMU 参考库，设为空字符串可禁用 diff。常用分析脚本随包提供，`analysis_dir` 仅用于覆盖位置。
+`featx init` 未指定 `--site` 时自动检测站点；`--site none` 禁用检测。`nfs-share` 站点的 `${share}/...` 路径优先使用 `/nfs/share`，路径不存在时回退到 `/nfs/home/share`；含 `${point.*}` 的路径按已知父目录选择。设置 `share_fallbacks: []` 可关闭回退。路径在配置加载时选择，修改挂载后需重启 daemon。共享存储挂载不同时，用 `featx config set share=/your/shared/mount` 调整路径。未配置 `paths.nemu_diff` 时使用代码仓库 `ready-to-run/` 下可用的 NEMU 参考库，设为空字符串可禁用 diff。常用分析脚本随包提供，`analysis_dir` 仅用于覆盖位置。
 
 ## 使用方式
 

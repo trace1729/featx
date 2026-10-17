@@ -488,8 +488,9 @@ compared as usual.
 
 ## checkpoints — Checkpoint sets (exec mode)
 
-`checkpoints.roots` (featx.yaml; the nfs-share site lists `/nfs/home/share/checkpoints_profiles`
-and its `legacy/`) holds the SimPoint checkpoint sets. A sub-directory whose name contains
+`checkpoints.roots` holds the SimPoint checkpoint sets. The nfs-share site uses
+`${share}/checkpoints_profiles` and its `legacy/`, preferring `/nfs/share` and falling back
+to `/nfs/home/share` for missing paths (`share_fallbacks: []` disables fallback). A sub-directory whose name contains
 `spec<NN>` is a set; the name is its version.
 
 ```bash

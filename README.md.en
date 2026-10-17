@@ -45,6 +45,12 @@ root and the worktree root on paths all hosts see.
 3. `$FEATX_ROOT/featx.yaml`: your keys (`git.repo`, `wt_root`, `paths.dramsim3`, `daemon`, caps);
 4. `FEATX_ROOT`, `FEATX_SITE`, `FEATX_WT_ROOT` in the environment.
 
+The `nfs-share` profile resolves `${share}/...` paths under `/nfs/share` first, then
+`/nfs/home/share` when the requested path is missing. Paths containing `${point.*}` use
+the known parent directory. Set `share_fallbacks: []` to disable fallback, or override
+`share` and `share_fallbacks` for other mounts. Selection happens at configuration load;
+restart the daemon after mount changes. Explicit paths without `${share}` stay as configured.
+
 Recipes see the tool paths as `${paths.<name>}`. A post plugin that needs an external tool
 declares `requires:` (e.g. `analysis_dir`); without it the plugin is listed as off and a submit
 using it is refused with the key to set.

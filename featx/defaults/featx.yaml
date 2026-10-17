@@ -8,6 +8,8 @@ site: null
 # The shared storage mount the site profile's paths are written under (${share}); the profile
 # sets its default, override it if your hosts mount that storage elsewhere.
 share: null
+# Alternate mounts for ${share}/... paths, checked when the primary path is missing.
+share_fallbacks: []
 
 wt_root: ${root}/worktrees     # node worktrees go to <wt_root>/<node path>
 # Dir of the spec_trace_compare analysis scripts (collect_gsim_spec_perf.py, ...) the collect /

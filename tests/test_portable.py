@@ -50,7 +50,7 @@ def test_layers_package_site_user_env(root, tmp_path, monkeypatch):
         config.settings()
 
 
-def test_share_moves_every_site_path(root, tmp_path):
+def test_share_moves_every_site_path(root, tmp_path, monkeypatch):
     site = _site(tmp_path, share="/mnt/a", paths={"gsim": "${share}/bin/gsim"},
                  checkpoints={"roots": ["${share}/ck"]}, baselines={"b": {"root": "${share}/b"}})
     update_layer(root, site=site)
@@ -59,14 +59,50 @@ def test_share_moves_every_site_path(root, tmp_path):
     assert baselines.load()["b"]["root"] == "/mnt/a/b"
     update_layer(root, share="/mnt/b/")
     assert config.settings()["paths"]["gsim"] == "/mnt/b/bin/gsim"
-    # the committed profile: everything under /nfs/home/share unless the user layer says otherwise
+    # The committed profile prefers /nfs/share independently of this test host.
+    original_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda p: True if str(p).startswith("/nfs/share/")
+                        else original_exists(p))
     update_layer(root, site="nfs-share", share=None)
     s = config.settings()
-    assert s["share"] == "/nfs/home/share" and s["paths"]["gsim"] == "/nfs/home/share/bin/gsim"
-    assert all(r.startswith("/nfs/home/share/") for r in s["checkpoints"]["roots"])
-    assert "${share}" not in repr(s) and "/nfs/share/" not in repr(s)
+    assert s["share"] == "/nfs/share" and s["paths"]["gsim"] == "/nfs/share/bin/gsim"
+    assert all(r.startswith("/nfs/share/") for r in s["checkpoints"]["roots"])
+    assert "${share}" not in repr(s)
     update_layer(root, share="/nfs/share")
     assert config.settings()["workloads"]["spec06"]["manifest"].startswith("/nfs/share/gkc/traces/")
+
+
+def test_shared_path_fallback(root, tmp_path):
+    primary, fallback = tmp_path / "primary", tmp_path / "fallback"
+    primary.mkdir()
+    fallback.mkdir()
+    (fallback / "tool").touch()
+    (fallback / "points").mkdir()
+    site = _site(tmp_path, share=str(primary), share_fallbacks=[str(fallback)],
+                 paths={"gsim": "${share}/tool"},
+                 recipe_defaults={"run": {"checkpoint_file": "${share}/points/${point.cp}.gz"}})
+    update_layer(root, site=site)
+    assert config.settings()["paths"]["gsim"] == str(fallback / "tool")
+    assert config.settings()["recipe_defaults"]["run"]["checkpoint_file"].startswith(str(fallback))
+    (primary / "tool").touch()
+    config.reload_settings()
+    assert config.settings()["paths"]["gsim"] == str(primary / "tool")
+    (primary / "tool").unlink()
+    update_layer(root, share_fallbacks=[])
+    assert config.settings()["paths"]["gsim"] == str(primary / "tool")
+
+
+def test_site_detection_uses_shared_fallback(tmp_path, monkeypatch):
+    sites = tmp_path / "sites"
+    sites.mkdir()
+    fallback = tmp_path / "fallback"
+    (fallback / "checkpoints").mkdir(parents=True)
+    (sites / "cluster.yaml").write_text(yaml.safe_dump({
+        "share": str(tmp_path / "missing"), "share_fallbacks": [str(fallback)],
+        "detect": ["${share}/checkpoints"],
+    }))
+    monkeypatch.setattr(config, "SITES_DIR", sites)
+    assert config.detect_site() == "cluster"
 
 
 def test_nemu_diff_defaults_to_the_repo_ready_to_run(root, tmp_path):

@@ -163,7 +163,9 @@ def detect_site() -> str | None:
         except (OSError, yaml.YAMLError):
             continue
         detect = data.get("detect") if isinstance(data, dict) else None
-        if detect and all(Path(p).exists() for p in detect):
+        values = {"share": str(data.get("share") or "").rstrip("/")}
+        if detect and all(Path(expand(p, values, data.get("share_fallbacks") or [])).exists()
+                          for p in detect):
             return name
     return None
 
@@ -171,15 +173,33 @@ def detect_site() -> str | None:
 _EXPAND_RE = re.compile(r"\$\{(root|home|share)\}")
 
 
-def expand(obj, values: dict):
+def expand(obj, values: dict, share_fallbacks=()):
     """${root} / ${home} / ${share} in every string of obj (other ${...}, and ones whose value
-    is unset, pass through)."""
+    is unset, pass through). Shared paths use the first existing primary/fallback path;
+    if none exists, retain the primary path so diagnostics name the requested input."""
     if isinstance(obj, str):
-        return _EXPAND_RE.sub(lambda m: values.get(m.group(1)) or m.group(0), obj)
+        expanded = _EXPAND_RE.sub(lambda m: values.get(m.group(1)) or m.group(0), obj)
+        if "${share}/" in obj and share_fallbacks:
+            # Recipe paths can contain deferred ${point.*} variables. Check their
+            # containing directory until those variables can be resolved at run time.
+            def exists(path):
+                if "${" in path:
+                    path = path.split("${", 1)[0].rsplit("/", 1)[0] or "/"
+                return Path(path).exists()
+
+            for share in [values.get("share"), *share_fallbacks]:
+                if not share:
+                    continue
+                candidate = _EXPAND_RE.sub(
+                    lambda m: str(share).rstrip("/") if m.group(1) == "share"
+                    else values.get(m.group(1)) or m.group(0), obj)
+                if exists(candidate):
+                    return candidate
+        return expanded
     if isinstance(obj, dict):
-        return {k: expand(v, values) for k, v in obj.items()}
+        return {k: expand(v, values, share_fallbacks) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [expand(v, values) for v in obj]
+        return [expand(v, values, share_fallbacks) for v in obj]
     return obj
 
 
@@ -205,7 +225,8 @@ def _settings_for(root_str: str) -> dict:
     if env_wt:
         base["wt_root"] = env_wt
     share = str(base.get("share") or "").rstrip("/")
-    base = expand(base, {"root": root_str, "home": str(Path.home()), "share": share})
+    base = expand(base, {"root": root_str, "home": str(Path.home()), "share": share},
+                  base.get("share_fallbacks") or [])
     paths = base.get("paths")
     if isinstance(paths, dict) and paths.get("nemu_diff") is None:
         nemu = repo_nemu((base.get("git") or {}).get("repo"))
