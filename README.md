@@ -1,288 +1,200 @@
-# featx — feature exploration & task scheduler
+# featx
 
-Organizes experiments as a feature tree (`category/feature/subfeature`). The tree decides where
-worktrees, builds, runs, logs and results live. A single daemon (`featxd`) schedules
-build/run/post tasks across the cluster. An MCP server gives an LLM the same functions as the CLI:
-read context, submit, wait for failures, log the analysis, relaunch.
+## 简介
 
-Everyone runs their own featx: their own data root, daemon, port, token and worktrees. Shared
-inputs (traces, checkpoints, tools, reference result roots) come from a site profile; the
-`nfs-share` profile (`featx/sites/nfs-share.yaml`) has the cluster's `/nfs/share` and
-`/nfs/home/share` values.
+featx 是一个面向功能探索和实验任务的本地调度系统：它用树形结构管理 feature、代码上下文、构建、运行、日志和后处理，并通过 CLI、MCP 和 Web UI 与人和 AI 协作。
 
-## Install
+## 安装方式
+
+### Agent
+
+可以直接告诉 Agent：
+
+```text
+帮我配置这个项目。请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
+```
+
+Agent 通常会完成以下步骤：
 
 ```bash
-git clone <featx repo> featx && cd featx           # on a path every host sees (NFS): jobs run featx-exec from it
-uv venv .venv && uv pip install --python .venv/bin/python -e .
-#   (a PyPI mirror: add --index-url https://pypi.tuna.tsinghua.edu.cn/simple, or set UV_INDEX_URL)
-export PATH=$PWD/.venv/bin:$PATH                  # featx, featxd, featx-mcp
-featx init --site nfs-share --repo ~/path/to/XiangShan --daemon-host <host> \
-    --set paths.dramsim3=<DRAMsim3 checkout with build/> \
-    --set analysis_dir=<spec_trace_compare/03_analysis>   # optional: the collect/pair/diagnose plugins
-featx doctor                                      # every path, tool and host: ok / warn / fail
+git clone <featx-repo> featx
+cd featx
+uv venv .venv
+uv pip install --python .venv/bin/python -e .
+export PATH=$PWD/.venv/bin:$PATH
+featx init --site <site-profile> --repo <code-repository> --daemon-host <host>
+featx doctor
 featx daemon start
-claude mcp add featx -- $PWD/.venv/bin/featx-mcp
 ```
 
-`featx init` creates the data root (default `~/.local/share/featx`, or `--root DIR`), writes its
-user layer `featx.yaml`, the root pointer `~/.config/featx/root` (so the CLI and the MCP server
-find the root without `$FEATX_ROOT`) and the API token `~/.config/featx/token`. The default
-port is 8765 + uid % 200, so users sharing a daemon host don't collide.
+如果使用已有的 featx 数据根目录，可以使用 `featx init --adopt --root <root>`。站点配置应描述共享的 checkpoint、trace、工具和可调度主机；个人配置描述代码仓库、worktree 根目录和本地工具路径。详细配置以 `featx config show effective` 为准。
 
-Requirements: passwordless ssh to the `hosts` of the site profile (restrict them with
-`exclude_hosts` or replace them with `hosts:` in your layer), and the featx checkout, the data
-root and the worktree root on paths all hosts see.
+### Manual
 
-### Configuration layers
-
-`featx config show effective` is the merge of, later wins:
-
-1. `featx/defaults/featx.yaml`: portable defaults only (`hosts: [localhost]`, tools from PATH);
-2. the site profile named by `site:` (a name under `featx/sites/` or a YAML path): workloads,
-   checkpoint roots, shared tools (`paths.gsim`, `paths.nemu_diff`, ...), hosts, baselines and
-   `recipe_defaults` (recipe keys layered above the package recipe defaults);
-3. `$FEATX_ROOT/featx.yaml`: your keys (`git.repo`, `wt_root`, `paths.dramsim3`, `daemon`, caps);
-4. `FEATX_ROOT`, `FEATX_SITE`, `FEATX_WT_ROOT` in the environment.
-
-Recipes see the tool paths as `${paths.<name>}`. A post plugin that needs an external tool
-declares `requires:` (e.g. `analysis_dir`); without it the plugin is listed as off and a submit
-using it is refused with the key to set.
-
-### Migrating an existing root
-
-An existing root keeps its data; only its `featx.yaml` gains the keys the package no longer
-hardcodes:
+要求：Python 环境、可用的 `uv`、Git，以及任务主机之间的免密 SSH。featx checkout、数据根目录和 worktree 根目录应位于所有任务主机都能访问的位置。
 
 ```bash
-featx init --adopt --root /nfs/share/gkc/featx --site nfs-share --daemon-host node024 \
-    --repo /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim \
-    --set wt_root=/nfs/home/gongkaichen/tracertl/featx-wt \
-    --set analysis_dir=/nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis \
-    --set paths.dramsim3=/nfs/home/gongkaichen/tracertl/DRAMsim3 \
-    --set paths.verilator_bin=/nfs/home/gongkaichen/verilator/bin \
-    --set paths.xiangshan=/nfs/home/gongkaichen/tracertl/OpenXiangshan
+git clone <featx-repo> featx
+cd featx
+uv venv .venv
+uv pip install --python .venv/bin/python -e .
+export PATH=$PWD/.venv/bin:$PATH
+
+featx init --site <site-profile> --repo <code-repository> --daemon-host <host>
+featx doctor
+featx daemon start
 ```
 
-The resolved recipes (and so the bincache keys of existing builds) stay the same. The old
-`bin/featx-exec`, `config/` and `docs/` paths are symlinks into the package, for jobs and
-daemons started before the move.
+安装完成后，可以用 `featx config show effective` 查看最终配置，用 `featx daemon status` 查看调度器状态。
 
-Optional watchdog (crontab):
-`*/5 * * * * <featx>/.venv/bin/featx daemon watchdog`.
-Jobs keep running while the daemon is down. On restart it re-adopts them from NFS state.
-`daemon.json` is refreshed every 5 s by its own thread. That thread stops only if the scheduler
-loop makes no progress for 10 min, so the watchdog still restarts a hung daemon. Launches use ssh
-without holding the scheduler lock, at most `placement.max_launches_per_tick` (128) per tick. A
-large panel therefore no longer blocks submit/cancel or the API.
-Kills (cancel, dead attempts) and liveness probes of stale heartbeats are batched into one ssh
-per host and run without the lock as well. `placement.max_total_cores` (300) caps remote
-run cores; `placement.max_build_cores` (64) gives remote builds an independent budget.
-Jobs beyond either budget stay queued until cores are released, highest task priority first,
-then oldest (`featx submit --priority N`, `featx task priority TASK N`, the ▲/▼ control on the
-Tasks page; running jobs are never preempted). Both budgets still require available host CPU and memory. A job larger than
-its budget can run alone in that budget; 0 disables that budget's cap. `featx daemon status`
-shows total `cores_in_use` plus `run_cores_in_use` and `build_cores_in_use`. Both caps can be changed live
-with `featx config set placement.max_total_cores=200` or the Capacity panel of the Tasks page.
+## 使用方式
 
-## Layout
+### Agent
 
+可以用自然语言描述目标，例如：
+
+```text
+我要在香山上运行 SPEC06。请创建一个 feature 节点，使用 exec 模式构建，运行指定的 checkpoint，完成后执行后处理并汇总结果。
 ```
+
+或者：
+
+```text
+我要查看前端控制台。请启动或检查 featxd，告诉我 Web UI 地址和访问 token 的位置。
+```
+
+Agent 可以通过 MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
+
+### Manual
+
+创建 feature 节点并提交一次完整任务：
+
+```bash
+featx node add backend/rob/feature1 -p \
+  -H "探索 ROB 的新策略" --worktree
+
+featx recipe set backend/rob/feature1 run \
+  workload=spec06 mode=exec
+featx submit backend/rob/feature1
+```
+
+查看任务和日志：
+
+```bash
+featx tree
+featx ps
+featx eta
+featx logs <task-id> -j <point> -f
+featx events --wait 600
+```
+
+提交已有二进制、选择 checkpoint 或覆盖单次参数：
+
+```bash
+featx submit backend/rob/feature1 run --bin <emu> \
+  --point <benchmark_point> --set run.I=200000 --set run.W=200000
+```
+
+查看 Web UI：
+
+```bash
+featx ui
+```
+
+按照输出建立 SSH tunnel，然后在浏览器打开 `/ui/`。Web UI 可以查看树、任务、runset、实时日志、后处理报告和容量配置。
+
+## 详细介绍
+
+### 动机
+
+- 功能探索会产生大量 worktree 和 branch，需要人工记住每个分支的用途。
+- 构建和运行日志分散在不同目录，难以回溯和比较。
+- 多个测试任务需要同时运行时，手动脚本需要打开多个终端。
+- Agent 自己轮询 build 和运行状态会消耗 token，也会拖慢开发过程。
+- CI 并不总是方便使用，本地任务仍然需要统一调度。
+- 切换 session 或模型提供商时，需要反复向 Agent 注入之前的上下文。
+
+### 解决方案
+
+- 使用树形结构管理开发上下文，每个 feature 或 subfeature 都是树上的一个节点。
+- 节点关联对应的 worktree、branch、构建产物、运行日志、实验数据和结论。
+- 每个 feature 可以定义 build、run、post recipe，并创建多个 runset。
+- featx 负责构建、运行、后处理、任务调度、状态监控和上下文记录。
+- 提供 CLI、MCP 和 Web UI；人和 Agent 使用同一套任务状态和日志。
+- 运行进度、资源占用、失败原因和后处理结果集中展示。
+
+### 工作方式
+
+1. 人或 Agent 明确实验目的、约束和预期结果。
+2. 创建 feature 节点，填写 hypothesis、recipe 和必要的上下文。
+3. Agent 根据约束在该节点的 worktree 中实现代码。
+4. 人或 Agent 审查代码和输入，确认实验内容。
+5. Agent 或人向 featx 提交 build、run、post 任务。
+6. featxd 在可用主机上调度任务，保存日志和产物。
+7. 人或 Agent 查看结果，判断是否支持假设，并把结论记录在节点或 runset 中。
+
+代码、脚本或参数发生变化时，应创建新的 derived runset；只进行基础设施重试时，可以保留在同一个 runset 中。
+
+## 附录
+
+### 目录组织形式
+
+```text
 $FEATX_ROOT/
-  featx.yaml                 your layer over the defaults + site profile (featx init writes it)
-  daemon.json                daemon host/port/pid/heartbeat (CLI + MCP discover it here)
-  baselines.yaml             your named result roots, over the site profile's `baselines`
-  bincache/<key>/emu         built or imported binaries (+ manifest.json)
-  events/inbox.jsonl         failure / retry / task_done / runset_done ... events
-  tasks/<id>.json            task state (written only by the daemon)
-  tree/<cat>/<feat>/<sub>/
-    node.yaml                id, hypothesis, verdict, evidence, git, moves
-    recipes/{build,run,post}.yaml   own layer; inherited + deep-merged from ancestors
-    scripts/                 helper scripts (${scripts}/name in recipes)
-    <YYYYMMDD-n>/            runset: experiment.yaml (provenance, recipe snapshot, bin),
-                             problem-analysis.log, bin/emu, scripts/, build/, run/<point>/, post/<step>/
+  featx.yaml                 # 个人配置层
+  daemon.json                # daemon 状态和连接信息
+  bincache/<key>/emu         # 构建缓存和产物
+  events/                    # 失败、重试和完成事件
+  tasks/                     # 调度任务状态
+  tree/<category>/<feature>/
+    node.yaml                # hypothesis、verdict、evidence 等
+    recipes/                 # build、run、post 配置
+    scripts/                 # 节点脚本
+    <runset>/                 # experiment、build、run、post 和日志
 ```
 
-Runsets are sealed once all their tasks succeed. A rerun after a fix is a new derived runset
-(`task resubmit`). `node mv` moves dirs, worktrees and branches as a cascade, and leaves a forwarding
-symlink so old absolute paths keep resolving.
-
-## Typical loop
+### 常用命令
 
 ```bash
-featx node add wpe/real/after -p -H "after-anchor pick lowers astar error" --worktree
-featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after workload=spec06
-featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [overlay-0928]}}
-featx submit wpe/real/after                      # build -> run -> post, new runset
-featx tree                                       # status/ETA per node
-featx ps ; featx eta ; featx logs <task> -j <point> -f
-featx events --wait 600                          # failure / retry / done
-featx log append wpe/real/after/20261012-1 -p "<problem>" -s "<fix>" -c "<code explanation>"
-featx task relaunch <task>                       # design failures need the log entry above
-featx result wpe/real/after/20261012-1
-featx node set wpe/real/after --verdict supported --evidence wpe/real/after/20261012-1
+featx doctor                         # 检查路径、工具和主机
+featx config show effective          # 查看生效配置
+featx tree                           # 查看 feature 树和状态
+featx node add <path> --worktree     # 创建 feature 节点
+featx recipe set <path> run ...      # 设置运行 recipe
+featx submit <path>                  # 提交 build -> run -> post
+featx ps                             # 查看任务
+featx eta                            # 查看预计完成时间
+featx logs <task> -j <point> -f      # 跟踪任务日志
+featx result <runset>                # 查看结果
+featx task relaunch <task>           # 重新发起失败任务
+featx log append <runset> ...        # 记录问题和修复
+featx node set <path> --verdict ...  # 记录实验结论
+featx daemon status                  # 查看 daemon 状态
+featx daemon stop                    # 停止 daemon
 ```
 
-`--bin <file | bincache key | runset>` runs an existing binary without a build. Use
-`featx bin import <emu> -m label --mode trace|exec` to register one. `--point` picks points and
-`--set run.I=300000` overrides a recipe key.
-
-## Reference and presets
-
-`featx/docs/reference.md` documents recipe keys, variables, point selection, reference forms and every
-post plugin's parameters, outputs and dependencies. The same text is available as:
-
-- `featx help` (topic list) and `featx help <topic|plugin|all>` on the CLI;
-- the `docs` MCP tool;
-- the **Docs** page of the web UI.
-
-Its plugin section is generated from the manifests: run `python -m featx.docs` after editing
-one (a test fails when it is stale).
-
-The common knobs are a few recipe keys (`featx help build`, `featx help run`):
+### 一个典型工作流
 
 ```bash
-featx submit N build --set build.tool=verilator              # gsim (default) | verilator | script
-featx submit N build run --set build.mode=exec               # trace (default) | exec; the run follows the build
-featx submit N build --set build.options.chiseldb=true       # also chiselmap, constantin, threads, flags ...
-featx recipe set N run workload=spec17 'benchmarks=[mcf]'  # spec06 | spec17 | spec26 (all points by default)
-featx submit N run --bin <emu> --point mcf_165900000000_0.031476 --set run.W=100000 --set run.I=200000
+# 1. 创建探索节点
+featx node add frontend/bpu/cursor -p \
+  -H "评估 anchor 之后的连续指令选择" --worktree
+
+# 2. 配置运行参数和后处理
+featx recipe set frontend/bpu/cursor run \
+  workload=spec06 mode=exec
+featx recipe set frontend/bpu/cursor post -f post.yaml
+
+# 3. 提交任务并观察进度
+featx submit frontend/bpu/cursor
+featx tree
+featx logs <task-id> -j <point> -f
+
+# 4. 记录结果和结论
+featx log append frontend/bpu/cursor/<runset> \
+  -p "问题描述" -s "采用的修复或实验策略" -c "代码和配置说明"
+featx node set frontend/bpu/cursor \
+  --verdict supported --evidence <runset>
 ```
 
-Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`,
-`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`).
-
-## Web UI (leaderboard)
-
-featxd serves a React app at `/ui/` from the committed bundle `featx/web/dist`. Nodes need no
-node runtime. `featx ui` prints the URL, the tunnel command and the token location.
-
-```bash
-ssh -N -L <port>:<daemon host>:<port> <login-node>   # or a VS Code port forward
-# open http://localhost:<port>/ui/ and paste the token from: cat ~/.config/featx/token
-```
-
-Pages:
-
-- **Leaderboard**: rank runsets by any post metric (`<step>.<summary key>`, default
-  `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
-  reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
-  only with "show incomplete" and are never ranked.
-- **Node**: hypothesis, verdict, evidence (add, edit, remove), a free-form comment, recipes
-  (own-layer editor and explain view), scripts, notes (Markdown, editable), runsets, submit form.
-  A "code changed" badge appears when the node worktree differs from its base; the worktree tab
-  lists the commits ahead, the changed/untracked files per repo (main + submodule worktrees) and
-  each file's diff against the merge-base.
-- **Submit form**: kinds, binary, points, quick presets (build tool/mode/options, workload,
-  coverage, `spec-score` post step), priority, overrides. The choices are remembered per node in
-  the browser (kinds, presets and priority also seed other nodes); "reset form" clears them.
-- **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
-  problem log, cancel/relaunch/resubmit/unblock.
-- **Tasks**: priority column with ▲/▼, Capacity panel (run/build cores in use vs cap, editable).
-- **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
-  (`featx.yaml` editor, baselines, bin import), **Docs** (`docs/reference.md` by topic).
-- In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
-- Filters, checkboxes and leaderboard choices are remembered in the browser (`localStorage`, `featx.v1.*`).
-
-Everything the UI does also has a CLI form:
-
-```bash
-featx leaderboard [--metric pk.self.ipc_geomean] [--class KEY] [--node wpe/] [--best] [--all]
-featx config show [user|defaults|effective] ; featx config set retry.max_infra_attempts=4 ; featx config edit
-featx node mv SRC DST [--parents] --dry-run
-featx preview <path under $FEATX_ROOT or the worktree root> [--tail N]
-```
-
-The matching MCP tools are `leaderboard` and `config_get`.
-
-Frontend development (Node ≥ 18):
-
-```bash
-cd featx/web && npm ci
-npm run dev        # Vite on :5173, proxies the API to $FEATX_DEV_API (default a dev featxd on 127.0.0.1:8766)
-npm test           # vitest
-npm run build      # tsc + vite -> featx/web/dist (commit it; a running featxd picks it up)
-```
-
-## Failure handling
-
-Every failed job is classified by `featx/defaults/classify.yaml` (`$FEATX_ROOT/classify.yaml` overrides it).
-
-- **infra** (ssh 255, host down, OOM kill, stale heartbeat): retried automatically on another
-  host, at most `retry.max_infra_attempts` times. The scheduler kills the old attempt's leftover
-  processes (the whole session, including the emu under `timeout`). Each retry emits a `retry` event.
-- **design** (`TraceRTL Error at inst`, `Stuck`, `ABORT`, build `error:` ...): emits a `failure` event
-  with the signature and the last 80 log lines, plus `failure.json` in the job dir.
-  - `task relaunch` is refused until `problem-analysis.log` has an entry newer than the failure.
-  - Relaunches are limited by `retry.max_design_relaunches`. After that, a human must run
-    `featx task unblock`.
-
-## Post-processing plugins
-
-Manifests live in `featx/post/manifests/*.yaml`, or in `$FEATX_ROOT/plugins/` to extend without a
-code change. Each has a `cmd` template and default parameters (`with`), and must write
-`summary.json`. Built-in plugins:
-
-- `perf-keys`: formal-window IPC/counters vs baselines.
-- `collect`, `pair`, `diagnose`, `branch-mpki`: wrap the `spec_trace_compare/03_analysis` scripts
-  (`requires: [analysis_dir]`).
-- `spec-score`: the SPEC score as `perf_trigger --report` computes it (SPECxx/GHz, int/fp, @f GHz,
-  minimal coverage), optionally against baselines on the same points (`<label>.score_err_pct`).
-  Instruction counts come from the workload's `insts` json in `featx.yaml`. Add it with
-  `--set post.steps.spec-score.plugin=spec-score` or the Submit form checkbox.
-
-`featx compare <runset|baseline>...` runs `perf-keys` ad hoc.
-
-A step can also run its own command instead of a plugin, for example to call a node script:
-
-```yaml
-steps:
-  stats: {cmd: "bash ${scripts}/stats.sh ${run} ${out}", after: [pk]}   # must leave ${out}/summary.json
-```
-
-## Helper scripts
-
-Scripts saved on a node (UI scripts tab, `featx script write`, MCP `script_write`) live in
-`<node>/scripts/`. They are inherited like recipes: on submit, featx copies `$FEATX_ROOT/scripts`,
-then each ancestor's scripts, then the node's own into `<runset>/scripts/` (a later layer wins
-on a name clash). `${scripts}` in build, run and post recipes is that copy. So:
-
-- an inherited recipe still finds its parent's script;
-- the runset keeps the exact scripts it ran;
-- a relaunch refreshes the copy, so a script fix is picked up like a worktree fix.
-
-A build that uses `${scripts}` is cached by the scripts' content, so an unchanged rebuild still
-hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
-
-## MCP tools
-
-| Group | Tools |
-|---|---|
-| Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
-| Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `docs`, `script_write`, `script_read`, `worktree_create` |
-| Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel`, `task_priority` |
-| Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
-| Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |
-
-Expected errors (unknown node, refused relaunch, daemon down) come back to the model as tool
-errors with their message.
-
-## Storage
-
-`featx storage [--worktrees]` reports usage per node and for bincache.
-
-`featx gc [--build-dirs]` lists unreferenced bincache entries, trash and build dirs. It never
-touches anything referenced by an `experiment.yaml` or an active task. Pass `--apply` to delete.
-
-`featx node rm <node> -f` moves the subtree into `tree/.trash`. Add `--drop-worktrees` to also
-delete its worktrees (uncommitted diffs saved under `.trash/worktree-patches`), the featx branches
-that carry no commits beyond their base, old forwarding symlinks and empty dirs. Branches with their
-own commits are kept and reported unless you also pass `--drop-branches`.
-
-## Tests
-
-```bash
-.venv/bin/python -m pytest -q -p no:cacheprovider    # tmp data root; fake emu via real featx-exec
-```
-
-Fixes found while building and verifying featx are recorded in `problem-analysis.log`.
+更多 recipe、checkpoint、point selection、后处理插件和 MCP 接口说明，参见 [`featx/docs/reference.md`](featx/docs/reference.md)。

@@ -1,0 +1,288 @@
+# featx — feature exploration & task scheduler
+
+Organizes experiments as a feature tree (`category/feature/subfeature`). The tree decides where
+worktrees, builds, runs, logs and results live. A single daemon (`featxd`) schedules
+build/run/post tasks across the cluster. An MCP server gives an LLM the same functions as the CLI:
+read context, submit, wait for failures, log the analysis, relaunch.
+
+Everyone runs their own featx: their own data root, daemon, port, token and worktrees. Shared
+inputs (traces, checkpoints, tools, reference result roots) come from a site profile; the
+`nfs-share` profile (`featx/sites/nfs-share.yaml`) has the cluster's `/nfs/share` and
+`/nfs/home/share` values.
+
+## Install
+
+```bash
+git clone <featx repo> featx && cd featx           # on a path every host sees (NFS): jobs run featx-exec from it
+uv venv .venv && uv pip install --python .venv/bin/python -e .
+#   (a PyPI mirror: add --index-url https://pypi.tuna.tsinghua.edu.cn/simple, or set UV_INDEX_URL)
+export PATH=$PWD/.venv/bin:$PATH                  # featx, featxd, featx-mcp
+featx init --site nfs-share --repo ~/path/to/XiangShan --daemon-host <host> \
+    --set paths.dramsim3=<DRAMsim3 checkout with build/> \
+    --set analysis_dir=<spec_trace_compare/03_analysis>   # optional: the collect/pair/diagnose plugins
+featx doctor                                      # every path, tool and host: ok / warn / fail
+featx daemon start
+claude mcp add featx -- $PWD/.venv/bin/featx-mcp
+```
+
+`featx init` creates the data root (default `~/.local/share/featx`, or `--root DIR`), writes its
+user layer `featx.yaml`, the root pointer `~/.config/featx/root` (so the CLI and the MCP server
+find the root without `$FEATX_ROOT`) and the API token `~/.config/featx/token`. The default
+port is 8765 + uid % 200, so users sharing a daemon host don't collide.
+
+Requirements: passwordless ssh to the `hosts` of the site profile (restrict them with
+`exclude_hosts` or replace them with `hosts:` in your layer), and the featx checkout, the data
+root and the worktree root on paths all hosts see.
+
+### Configuration layers
+
+`featx config show effective` is the merge of, later wins:
+
+1. `featx/defaults/featx.yaml`: portable defaults only (`hosts: [localhost]`, tools from PATH);
+2. the site profile named by `site:` (a name under `featx/sites/` or a YAML path): workloads,
+   checkpoint roots, shared tools (`paths.gsim`, `paths.nemu_diff`, ...), hosts, baselines and
+   `recipe_defaults` (recipe keys layered above the package recipe defaults);
+3. `$FEATX_ROOT/featx.yaml`: your keys (`git.repo`, `wt_root`, `paths.dramsim3`, `daemon`, caps);
+4. `FEATX_ROOT`, `FEATX_SITE`, `FEATX_WT_ROOT` in the environment.
+
+Recipes see the tool paths as `${paths.<name>}`. A post plugin that needs an external tool
+declares `requires:` (e.g. `analysis_dir`); without it the plugin is listed as off and a submit
+using it is refused with the key to set.
+
+### Migrating an existing root
+
+An existing root keeps its data; only its `featx.yaml` gains the keys the package no longer
+hardcodes:
+
+```bash
+featx init --adopt --root /nfs/share/gkc/featx --site nfs-share --daemon-host node024 \
+    --repo /nfs/home/gongkaichen/tracertl/OpenXiangshan-trace-verify-gsim \
+    --set wt_root=/nfs/home/gongkaichen/tracertl/featx-wt \
+    --set analysis_dir=/nfs/home/gongkaichen/tracertl/toolsets/microarch/spec_trace_compare/03_analysis \
+    --set paths.dramsim3=/nfs/home/gongkaichen/tracertl/DRAMsim3 \
+    --set paths.verilator_bin=/nfs/home/gongkaichen/verilator/bin \
+    --set paths.xiangshan=/nfs/home/gongkaichen/tracertl/OpenXiangshan
+```
+
+The resolved recipes (and so the bincache keys of existing builds) stay the same. The old
+`bin/featx-exec`, `config/` and `docs/` paths are symlinks into the package, for jobs and
+daemons started before the move.
+
+Optional watchdog (crontab):
+`*/5 * * * * <featx>/.venv/bin/featx daemon watchdog`.
+Jobs keep running while the daemon is down. On restart it re-adopts them from NFS state.
+`daemon.json` is refreshed every 5 s by its own thread. That thread stops only if the scheduler
+loop makes no progress for 10 min, so the watchdog still restarts a hung daemon. Launches use ssh
+without holding the scheduler lock, at most `placement.max_launches_per_tick` (128) per tick. A
+large panel therefore no longer blocks submit/cancel or the API.
+Kills (cancel, dead attempts) and liveness probes of stale heartbeats are batched into one ssh
+per host and run without the lock as well. `placement.max_total_cores` (300) caps remote
+run cores; `placement.max_build_cores` (64) gives remote builds an independent budget.
+Jobs beyond either budget stay queued until cores are released, highest task priority first,
+then oldest (`featx submit --priority N`, `featx task priority TASK N`, the ▲/▼ control on the
+Tasks page; running jobs are never preempted). Both budgets still require available host CPU and memory. A job larger than
+its budget can run alone in that budget; 0 disables that budget's cap. `featx daemon status`
+shows total `cores_in_use` plus `run_cores_in_use` and `build_cores_in_use`. Both caps can be changed live
+with `featx config set placement.max_total_cores=200` or the Capacity panel of the Tasks page.
+
+## Layout
+
+```
+$FEATX_ROOT/
+  featx.yaml                 your layer over the defaults + site profile (featx init writes it)
+  daemon.json                daemon host/port/pid/heartbeat (CLI + MCP discover it here)
+  baselines.yaml             your named result roots, over the site profile's `baselines`
+  bincache/<key>/emu         built or imported binaries (+ manifest.json)
+  events/inbox.jsonl         failure / retry / task_done / runset_done ... events
+  tasks/<id>.json            task state (written only by the daemon)
+  tree/<cat>/<feat>/<sub>/
+    node.yaml                id, hypothesis, verdict, evidence, git, moves
+    recipes/{build,run,post}.yaml   own layer; inherited + deep-merged from ancestors
+    scripts/                 helper scripts (${scripts}/name in recipes)
+    <YYYYMMDD-n>/            runset: experiment.yaml (provenance, recipe snapshot, bin),
+                             problem-analysis.log, bin/emu, scripts/, build/, run/<point>/, post/<step>/
+```
+
+Runsets are sealed once all their tasks succeed. A rerun after a fix is a new derived runset
+(`task resubmit`). `node mv` moves dirs, worktrees and branches as a cascade, and leaves a forwarding
+symlink so old absolute paths keep resolving.
+
+## Typical loop
+
+```bash
+featx node add wpe/real/after -p -H "after-anchor pick lowers astar error" --worktree
+featx recipe set wpe/real run W=20000000 I=20000000 env.TRACERTL_WP_PICK=after workload=spec06
+featx recipe set wpe/real post -f post.yaml      # steps: {pk: {plugin: perf-keys, baselines: [overlay-0928]}}
+featx submit wpe/real/after                      # build -> run -> post, new runset
+featx tree                                       # status/ETA per node
+featx ps ; featx eta ; featx logs <task> -j <point> -f
+featx events --wait 600                          # failure / retry / done
+featx log append wpe/real/after/20261012-1 -p "<problem>" -s "<fix>" -c "<code explanation>"
+featx task relaunch <task>                       # design failures need the log entry above
+featx result wpe/real/after/20261012-1
+featx node set wpe/real/after --verdict supported --evidence wpe/real/after/20261012-1
+```
+
+`--bin <file | bincache key | runset>` runs an existing binary without a build. Use
+`featx bin import <emu> -m label --mode trace|exec` to register one. `--point` picks points and
+`--set run.I=300000` overrides a recipe key.
+
+## Reference and presets
+
+`featx/docs/reference.md` documents recipe keys, variables, point selection, reference forms and every
+post plugin's parameters, outputs and dependencies. The same text is available as:
+
+- `featx help` (topic list) and `featx help <topic|plugin|all>` on the CLI;
+- the `docs` MCP tool;
+- the **Docs** page of the web UI.
+
+Its plugin section is generated from the manifests: run `python -m featx.docs` after editing
+one (a test fails when it is stale).
+
+The common knobs are a few recipe keys (`featx help build`, `featx help run`):
+
+```bash
+featx submit N build --set build.tool=verilator              # gsim (default) | verilator | script
+featx submit N build run --set build.mode=exec               # trace (default) | exec; the run follows the build
+featx submit N build --set build.options.chiseldb=true       # also chiselmap, constantin, threads, flags ...
+featx recipe set N run workload=spec17 'benchmarks=[mcf]'  # spec06 | spec17 | spec26 (all points by default)
+featx submit N run --bin <emu> --point mcf_165900000000_0.031476 --set run.W=100000 --set run.I=200000
+```
+
+Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`,
+`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`).
+
+## Web UI (leaderboard)
+
+featxd serves a React app at `/ui/` from the committed bundle `featx/web/dist`. Nodes need no
+node runtime. `featx ui` prints the URL, the tunnel command and the token location.
+
+```bash
+ssh -N -L <port>:<daemon host>:<port> <login-node>   # or a VS Code port forward
+# open http://localhost:<port>/ui/ and paste the token from: cat ~/.config/featx/token
+```
+
+Pages:
+
+- **Leaderboard**: rank runsets by any post metric (`<step>.<summary key>`, default
+  `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
+  reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
+  only with "show incomplete" and are never ranked.
+- **Node**: hypothesis, verdict, evidence (add, edit, remove), a free-form comment, recipes
+  (own-layer editor and explain view), scripts, notes (Markdown, editable), runsets, submit form.
+  A "code changed" badge appears when the node worktree differs from its base; the worktree tab
+  lists the commits ahead, the changed/untracked files per repo (main + submodule worktrees) and
+  each file's diff against the merge-base.
+- **Submit form**: kinds, binary, points, quick presets (build tool/mode/options, workload,
+  coverage, `spec-score` post step), priority, overrides. The choices are remembered per node in
+  the browser (kinds, presets and priority also seed other nodes); "reset form" clears them.
+- **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
+  problem log, cancel/relaunch/resubmit/unblock.
+- **Tasks**: priority column with ▲/▼, Capacity panel (run/build cores in use vs cap, editable).
+- **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
+  (`featx.yaml` editor, baselines, bin import), **Docs** (`docs/reference.md` by topic).
+- In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
+- Filters, checkboxes and leaderboard choices are remembered in the browser (`localStorage`, `featx.v1.*`).
+
+Everything the UI does also has a CLI form:
+
+```bash
+featx leaderboard [--metric pk.self.ipc_geomean] [--class KEY] [--node wpe/] [--best] [--all]
+featx config show [user|defaults|effective] ; featx config set retry.max_infra_attempts=4 ; featx config edit
+featx node mv SRC DST [--parents] --dry-run
+featx preview <path under $FEATX_ROOT or the worktree root> [--tail N]
+```
+
+The matching MCP tools are `leaderboard` and `config_get`.
+
+Frontend development (Node ≥ 18):
+
+```bash
+cd featx/web && npm ci
+npm run dev        # Vite on :5173, proxies the API to $FEATX_DEV_API (default a dev featxd on 127.0.0.1:8766)
+npm test           # vitest
+npm run build      # tsc + vite -> featx/web/dist (commit it; a running featxd picks it up)
+```
+
+## Failure handling
+
+Every failed job is classified by `featx/defaults/classify.yaml` (`$FEATX_ROOT/classify.yaml` overrides it).
+
+- **infra** (ssh 255, host down, OOM kill, stale heartbeat): retried automatically on another
+  host, at most `retry.max_infra_attempts` times. The scheduler kills the old attempt's leftover
+  processes (the whole session, including the emu under `timeout`). Each retry emits a `retry` event.
+- **design** (`TraceRTL Error at inst`, `Stuck`, `ABORT`, build `error:` ...): emits a `failure` event
+  with the signature and the last 80 log lines, plus `failure.json` in the job dir.
+  - `task relaunch` is refused until `problem-analysis.log` has an entry newer than the failure.
+  - Relaunches are limited by `retry.max_design_relaunches`. After that, a human must run
+    `featx task unblock`.
+
+## Post-processing plugins
+
+Manifests live in `featx/post/manifests/*.yaml`, or in `$FEATX_ROOT/plugins/` to extend without a
+code change. Each has a `cmd` template and default parameters (`with`), and must write
+`summary.json`. Built-in plugins:
+
+- `perf-keys`: formal-window IPC/counters vs baselines.
+- `collect`, `pair`, `diagnose`, `branch-mpki`: wrap the `spec_trace_compare/03_analysis` scripts
+  (`requires: [analysis_dir]`).
+- `spec-score`: the SPEC score as `perf_trigger --report` computes it (SPECxx/GHz, int/fp, @f GHz,
+  minimal coverage), optionally against baselines on the same points (`<label>.score_err_pct`).
+  Instruction counts come from the workload's `insts` json in `featx.yaml`. Add it with
+  `--set post.steps.spec-score.plugin=spec-score` or the Submit form checkbox.
+
+`featx compare <runset|baseline>...` runs `perf-keys` ad hoc.
+
+A step can also run its own command instead of a plugin, for example to call a node script:
+
+```yaml
+steps:
+  stats: {cmd: "bash ${scripts}/stats.sh ${run} ${out}", after: [pk]}   # must leave ${out}/summary.json
+```
+
+## Helper scripts
+
+Scripts saved on a node (UI scripts tab, `featx script write`, MCP `script_write`) live in
+`<node>/scripts/`. They are inherited like recipes: on submit, featx copies `$FEATX_ROOT/scripts`,
+then each ancestor's scripts, then the node's own into `<runset>/scripts/` (a later layer wins
+on a name clash). `${scripts}` in build, run and post recipes is that copy. So:
+
+- an inherited recipe still finds its parent's script;
+- the runset keeps the exact scripts it ran;
+- a relaunch refreshes the copy, so a script fix is picked up like a worktree fix.
+
+A build that uses `${scripts}` is cached by the scripts' content, so an unchanged rebuild still
+hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
+
+## MCP tools
+
+| Group | Tools |
+|---|---|
+| Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
+| Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `docs`, `script_write`, `script_read`, `worktree_create` |
+| Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel`, `task_priority` |
+| Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
+| Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |
+
+Expected errors (unknown node, refused relaunch, daemon down) come back to the model as tool
+errors with their message.
+
+## Storage
+
+`featx storage [--worktrees]` reports usage per node and for bincache.
+
+`featx gc [--build-dirs]` lists unreferenced bincache entries, trash and build dirs. It never
+touches anything referenced by an `experiment.yaml` or an active task. Pass `--apply` to delete.
+
+`featx node rm <node> -f` moves the subtree into `tree/.trash`. Add `--drop-worktrees` to also
+delete its worktrees (uncommitted diffs saved under `.trash/worktree-patches`), the featx branches
+that carry no commits beyond their base, old forwarding symlinks and empty dirs. Branches with their
+own commits are kept and reported unless you also pass `--drop-branches`.
+
+## Tests
+
+```bash
+.venv/bin/python -m pytest -q -p no:cacheprovider    # tmp data root; fake emu via real featx-exec
+```
+
+Fixes found while building and verifying featx are recorded in `problem-analysis.log`.
