@@ -4,6 +4,14 @@
 
 featx 是一个面向功能探索和实验任务的本地调度系统：它用树形结构管理 feature、代码上下文、构建、运行、日志和后处理，并通过 CLI、MCP 和 Web UI 与人和 AI 协作。
 
+- 主界面
+
+![](~/ui1.png)
+
+- 任务界面
+
+![](~/ui2.png)
+
 ## 安装方式
 
 ### Agent
@@ -11,7 +19,7 @@ featx 是一个面向功能探索和实验任务的本地调度系统：它用�
 可以直接告诉 Agent：
 
 ```text
-帮我配置这个项目。请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
+帮我配置这个项目 https://github.com/trace1729/featx.git 。请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
 ```
 
 Agent 通常会完成以下步骤：
@@ -64,6 +72,7 @@ featx daemon start
 ```
 
 Agent 可以通过 MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
+提交任务后，Agent 可使用 CLI的 featx wait 或者 MCP 的`task_wait` 等待任务完成，避免反复轮询任务状态。
 
 ### Manual
 
@@ -76,6 +85,7 @@ featx node add backend/rob/feature1 -p \
 featx recipe set backend/rob/feature1 run \
   workload=spec06 mode=exec
 featx submit backend/rob/feature1
+featx wait <task-id>                 # 事件驱动等待任务完成，不需要轮询
 ```
 
 查看任务和日志：
@@ -125,13 +135,13 @@ featx ui
 
 ### 工作方式
 
-1. 人或 Agent 明确实验目的、约束和预期结果。
+1. 人/Agent 明确实验目的、约束和预期结果。
 2. 创建 feature 节点，填写 hypothesis、recipe 和必要的上下文。
 3. Agent 根据约束在该节点的 worktree 中实现代码。
-4. 人或 Agent 审查代码和输入，确认实验内容。
-5. Agent 或人向 featx 提交 build、run、post 任务。
+4. 人/Agent 审查代码和输入，确认实验内容。
+5. Agent 向 featx 提交 build、run、post 任务。
 6. featxd 在可用主机上调度任务，保存日志和产物。
-7. 人或 Agent 查看结果，判断是否支持假设，并把结论记录在节点或 runset 中。
+7. 人/Agent 查看结果，判断是否支持假设，并把结论记录在节点或 runset 中。
 
 代码、脚本或参数发生变化时，应创建新的 derived runset；只进行基础设施重试时，可以保留在同一个 runset 中。
 
@@ -162,6 +172,7 @@ featx tree                           # 查看 feature 树和状态
 featx node add <path> --worktree     # 创建 feature 节点
 featx recipe set <path> run ...      # 设置运行 recipe
 featx submit <path>                  # 提交 build -> run -> post
+featx wait <task-id>                 # 等待任务完成，不轮询
 featx ps                             # 查看任务
 featx eta                            # 查看预计完成时间
 featx logs <task> -j <point> -f      # 跟踪任务日志
