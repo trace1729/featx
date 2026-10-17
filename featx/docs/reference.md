@@ -100,6 +100,13 @@ resolved from checkpoint sets without trace manifests. Enable trace explicitly w
 changing this setting. The nfs-share profile defaults `paths.dramsim3` to
 `${share}/ci-workloads/DRAMsim3` (with `build/`), with shared-path fallback.
 
+When trace is disabled, effective settings and recipe layers omit trace manifests,
+`trace_root`, `trace_file`, `commands.trace` and TraceRTL environment variables.
+The trace run defaults are loaded from `defaults/recipes/trace-run.yaml` only when enabled.
+Stored user and node layers retain their values so trace can be enabled again.
+Effective recipes can contain local paths from your private site, node overrides or
+`${paths.*}` expansion; `featx recipe show NODE run --explain` shows their source layers.
+
 | key | default | meaning |
 |---|---|---|
 | `tool` | `gsim` | `gsim` (two-step gsim build), `verilator` (`make emu`) or `script`. The legacy `type: gsim-two-step\|script` still works. |

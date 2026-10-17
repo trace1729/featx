@@ -1,0 +1,7 @@
+# Loaded only when trace_enabled is true.
+trace_root: null
+trace_file: ${trace_root}/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.trace.zstd
+commands:
+  trace: >-
+    ${emu} --no-diff --tracertl-file ${trace_file} -W ${W} -I ${I}
+    --dramsim3-outdir "$FX_TMP/dramsim3" --force-dump-result ${db_args} ${args}

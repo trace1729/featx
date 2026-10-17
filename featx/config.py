@@ -213,6 +213,23 @@ def _read_layer(path: Path) -> dict:
     return data
 
 
+def without_trace(kind: str, data: dict) -> dict:
+    """Remove TraceRTL-only settings from an effective config, preserving stored layers."""
+    data = copy.deepcopy(data)
+    if kind == "run":
+        trace_root = data.get("trace_root")
+        perf_trigger = data.get("perf_trigger")
+        if trace_root and isinstance(perf_trigger, dict) and perf_trigger.get("gcpt_path") == trace_root:
+            perf_trigger.pop("gcpt_path", None)
+        for key in ("trace_root", "trace_file"):
+            data.pop(key, None)
+        if isinstance(data.get("commands"), dict):
+            data["commands"].pop("trace", None)
+    if kind in ("build", "run") and isinstance(data.get("env"), dict):
+        data["env"] = {k: v for k, v in data["env"].items() if not k.startswith("TRACERTL_")}
+    return data
+
+
 @functools.lru_cache(maxsize=8)
 def _settings_for(root_str: str) -> dict:
     base = defaults()
@@ -234,6 +251,13 @@ def _settings_for(root_str: str) -> dict:
         recipe_defaults = base.setdefault("recipe_defaults", {})
         for kind in ("build", "run"):
             recipe_defaults.setdefault(kind, {})["mode"] = "exec"
+            recipe_defaults[kind] = without_trace(kind, recipe_defaults[kind])
+        for workload in (base.get("workloads") or {}).values():
+            if not isinstance(workload, dict):
+                continue
+            workload.pop("manifest", None)
+            if isinstance(workload.get("run"), dict):
+                workload["run"] = without_trace("run", workload["run"])
     paths = base.get("paths")
     if isinstance(paths, dict) and paths.get("nemu_diff") is None:
         nemu = repo_nemu((base.get("git") or {}).get("repo"))

@@ -199,7 +199,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         <span className="muted small">tool</span>
         {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
         <span className="muted small">mode</span>
-        {pick("mode", [["trace", "trace"], ["exec", "exec"]], build.mode, "TRACERTL_MODE; the run follows the build")}
+        {pick("mode", config.data?.effective.trace_enabled ? [["trace", "trace"], ["exec", "exec"]] : [["exec", "exec"]], build.mode, "TRACERTL_MODE; the run follows the build")}
         <span className="muted small">chiseldb</span>
         {pick("chiseldb", onOff, opts.chiseldb)}
         <span className="muted small">chiselmap</span>

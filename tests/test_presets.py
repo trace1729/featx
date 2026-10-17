@@ -103,7 +103,7 @@ def test_run_mode_follows_build(root):
 
 
 def _run_spec(**kw):
-    spec = store.read_yaml(config.DEFAULTS_DIR / "recipes" / "run.yaml")
+    spec = recipes._defaults("run")
     spec.update(kw)
     return presets.lower_run(spec, None)
 

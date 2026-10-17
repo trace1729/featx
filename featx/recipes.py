@@ -29,7 +29,13 @@ VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_.-]*)\}")
 
 
 def _defaults(kind: str) -> dict:
-    return store.read_yaml(config.DEFAULTS_DIR / "recipes" / f"{kind}.yaml", {}) or {}
+    data = store.read_yaml(config.DEFAULTS_DIR / "recipes" / f"{kind}.yaml", {}) or {}
+    if config.settings().get("trace_enabled", False):
+        if kind == "build":
+            data["mode"] = "trace"
+        elif kind == "run":
+            data = config.deep_merge(data, store.read_yaml(config.DEFAULTS_DIR / "recipes" / "trace-run.yaml", {}))
+    return data
 
 
 def layers(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -> list[tuple[str, dict]]:
@@ -57,6 +63,8 @@ def layers(tree: Tree, entry: Entry, kind: str, overrides: dict | None = None) -
         if merged.get("workload"):
             at = 2 if len(out) > 1 and out[1][0] == "recipe_defaults" else 1
             out.insert(at, (f"workload:{merged['workload']}", presets.workload_layer(merged["workload"])))
+    if not config.settings().get("trace_enabled", False):
+        out = [(src, config.without_trace(kind, data)) for src, data in out]
     return out
 
 

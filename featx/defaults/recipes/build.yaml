@@ -1,6 +1,6 @@
 # Build recipe defaults.
 tool: gsim           # gsim | verilator | script (the legacy `type: gsim-two-step|script` still works)
-mode: trace          # trace | exec -> TRACERTL_MODE=1|0; the run follows the build's mode
+mode: exec           # trace | exec -> TRACERTL_MODE=1|0; trace_enabled opts into trace defaults
 # Make switches for every make call of the build (featx/presets.py lowers them at submit).
 options:
   chiseldb: false    # WITH_CHISELDB (Chisel elaboration; gsim step 2 always links the DB bridge)

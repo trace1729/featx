@@ -320,6 +320,8 @@ def run_mode(spec: dict, build_spec: dict | None) -> str:
 def lower_run(spec: dict, build_spec: dict | None) -> dict:
     spec = copy.deepcopy(spec)
     spec["mode"] = run_mode(spec, build_spec)
+    if not config.settings().get("trace_enabled", False):
+        spec = config.without_trace("run", spec)
     if spec.get("workload"):
         workload(spec["workload"])
     _lower_checkpoint(spec)

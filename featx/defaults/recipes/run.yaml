@@ -1,21 +1,19 @@
 # Run recipe defaults. executor: points (featx places every point) | perf_trigger
 executor: points
 # mode: trace | exec. Unset = the build's mode (same submit, or the --bin runset's build);
-# trace when neither is known.
+# exec when neither is known (trace_enabled opts into trace defaults).
 mode: null
 # workload: a featx.yaml `workloads` name (spec06, spec17, spec26). Its run keys
-# (trace_root, checkpoint_file) sit below every recipe layer; with no points / points_file /
+# (e.g. checkpoint_file) sit below every recipe layer; with no points / points_file /
 # suite the run takes all of its points (`benchmarks` narrows them).
 workload: null
 emu: ${bin}                 # runset binary (build task output); or an absolute path
 W: 20000000
 I: 40000000
 args: ""                    # extra emu arguments
-env: {}                     # exported before the emu (e.g. TRACERTL_WP_MEM: future)
-trace_root: null            # the workload's (or recipe_defaults') trace dir
-trace_file: ${trace_root}/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.trace.zstd
+env: {}                     # environment variables exported before the emu
 # exec mode: a checkpoint set (featx ckpt list) gives the points and their images; without one,
-# checkpoint_file is the image of a point (${point.checkpoint} = the workload manifest's).
+# checkpoint_file is the image of a point (${point.checkpoint} = the checkpoint catalog's).
 checkpoint: null
 checkpoint_file: null
 exec:
@@ -36,9 +34,6 @@ timeout_hours: 72
 completion_marker: true     # rc 0 without a marker -> append "EXCEEDING CYCLE/INSTR LIMIT" (collector needs it)
 command: null               # a custom command line; null = commands[mode]
 commands:
-  trace: >-
-    ${emu} --no-diff --tracertl-file ${trace_file} -W ${W} -I ${I}
-    --dramsim3-outdir "$FX_TMP/dramsim3" --force-dump-result ${db_args} ${args}
   exec: >-
     ${emu} -i ${checkpoint_file} ${diff_args} ${restorer_args} -W ${W} -I ${I}
     --dramsim3-outdir "$FX_TMP/dramsim3" --force-dump-result ${db_args} ${args}
