@@ -254,37 +254,12 @@ async def events_wait(timeout: float = 300, types: list[str] | None = None, node
 @tool
 async def task_wait(tasks: list[str], timeout: float = 86400) -> dict:
     """Wait for task ids to reach a terminal state without polling. Returns the final task
-    views and any ids still pending after timeout. Failed or cancelled tasks are returned in
+    views, dependency-blocked tasks (including transitive dependencies), and any ids still
+    pending after timeout. Failed or cancelled tasks are returned in
     the result so the agent can inspect them before deciding whether to relaunch."""
-    ids = list(dict.fromkeys(tasks))
+    from .waiting import wait_tasks
     timeout = max(0.0, min(float(timeout), 86400.0))
-
-    def call():
-        import time
-        pending = set(ids)
-        finished: dict[str, dict] = {}
-        since = 0
-        deadline = time.time() + timeout
-        c = _c(timeout + 30)
-        while pending:
-            for tid in list(pending):
-                view = c.get(f"/tasks/{tid}", timeout=30)
-                if view.get("state") in {"succeeded", "failed", "cancelled"}:
-                    finished[tid] = view
-                    pending.remove(tid)
-            if not pending or timeout == 0:
-                break
-            left = deadline - time.time()
-            if left <= 0:
-                break
-            events = c.get("/events", since=since, unacked=False, task=",".join(sorted(pending)),
-                           types="task_done,failure,cancelled", wait=min(left, 3600), limit=100,
-                           timeout=min(left, 3600) + 30)
-            if events:
-                since = max(int(e.get("seq", 0)) for e in events)
-        return {"finished": finished, "pending": sorted(pending), "timed_out": bool(pending)}
-
-    return await anyio.to_thread.run_sync(call)
+    return await anyio.to_thread.run_sync(lambda: wait_tasks(_c(timeout + 30), tasks, timeout))
 
 
 @tool

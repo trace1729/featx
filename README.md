@@ -41,7 +41,7 @@ featx 是一个面向香山的功能探索和实验任务调度的系统：它�
 可以直接告诉 Agent：
 
 ```text
-帮我配置这个项目 (https://github.com/trace1729/featx.git) 请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd。
+帮我配置这个项目 (https://github.com/trace1729/featx.git) 请检查当前服务器上的仓库、工具链和共享数据路径，生成 featx 配置，运行 featx doctor，并启动 featxd, 如果缺少什么必要的输入提示我。
 ```
 
 Agent 通常会完成以下步骤：
@@ -77,6 +77,8 @@ featx daemon start
 
 安装完成后，可以用 `featx config show effective` 查看最终配置，用 `featx daemon status` 查看调度器状态。
 
+`featx init` 未指定 `--site` 时自动检测站点；`--site none` 禁用检测。共享存储挂载不同时，用 `featx config set share=/your/shared/mount` 调整路径。未配置 `paths.nemu_diff` 时使用代码仓库 `ready-to-run/` 下可用的 NEMU 参考库，设为空字符串可禁用 diff。常用分析脚本随包提供，`analysis_dir` 仅用于覆盖位置。
+
 ## 使用方式
 
 ### Agent
@@ -84,7 +86,7 @@ featx daemon start
 可以用自然语言描述目标，例如：
 
 ```text
-我要在香山上运行 SPEC06。请创建一个 feature 节点，使用 exec 模式构建，运行指定的 checkpoint，完成后执行后处理并汇总结果。
+我要在香山上运行 SPEC06。请创建一个 feature 节点，使用 exec 模式构建，运行指定的 checkpoint，完成后执行后处理并汇总结果，如果缺少什么必要的输入提示我。
 ```
 
 或者：
@@ -95,6 +97,8 @@ featx daemon start
 
 Agent 可以通过 CLI/ MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
 提交任务后，Agent 可使用 CLI 的 featx wait 或者 MCP 的`task_wait` 等待任务完成，避免反复轮询任务状态。
+
+`featx wait TASK1 TASK2 --timeout 3600` 可同时等待多个任务。上游 build 失败或取消时，run/post 会被报告为 `blocked`，不会一直等到超时，CLI 返回 1。全部成功返回 0。`--json` 和 MCP 返回 `finished`、`blocked`、`pending`、`timed_out`；`blocked` 中的 `failed_dependencies` 列出失败依赖。这不会改变调度器中的任务状态，也不会确认全局事件。`--timeout 0` 只检查一次。
 
 ### Manual
 

@@ -127,6 +127,27 @@ featx node set wpe/real/after --verdict supported --evidence wpe/real/after/2026
 `featx bin import <emu> -m label --mode trace|exec` to register one. `--point` picks points and
 `--set run.I=300000` overrides a recipe key.
 
+## wait — Waiting for tasks
+
+Use `featx wait TASK... --timeout 3600` or MCP `task_wait(tasks=[...], timeout=3600)`.
+The default timeout is 86400 seconds; zero checks status once. Event long polling
+watches the complete dependency chain: waiting for post alone also wakes when an
+upstream build fails or is cancelled.
+
+Results contain `finished` (terminal task views), `blocked` (queued tasks with
+failed/cancelled dependencies, with their IDs in `failed_dependencies`), `pending`
+(IDs still active at timeout), and `timed_out`. Blocked task views retain their
+actual scheduler state. Wait never changes tasks or acknowledges inbox events.
+A repaired pipeline can be waited on again after relaunch.
+
+The CLI exits 0 only when all requested tasks succeeded, otherwise 1.
+`--json` returns the same result structure as MCP. For general event monitoring,
+use `featx events --wait 600` / MCP `events_wait`.
+
+After upgrading the event endpoint, use `featx daemon stop` then
+`featx daemon start` and reconnect the MCP client. Running jobs are re-adopted
+on daemon startup.
+
 ## Reference and presets
 
 `featx/docs/reference.md` documents recipe keys, variables, point selection, reference forms and every

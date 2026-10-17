@@ -455,49 +455,28 @@ def events(since: int = 0, all_: bool = typer.Option(False, "-a", "--all", help=
         c.post("/events/ack", {"seqs": [e["seq"] for e in evs]})
 
 
-TERMINAL_TASK_STATES = {"succeeded", "failed", "cancelled"}
-
-
 @app.command()
 @guarded
 def wait(tasks: List[str] = typer.Argument(..., metavar="TASK...", help="task ids returned by featx submit"),
-         timeout: float = typer.Option(86400, "--timeout", help="maximum seconds to wait (0 = no wait)"),
+         timeout: float = typer.Option(86400, "--timeout", min=0, help="maximum seconds to wait (0 = no wait)"),
          as_json: bool = typer.Option(False, "--json")):
-    """Wait for one or more tasks without polling; exits nonzero if any task fails or is cancelled."""
-    c = client()
-    pending = set(tasks)
-    finished: dict[str, dict] = {}
-    since = 0
-    deadline = time.time() + max(0.0, timeout) if timeout else time.time()
-    while pending:
-        # Check once before blocking. This also handles tasks that finished before wait started.
-        for tid in list(pending):
-            view = c.get(f"/tasks/{tid}", timeout=30)
-            state = str(view.get("state", ""))
-            if state in TERMINAL_TASK_STATES:
-                finished[tid] = view
-                pending.remove(tid)
-        if not pending or timeout == 0:
-            break
-        left = deadline - time.time()
-        if left <= 0:
-            break
-        # The daemon blocks on its event condition and returns only events for these tasks.
-        evs = c.get("/events", since=since, unacked=False, task=",".join(sorted(pending)),
-                    types="task_done,failure,cancelled", wait=min(left, 3600), limit=100,
-                    timeout=min(left, 3600) + 30)
-        if evs:
-            since = max(since, max(int(e.get("seq", 0)) for e in evs))
+    """Wait on task events; failed dependencies return as blocked instead of timing out."""
+    from .waiting import wait_tasks
+    result = wait_tasks(client(), tasks, timeout)
     if as_json:
-        out({"finished": finished, "pending": sorted(pending), "timed_out": bool(pending)})
+        out(result)
     else:
         for tid in tasks:
-            view = finished.get(tid)
-            if view:
-                typer.echo(f"{tid} {view.get('state', '?')} {view.get('counts', {})}")
+            if tid in result["finished"]:
+                view = result["finished"][tid]
+                typer.echo(f"{tid} {view['state']} {view.get('counts', {})}")
+            elif tid in result["blocked"]:
+                deps = ', '.join(result['blocked'][tid]['failed_dependencies'])
+                typer.echo(f"{tid} blocked: failed dependencies: {deps}")
             else:
                 typer.echo(f"{tid} timeout")
-    if pending or any(str(v.get("state")) in {"failed", "cancelled"} for v in finished.values()):
+    if result["pending"] or result["blocked"] or any(
+            v["state"] != "succeeded" for v in result["finished"].values()):
         raise typer.Exit(1)
 
 

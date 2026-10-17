@@ -288,6 +288,27 @@ Shell environment of every job:
 workload. A workload without a reference fails the step with "no reference baseline". In that
 case set `with.reference` or `baselines` explicitly.
 
+## wait — Waiting for tasks
+
+Use `featx wait TASK... --timeout 3600` or MCP `task_wait(tasks=[...], timeout=3600)`.
+The default timeout is 86400 seconds; zero checks status once. Event long polling
+watches the complete dependency chain: waiting for post alone also wakes when an
+upstream build fails or is cancelled.
+
+Results contain `finished` (terminal task views), `blocked` (queued tasks with
+failed/cancelled dependencies, with their IDs in `failed_dependencies`), `pending`
+(IDs still active at timeout), and `timed_out`. Blocked task views retain their
+actual scheduler state. Wait never changes tasks or acknowledges inbox events.
+A repaired pipeline can be waited on again after relaunch.
+
+The CLI exits 0 only when all requested tasks succeeded, otherwise 1.
+`--json` returns the same result structure as MCP. For general event monitoring,
+use `featx events --wait 600` / MCP `events_wait`.
+
+After upgrading the event endpoint, use `featx daemon stop` then
+`featx daemon start` and reconnect the MCP client. Running jobs are re-adopted
+on daemon startup.
+
 ## plugins — Post plugins
 
 Manifests live in `featx/post/manifests/`, and `$FEATX_ROOT/plugins/` overrides or extends them.
