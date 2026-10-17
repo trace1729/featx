@@ -17,23 +17,24 @@ import typer
 import yaml
 
 from . import config, docs, files, leaderboard, service, store
+from .lang import tr
 from .client import ApiError, Client, DaemonDown, daemon_alive, daemon_info
 from .sched.eta import fmt_duration
 from .tree import Tree, TreeError
 
-app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
-node_app = typer.Typer(no_args_is_help=True, help="Feature-tree nodes (category/feature/subfeature).")
-recipe_app = typer.Typer(no_args_is_help=True, help="build/run/post recipes (inherited down the tree).")
-wt_app = typer.Typer(no_args_is_help=True, help="Per-node git worktrees.")
-task_app = typer.Typer(no_args_is_help=True, help="Scheduler tasks.")
-daemon_app = typer.Typer(no_args_is_help=True, help="featxd control.")
-log_app = typer.Typer(no_args_is_help=True, help="problem-analysis.log entries.")
-base_app = typer.Typer(no_args_is_help=True, help="Named baselines (reference result roots).")
-bin_app = typer.Typer(no_args_is_help=True, help="Binary cache.")
+app = typer.Typer(no_args_is_help=True, add_completion=False, help=tr("featx CLI"))
+node_app = typer.Typer(no_args_is_help=True, help=tr("Feature-tree nodes (category/feature/subfeature)."))
+recipe_app = typer.Typer(no_args_is_help=True, help=tr("build/run/post recipes (inherited down the tree)."))
+wt_app = typer.Typer(no_args_is_help=True, help=tr("Per-node git worktrees."))
+task_app = typer.Typer(no_args_is_help=True, help=tr("Scheduler tasks."))
+daemon_app = typer.Typer(no_args_is_help=True, help=tr("featxd control."))
+log_app = typer.Typer(no_args_is_help=True, help=tr("problem-analysis.log entries."))
+base_app = typer.Typer(no_args_is_help=True, help=tr("Named baselines (reference result roots)."))
+bin_app = typer.Typer(no_args_is_help=True, help=tr("Binary cache."))
 script_app = typer.Typer(no_args_is_help=True, help="Per-node helper scripts.")
-config_app = typer.Typer(no_args_is_help=True, help="featx.yaml (user layer over the package defaults).")
-plugin_app = typer.Typer(no_args_is_help=True, help="Post-processing plugins (manifests).")
-ckpt_app = typer.Typer(no_args_is_help=True, help="SimPoint checkpoint sets for exec runs (run.checkpoint).")
+config_app = typer.Typer(no_args_is_help=True, help=tr("featx.yaml (user layer over the package defaults)."))
+plugin_app = typer.Typer(no_args_is_help=True, help=tr("Post-processing plugins (manifests)."))
+ckpt_app = typer.Typer(no_args_is_help=True, help=tr("SimPoint checkpoint sets for exec runs (run.checkpoint)."))
 for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_app), ("task", task_app),
                   ("daemon", daemon_app), ("log", log_app), ("baseline", base_app), ("bin", bin_app),
                   ("script", script_app), ("config", config_app), ("plugin", plugin_app),
@@ -41,6 +42,15 @@ for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_ap
     app.add_typer(sub, name=name)
 
 KINDS = ("build", "run", "post")
+
+
+@app.callback()
+def global_options(lang: Optional[str] = typer.Option(None, "--lang", help="output language: en or zh")):
+    """Select the language for help and human-readable output."""
+    if lang:
+        if lang.lower() not in {"en", "zh"}:
+            raise typer.BadParameter("language must be en or zh")
+        os.environ["FEATX_LANG"] = lang.lower()
 
 
 def out(obj) -> None:
@@ -51,7 +61,7 @@ def out(obj) -> None:
 
 
 def fail(msg: str, code: int = 1):
-    typer.secho(f"featx: {msg}", fg=typer.colors.RED, err=True)
+    typer.secho(f"featx: {tr(msg)}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code)
 
 
@@ -330,7 +340,7 @@ def ps(all_: bool = typer.Option(False, "-a", "--all", help="include finished ta
         out(rows)
         return
     if not rows:
-        typer.echo("(no tasks)" if all_ else "(no active tasks; -a for all)")
+        typer.echo(tr("(no tasks)" if all_ else "(no active tasks; -a for all)"))
         return
     typer.echo(f"{'TASK':12s} {'KIND':5s} {'STATE':9s} {'JOBS':22s} {'PROG':>6s} {'ETA':>8s}  NODE/RUNSET")
     for r in rows:
@@ -445,6 +455,52 @@ def events(since: int = 0, all_: bool = typer.Option(False, "-a", "--all", help=
         c.post("/events/ack", {"seqs": [e["seq"] for e in evs]})
 
 
+TERMINAL_TASK_STATES = {"succeeded", "failed", "cancelled"}
+
+
+@app.command()
+@guarded
+def wait(tasks: List[str] = typer.Argument(..., metavar="TASK...", help="task ids returned by featx submit"),
+         timeout: float = typer.Option(86400, "--timeout", help="maximum seconds to wait (0 = no wait)"),
+         as_json: bool = typer.Option(False, "--json")):
+    """Wait for one or more tasks without polling; exits nonzero if any task fails or is cancelled."""
+    c = client()
+    pending = set(tasks)
+    finished: dict[str, dict] = {}
+    since = 0
+    deadline = time.time() + max(0.0, timeout) if timeout else time.time()
+    while pending:
+        # Check once before blocking. This also handles tasks that finished before wait started.
+        for tid in list(pending):
+            view = c.get(f"/tasks/{tid}", timeout=30)
+            state = str(view.get("state", ""))
+            if state in TERMINAL_TASK_STATES:
+                finished[tid] = view
+                pending.remove(tid)
+        if not pending or timeout == 0:
+            break
+        left = deadline - time.time()
+        if left <= 0:
+            break
+        # The daemon blocks on its event condition and returns only events for these tasks.
+        evs = c.get("/events", since=since, unacked=False, task=",".join(sorted(pending)),
+                    types="task_done,failure,cancelled", wait=min(left, 3600), limit=100,
+                    timeout=min(left, 3600) + 30)
+        if evs:
+            since = max(since, max(int(e.get("seq", 0)) for e in evs))
+    if as_json:
+        out({"finished": finished, "pending": sorted(pending), "timed_out": bool(pending)})
+    else:
+        for tid in tasks:
+            view = finished.get(tid)
+            if view:
+                typer.echo(f"{tid} {view.get('state', '?')} {view.get('counts', {})}")
+            else:
+                typer.echo(f"{tid} timeout")
+    if pending or any(str(v.get("state")) in {"failed", "cancelled"} for v in finished.values()):
+        raise typer.Exit(1)
+
+
 # ============================================================== problem log
 @log_app.command("append")
 @guarded
@@ -540,7 +596,7 @@ def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric",
         out(r)
         return
     if not r["metric"]:
-        typer.echo("no post summaries yet")
+        typer.echo(tr("no post summaries yet"))
         return
     typer.echo(f"metric {r['metric']} ({r['order']})")
     for c in r["classes"]:
@@ -554,7 +610,7 @@ def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric",
         typer.echo(f"{rank}  {row['value']:>12.4f}  {row['runset']:40s} {pts:>7s}  "
                    f"{row['verdict'] or '':10s} {row['purpose'] or ''}{flag}")
     if not r["rows"]:
-        typer.echo("no complete runset in this class (use -a to list incomplete ones)")
+        typer.echo(tr("no complete runset in this class (use -a to list incomplete ones)"))
     others = [m["name"] for m in r["metrics"] if m["name"] != r["metric"]]
     if others:
         typer.echo("\nother metrics: " + ", ".join(others))
@@ -575,11 +631,11 @@ def init(root: Optional[str] = typer.Option(None, "--root", help="data root (def
     """Create (or adopt) a data root: its featx.yaml, the root pointer and the API token."""
     from . import bootstrap
     r = bootstrap.init(root, site, repo, daemon_host, port, adopt, parse_kv(set_))
-    typer.echo(f"{'adopted' if r['adopted'] else 'created'} {r['root']}  (user layer {r['user_layer']})")
+    typer.echo(f"{tr('adopted' if r['adopted'] else 'created')} {r['root']}  (user layer {r['user_layer']})")
     typer.echo(yaml.safe_dump(r["written"], sort_keys=False).rstrip() if r["written"] else "(no keys changed)")
     if r["pointer"]:
         typer.echo(f"root pointer: {r['pointer']}")
-    typer.echo("\nnext:")
+    typer.echo("\n" + tr("next:"))
     for line in bootstrap.next_steps():
         typer.echo("  " + line)
 

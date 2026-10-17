@@ -290,9 +290,9 @@ def build_app(d: Daemon) -> "FastAPI":
     # ----------------------------------------------------------- events
     @app.get("/events")
     def events(since: int = 0, unacked: bool = True, types: str | None = None, node: str | None = None,
-               limit: int = 100, wait: float = 0.0):
+               task: str | None = None, limit: int = 100, wait: float = 0.0):
         q: dict[str, Any] = {"since": since, "unacked": unacked, "types": types.split(",") if types else None,
-                             "node_prefix": node, "limit": limit}
+                             "node_prefix": node, "task_ids": set(task.split(",")) if task else None, "limit": limit}
         if wait > 0:
             return d.inbox.wait(min(wait, 3600), **q)
         return d.inbox.query(**q)

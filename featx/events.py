@@ -29,7 +29,8 @@ class Inbox:
             return ev
 
     def query(self, since: int = 0, unacked: bool = True, types: list[str] | None = None,
-              node_prefix: str | None = None, limit: int = 100) -> list[dict]:
+              node_prefix: str | None = None, task_ids: set[str] | None = None,
+              limit: int = 100) -> list[dict]:
         out = []
         for ev in self.events:
             if ev["seq"] <= since:
@@ -39,6 +40,8 @@ class Inbox:
             if types and ev["type"] not in types:
                 continue
             if node_prefix and not str(ev.get("node", "")).startswith(node_prefix):
+                continue
+            if task_ids and str(ev.get("task", "")) not in task_ids:
                 continue
             out.append(dict(ev, acked=ev["seq"] in self.acked))
         return out[-limit:]
