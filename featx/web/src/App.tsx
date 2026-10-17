@@ -14,8 +14,10 @@ import { StoragePage } from "./pages/Storage";
 import { TasksPage } from "./pages/Tasks";
 import type { Health, HostRow, Status } from "./types";
 import { ago } from "./util";
+import { I18nProvider, LanguageToggle, useI18n } from "./i18n";
 
 function TopBar() {
+  const { t } = useI18n();
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.get<Health>("/health"), refetchInterval: 10000 });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.get<Status>("/status"), refetchInterval: 5000 });
   const hosts = useQuery({ queryKey: ["hosts"], queryFn: () => api.get<HostRow[]>("/hosts"), refetchInterval: 60000 });
@@ -26,12 +28,12 @@ function TopBar() {
     <div className="topbar">
       <span className="brand">featx</span>
       <nav>
-        <NavLink to="/leaderboard">Leaderboard</NavLink>
-        <NavLink to="/tasks">Tasks{s && s.tasks.running + s.tasks.queued > 0 ? ` (${s.tasks.running + s.tasks.queued})` : ""}</NavLink>
-        <NavLink to="/events">Events{s && s.unacked_events > 0 ? ` (${s.unacked_events})` : ""}</NavLink>
-        <NavLink to="/storage">Storage</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
-        <NavLink to="/docs">Docs</NavLink>
+        <NavLink to="/leaderboard">{t("Leaderboard")}</NavLink>
+        <NavLink to="/tasks">{t("Tasks")}{s && s.tasks.running + s.tasks.queued > 0 ? ` (${s.tasks.running + s.tasks.queued})` : ""}</NavLink>
+        <NavLink to="/events">{t("Events")}{s && s.unacked_events > 0 ? ` (${s.unacked_events})` : ""}</NavLink>
+        <NavLink to="/storage">{t("Storage")}</NavLink>
+        <NavLink to="/settings">{t("Settings")}</NavLink>
+        <NavLink to="/docs">{t("Docs")}</NavLink>
       </nav>
       <span className="spacer" />
       {status.error && <span className="badge failed">daemon unreachable</span>}
@@ -61,8 +63,9 @@ function TopBar() {
         </span>
       )}
       <button className="link" onClick={() => setToken("")}>
-        log out
+        {t("log out")}
       </button>
+      <LanguageToggle />
     </div>
   );
 }
@@ -70,29 +73,32 @@ function TopBar() {
 export function App() {
   const [token, setTok] = useState(getToken());
   useEffect(() => onTokenChange(() => setTok(getToken())), []);
-  if (!token) return <LoginPage />;
   return (
-    <div className="app">
-      <TopBar />
-      <div className="body">
-        <div className="sidebar">
-          <TreePanel />
+    <I18nProvider>
+      {!token ? <LoginPage /> : (
+        <div className="app">
+          <TopBar />
+          <div className="body">
+            <div className="sidebar">
+              <TreePanel />
+            </div>
+            <div className="main">
+              <Routes>
+                <Route path="/" element={<Navigate to="/leaderboard" replace />} />
+                <Route path="/leaderboard" element={<LeaderboardPage />} />
+                <Route path="/node/*" element={<NodePage />} />
+                <Route path="/runset/*" element={<RunsetPage />} />
+                <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/events" element={<EventsPage />} />
+                <Route path="/storage" element={<StoragePage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/docs/*" element={<DocsPage />} />
+                <Route path="*" element={<div className="muted">no such page</div>} />
+              </Routes>
+            </div>
+          </div>
         </div>
-        <div className="main">
-          <Routes>
-            <Route path="/" element={<Navigate to="/leaderboard" replace />} />
-            <Route path="/leaderboard" element={<LeaderboardPage />} />
-            <Route path="/node/*" element={<NodePage />} />
-            <Route path="/runset/*" element={<RunsetPage />} />
-            <Route path="/tasks" element={<TasksPage />} />
-            <Route path="/events" element={<EventsPage />} />
-            <Route path="/storage" element={<StoragePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/docs/*" element={<DocsPage />} />
-            <Route path="*" element={<div className="muted">no such page</div>} />
-          </Routes>
-        </div>
-      </div>
-    </div>
+      )}
+    </I18nProvider>
   );
 }

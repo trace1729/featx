@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { probeToken, setToken } from "../api";
 import { ErrorBox, useAction } from "../components/ui";
+import { LanguageToggle, useI18n } from "../i18n";
 
 export function LoginPage() {
+  const { t } = useI18n();
   const [value, setValue] = useState("");
   const [tokenFile, setTokenFile] = useState("~/.config/featx/token");
   useEffect(() => {
@@ -22,7 +24,7 @@ export function LoginPage() {
     <div className="login card">
       <h1>featx</h1>
       <p className="muted">
-        Paste the featxd token. On the daemon host: <code>cat {tokenFile}</code>
+        {t("Paste the featxd token.")} On the daemon host: <code>cat {tokenFile}</code>
       </p>
       <form
         className="row"
@@ -31,11 +33,12 @@ export function LoginPage() {
           void submit();
         }}
       >
-        <input type="password" autoFocus placeholder="token" style={{ flex: 1 }} value={value} onChange={(e) => setValue(e.target.value)} />
+        <input type="password" autoFocus placeholder={t("token")} style={{ flex: 1 }} value={value} onChange={(e) => setValue(e.target.value)} />
         <button className="primary" disabled={!value.trim() || act.busy}>
-          Log in
+          {t("Log in")}
         </button>
       </form>
+      <LanguageToggle />
       <ErrorBox error={act.error} />
     </div>
   );

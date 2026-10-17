@@ -27,6 +27,8 @@ button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.danger { color: var(--bad); border-color: var(--bad); }
 button.link { border: 0; background: none; padding: 0; color: var(--accent); }
+.language-toggle { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; }
+.language-toggle .active { font-weight: 700; text-decoration: underline; }
 input[type=text], input[type=password], input[type=number], select, textarea {
   background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; }
 textarea { width: 100%; font-family: var(--mono); font-size: 12px; }

@@ -8,6 +8,7 @@ import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAct
 import type { JobView, RunsetSummary, TaskView } from "../types";
 import { countsText, fmtCount, fmtTime, fmtValue, splitRunset } from "../util";
 import { PriorityControl } from "./Tasks";
+import { useI18n } from "../i18n";
 
 const ACTIVE = ["queued", "running", "launching"];
 const TABS = ["jobs", "post", "files", "problem log", "provenance"] as const;
@@ -20,6 +21,7 @@ function jobPct(job: JobView, target?: number): number | null {
 }
 
 function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; onJob: (j: string) => void }) {
+  const { t } = useI18n();
   const jobs = task.jobs ?? [];
   const wrap = useRef<HTMLDivElement>(null);
   // A campaign has ~1000 jobs: the table scrolls in its own box (header kept visible) so the
@@ -34,7 +36,7 @@ function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; o
       box.scrollTop = row.offsetTop - head - (box.clientHeight - head) / 2;
     }
   }, [job, jobs.length]);
-  if (!jobs.length) return <div className="muted">this task has no per-point jobs.</div>;
+  if (!jobs.length) return <div className="muted">{t("this task has no per-point jobs.")}</div>;
   return (
     <div className="table-wrap jobs-wrap" ref={wrap} data-testid="jobs-scroll">
       <table>
@@ -91,6 +93,7 @@ function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; o
 }
 
 function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const act = useAction();
   const [msg, setMsg] = useState<string | null>(null);
@@ -106,13 +109,13 @@ function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
     <div>
       <div className="row">
         <button disabled={!ACTIVE.includes(task.state) || act.busy} onClick={() => call("cancel")}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button disabled={!canRelaunch || act.busy} onClick={() => call("relaunch")} title="re-queue failed/cancelled jobs in this runset">
-          Relaunch failed
+          {t("Relaunch failed")}
         </button>
         <button disabled={ACTIVE.includes(task.state) || act.busy} onClick={() => call("resubmit")} title="new derived runset with re-resolved recipes">
-          Resubmit…
+          {t("Resubmit…")}
         </button>
         {task.blocked && (
           <button className="danger" disabled={act.busy} onClick={() => call("unblock", { extra: 1 })}>
@@ -173,6 +176,7 @@ function PostTab({ rs }: { rs: RunsetSummary }) {
 }
 
 function ProblemLogTab({ rs, task }: { rs: RunsetSummary; task?: TaskView }) {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const act = useAction();
   const [problem, setProblem] = useState("");
@@ -192,19 +196,19 @@ function ProblemLogTab({ rs, task }: { rs: RunsetSummary; task?: TaskView }) {
   return (
     <div>
       {rs.problem_log_tail ? <FileView key={n} path={path} /> : <div className="muted">no entries yet.</div>}
-      <h3>Append an entry</h3>
+      <h3>{t("Append an entry")}</h3>
       <p className="muted small">A design failure can only be relaunched after an entry newer than the failure (featx log append {rs.ref} -p … -s …).</p>
       <div className="form">
-        <label>problem</label>
-        <textarea rows={3} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="what failed and the evidence for the suspected cause" />
-        <label>solution</label>
-        <textarea rows={3} value={solution} onChange={(e) => setSolution(e.target.value)} placeholder="what was changed" />
-        <label>code</label>
-        <textarea rows={3} value={code} onChange={(e) => setCode(e.target.value)} placeholder="how the code change solves it (optional)" />
+        <label>{t("problem")}</label>
+        <textarea rows={3} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder={t("what failed and the evidence for the suspected cause")} />
+        <label>{t("solution")}</label>
+        <textarea rows={3} value={solution} onChange={(e) => setSolution(e.target.value)} placeholder={t("what was changed")} />
+        <label>{t("code")}</label>
+        <textarea rows={3} value={code} onChange={(e) => setCode(e.target.value)} placeholder={t("how the code change solves it (optional)")} />
         <span />
         <div>
           <button className="primary" disabled={!problem.trim() || !solution.trim() || act.busy} onClick={append}>
-            Append
+            {t("Append")}
           </button>
           <ErrorBox error={act.error} />
         </div>

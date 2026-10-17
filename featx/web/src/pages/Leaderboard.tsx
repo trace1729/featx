@@ -5,12 +5,14 @@ import { api } from "../api";
 import { Badge, ErrorBox, Loading, VerdictMark } from "../components/ui";
 import type { Board } from "../types";
 import { fmtTime, fmtValue, loadStored, metricLabel, saveStored } from "../util";
+import { useI18n } from "../i18n";
 
 // the board's choices (metric, class, order, checkboxes) live in the URL; the last ones are
 // remembered and restored when the page is opened without any
 const REMEMBERED = ["metric", "cls", "order", "best", "all"];
 
 export function LeaderboardPage() {
+  const { t } = useI18n();
   const [sp, setSp] = useSearchParams();
   const nav = useNavigate();
   const set = (key: string, value: string | null) => {
@@ -45,13 +47,13 @@ export function LeaderboardPage() {
     refetchInterval: 15000,
     placeholderData: keepPreviousData,
   });
-  if (q.isLoading) return <Loading what="leaderboard" />;
+  if (q.isLoading) return <Loading what={t("Leaderboard")} />;
   if (q.error) return <ErrorBox error={q.error} />;
   const b = q.data!;
   if (!b.metric) {
     return (
       <div>
-        <h1>Leaderboard</h1>
+        <h1>{t("Leaderboard")}</h1>
         <p className="muted">No runset has a post-processing summary yet. Submit a node with a post recipe (for example the perf-keys plugin).</p>
       </div>
     );
@@ -60,9 +62,9 @@ export function LeaderboardPage() {
   const max = Math.max(...b.rows.map((r) => Math.abs(r.value)), 1e-12);
   return (
     <div>
-      <h1>Leaderboard</h1>
+      <h1>{t("Leaderboard")}</h1>
       <div className="card row">
-        <label>metric</label>
+        <label>{t("metric")}</label>
         <select value={b.metric} onChange={(e) => set("metric", e.target.value)}>
           {b.metrics.map((m) => (
             <option key={m.name} value={m.name}>
@@ -70,7 +72,7 @@ export function LeaderboardPage() {
             </option>
           ))}
         </select>
-        <label>class</label>
+        <label>{t("class")}</label>
         <select value={b.class ?? ""} onChange={(e) => set("cls", e.target.value)}>
           {b.classes.map((c) => (
             <option key={c.key} value={c.key}>
@@ -79,13 +81,13 @@ export function LeaderboardPage() {
           ))}
         </select>
         <button onClick={() => set("order", b.order === "asc" ? "desc" : "asc")} title="sort order">
-          {b.order === "asc" ? "lowest first ▴" : "highest first ▾"}
+          {t(b.order === "asc" ? "lowest first ▴" : "highest first ▾")}
         </button>
         <label>
-          <input type="checkbox" checked={params.best_per_node} onChange={(e) => set("best", e.target.checked ? "1" : null)} /> best per node
+          <input type="checkbox" checked={params.best_per_node} onChange={(e) => set("best", e.target.checked ? "1" : null)} /> {t("best per node")}
         </label>
         <label>
-          <input type="checkbox" checked={params.include_incomplete} onChange={(e) => set("all", e.target.checked ? "1" : null)} /> show incomplete
+          <input type="checkbox" checked={params.include_incomplete} onChange={(e) => set("all", e.target.checked ? "1" : null)} /> {t("show incomplete")}
         </label>
         {params.node && (
           <span className="chip">

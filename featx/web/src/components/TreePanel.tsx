@@ -6,6 +6,7 @@ import type { TreeRow } from "../types";
 import { buildTree, fmtDuration, usePersistentState, type TreeNode } from "../util";
 import { AddNodeDialog, MoveDialog } from "./NodeDialogs";
 import { Badge, ErrorBox, VerdictMark } from "./ui";
+import { useI18n } from "../i18n";
 
 function stage(row: TreeRow): { text: string; state: string } | null {
   const kinds = Object.keys(row.tasks);
@@ -74,6 +75,7 @@ function Row({ node, depth, selected, collapsed, toggle, onDropOn }: {
 }
 
 export function TreePanel() {
+  const { t } = useI18n();
   const loc = useLocation();
   const nav = useNavigate();
   const tree = useQuery({ queryKey: ["tree"], queryFn: () => api.get<TreeRow[]>("/tree"), refetchInterval: 5000 });
@@ -105,8 +107,8 @@ export function TreePanel() {
       }}
     >
       <div className="tree-tools">
-        <input type="text" placeholder="filter nodes" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        <button title="add a category" onClick={() => setAdding(true)}>
+        <input type="text" placeholder={t("filter nodes")} value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <button title={t("add a category")} onClick={() => setAdding(true)}>
           +
         </button>
       </div>
@@ -114,7 +116,7 @@ export function TreePanel() {
       {roots.map((n) => (
         <Row key={n.row.path} node={n} depth={0} selected={selected} collapsed={collapsed} toggle={toggle} onDropOn={(src, target) => setMove({ src, dst: `${target}/${base(src)}` })} />
       ))}
-      {!tree.isLoading && !rows.length && <div className="muted" style={{ padding: 8 }}>no nodes yet: add a category</div>}
+      {!tree.isLoading && !rows.length && <div className="muted" style={{ padding: 8 }}>{t("no nodes yet: add a category")}</div>}
       <div className="muted small" style={{ padding: "10px 6px" }}>
         Drag a node onto another to move it (a dry run is shown first).
       </div>

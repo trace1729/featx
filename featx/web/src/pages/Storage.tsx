@@ -5,8 +5,10 @@ import { api } from "../api";
 import { Dialog, ErrorBox, Loading, useAction } from "../components/ui";
 import type { GcReport, StorageReport } from "../types";
 import { fmtBytes } from "../util";
+import { useI18n } from "../i18n";
 
 export function StoragePage() {
+  const { t } = useI18n();
   const [worktrees, setWorktrees] = useState(false);
   const [buildDirs, setBuildDirs] = useState(false);
   const [gc, setGc] = useState<GcReport | null>(null);
@@ -21,20 +23,20 @@ export function StoragePage() {
       setConfirm(false);
       if (apply) await qc.invalidateQueries({ queryKey: ["storage"] });
     });
-  if (q.isLoading) return <Loading what="storage report (sizes every node)" />;
+  if (q.isLoading) return <Loading what={t("Storage")} />;
   if (q.error) return <ErrorBox error={q.error} />;
   const r = q.data!;
   const max = Math.max(...r.nodes.map((n) => n.bytes), ...r.bincache.map((b) => b.bytes), 1);
   return (
     <div>
-      <h1>Storage</h1>
+      <h1>{t("Storage")}</h1>
       <p className="muted mono">
         {r.root} · {r.total_human}
       </p>
       <label>
         <input type="checkbox" checked={worktrees} onChange={(e) => setWorktrees(e.target.checked)} /> also size the worktrees (slow)
       </label>
-      <h2>Nodes</h2>
+      <h2>{t("Nodes")}</h2>
       <table>
         <thead>
           <tr>
@@ -61,7 +63,7 @@ export function StoragePage() {
           ))}
         </tbody>
       </table>
-      <h2>Binary cache</h2>
+      <h2>{t("Binary cache")}</h2>
       {r.bincache.length === 0 ? (
         <div className="muted">empty</div>
       ) : (
@@ -86,7 +88,7 @@ export function StoragePage() {
           </tbody>
         </table>
       )}
-      <h2>Trash</h2>
+      <h2>{t("Trash")}</h2>
       {r.trash.length === 0 ? (
         <div className="muted">empty</div>
       ) : (
@@ -103,13 +105,13 @@ export function StoragePage() {
       )}
       <p className="muted">compare/collect-cache: {fmtBytes(r.collect_cache_bytes)}</p>
 
-      <h2>Garbage collection</h2>
+      <h2>{t("Garbage collection")}</h2>
       <div className="row">
         <label>
           <input type="checkbox" checked={buildDirs} onChange={(e) => setBuildDirs(e.target.checked)} /> include worktree build/ dirs of done or abandoned nodes
         </label>
         <button disabled={act.busy} onClick={() => runGc(false)}>
-          Dry run
+          {t("Dry run")}
         </button>
       </div>
       <ErrorBox error={act.error} />
@@ -132,20 +134,20 @@ export function StoragePage() {
           {!gc.applied && gc.candidates.length > 0 && (
             <div className="dialog-actions">
               <button className="danger" onClick={() => setConfirm(true)}>
-                Delete these…
+                {t("Delete these…")}
               </button>
             </div>
           )}
         </div>
       )}
-      <Dialog open={confirm} onClose={() => setConfirm(false)} title="Delete permanently?">
+      <Dialog open={confirm} onClose={() => setConfirm(false)} title={t("Delete permanently?")}>
         <p>
           {gc?.candidates.length} item(s), {gc?.total_human}. This cannot be undone.
         </p>
         <div className="dialog-actions">
-          <button onClick={() => setConfirm(false)}>Cancel</button>
+          <button onClick={() => setConfirm(false)}>{t("Cancel")}</button>
           <button className="danger" disabled={act.busy} onClick={() => runGc(true)}>
-            Delete
+            {t("Delete")}
           </button>
         </div>
       </Dialog>

@@ -4,8 +4,10 @@ import { api } from "../api";
 import { Badge, ErrorBox, Loading, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
 import type { Baselines, CheckpointSet, ConfigView, DoctorReport } from "../types";
+import { useI18n } from "../i18n";
 
 function ConfigEditor() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["config"], queryFn: () => api.get<ConfigView>("/config"), staleTime: Infinity });
   const [text, setText] = useState<string | null>(null);
@@ -49,7 +51,7 @@ function ConfigEditor() {
       )}
       <div className="row">
         <button className="primary" disabled={act.busy || text === c.user_text} onClick={save}>
-          Save
+          {t("Save")}
         </button>
         <button
           disabled={text === c.user_text}
@@ -58,7 +60,7 @@ function ConfigEditor() {
             act.clear();
           }}
         >
-          Revert
+          {t("Revert")}
         </button>
       </div>
     </div>
@@ -66,6 +68,7 @@ function ConfigEditor() {
 }
 
 function BaselinesCard() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["baselines"], queryFn: () => api.get<Baselines>("/baselines") });
   const [form, setForm] = useState({ name: "", root: "", description: "", binary: "" });
@@ -132,7 +135,7 @@ function BaselinesCard() {
         {field("description", "description", 220)}
         {field("binary", "binary (optional)", 220)}
         <button disabled={!form.name || !form.root || act.busy} onClick={add}>
-          Add baseline
+          {t("Add baseline")}
         </button>
       </div>
       <ErrorBox error={act.error} />
@@ -142,6 +145,7 @@ function BaselinesCard() {
 }
 
 function BinImportCard() {
+  const { t } = useI18n();
   const [path, setPath] = useState("");
   const [label, setLabel] = useState("");
   const [mode, setMode] = useState("");
@@ -158,7 +162,7 @@ function BinImportCard() {
           <option value="exec">exec</option>
         </select>
         <button disabled={!path || act.busy} onClick={() => act.run(async () => setRes(await api.post("/bins/import", { path, label, mode: mode || undefined })))}>
-          {act.busy ? "Copying…" : "Import"}
+          {act.busy ? t("Copying…") : t("Import")}
         </button>
       </div>
       <ErrorBox error={act.error} />
@@ -175,6 +179,7 @@ const CHECK_BADGE: Record<string, string> = { ok: "succeeded", warn: "warn", fai
 
 /** featx doctor: what the configuration points at, and whether the hosts see the install. */
 function DoctorCard() {
+  const { t } = useI18n();
   const [ssh, setSsh] = useState(false);
   const q = useQuery({ queryKey: ["doctor", ssh], queryFn: () => api.get<DoctorReport>("/doctor", { ssh }), staleTime: 60000 });
   return (
@@ -186,7 +191,7 @@ function DoctorCard() {
           </span>
         )}
         <button disabled={q.isFetching} onClick={() => (ssh ? q.refetch() : setSsh(true))} title="also ssh to every host (slow)">
-          {q.isFetching ? "Checking…" : ssh ? "Recheck with hosts" : "Check hosts too"}
+          {q.isFetching ? t("Checking…") : ssh ? "Recheck with hosts" : "Check hosts too"}
         </button>
         <span className="muted small">same as: featx doctor{ssh ? "" : " --no-ssh"}</span>
       </div>
@@ -214,6 +219,7 @@ function DoctorCard() {
 
 /** The SimPoint checkpoint sets under checkpoints.roots (run.checkpoint of exec runs). */
 function CheckpointsCard() {
+  const { t } = useI18n();
   const [all, setAll] = useState(false);
   const [refresh, setRefresh] = useState(false);
   const q = useQuery({ queryKey: ["checkpoints", refresh], queryFn: () => api.get<CheckpointSet[]>("/checkpoints", refresh ? { refresh } : undefined), staleTime: 300000 });
@@ -225,7 +231,7 @@ function CheckpointsCard() {
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> also multi-hart / broken sets
         </label>
         <button disabled={q.isFetching} onClick={() => (refresh ? q.refetch() : setRefresh(true))} title="rebuild every set's cached index (featx ckpt rescan)">
-          {q.isFetching ? "Scanning…" : "Rescan"}
+          {q.isFetching ? t("Scanning…") : t("Rescan")}
         </button>
         <span className="muted small">exec runs pick one with run.checkpoint (submit tab, mode exec)</span>
       </div>
@@ -272,18 +278,19 @@ function CheckpointsCard() {
 }
 
 export function SettingsPage() {
+  const { t } = useI18n();
   return (
     <div>
-      <h1>Settings</h1>
-      <h2>featx.yaml</h2>
+      <h1>{t("Settings")}</h1>
+      <h2>{t("featx.yaml")}</h2>
       <ConfigEditor />
-      <h2>Doctor</h2>
+      <h2>{t("Doctor")}</h2>
       <DoctorCard />
-      <h2>Baselines</h2>
+      <h2>{t("Baselines")}</h2>
       <BaselinesCard />
-      <h2>Checkpoint sets</h2>
+      <h2>{t("Checkpoint sets")}</h2>
       <CheckpointsCard />
-      <h2>Import a binary into the cache</h2>
+      <h2>{t("Import a binary into the cache")}</h2>
       <BinImportCard />
     </div>
   );

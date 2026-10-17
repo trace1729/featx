@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Badge, ErrorBox, Loading, useAction } from "../components/ui";
 import type { EventRow } from "../types";
 import { fmtTime } from "../util";
+import { useI18n } from "../i18n";
 
 const TYPES = ["failure", "retry", "budget_exhausted", "task_done", "runset_done", "submitted", "relaunched", "cancelled"];
 
@@ -21,6 +22,7 @@ function detail(e: EventRow): string {
 }
 
 export function EventsPage() {
+  const { t } = useI18n();
   const [showAcked, setShowAcked] = useState(false);
   const [types, setTypes] = useState<string[]>([]);
   const [open, setOpen] = useState<number | null>(null);
@@ -39,7 +41,7 @@ export function EventsPage() {
   const rows = [...(q.data ?? [])].sort((a, b) => b.seq - a.seq);
   return (
     <div>
-      <h1>Events</h1>
+      <h1>{t("Events")}</h1>
       <div className="card row">
         {TYPES.map((t) => (
           <label key={t}>
@@ -47,18 +49,18 @@ export function EventsPage() {
           </label>
         ))}
         <label>
-          <input type="checkbox" checked={showAcked} onChange={(e) => setShowAcked(e.target.checked)} /> include acknowledged
+          <input type="checkbox" checked={showAcked} onChange={(e) => setShowAcked(e.target.checked)} /> {t("include acknowledged")}
         </label>
         <span style={{ flex: 1 }} />
         <button disabled={!rows.some((r) => !r.acked) || act.busy} onClick={() => ack({ seqs: rows.filter((r) => !r.acked).map((r) => r.seq) })}>
-          Acknowledge all shown
+          {t("Acknowledge all shown")}
         </button>
       </div>
       <ErrorBox error={q.error ?? act.error} />
       {q.isLoading ? (
         <Loading what="events" />
       ) : rows.length === 0 ? (
-        <div className="muted">no events</div>
+        <div className="muted">{t("no events")}</div>
       ) : (
         <table>
           <thead>

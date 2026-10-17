@@ -5,6 +5,7 @@ import { api } from "../api";
 import { ErrorBox, Eta, Loading, Progress, StateBadge, useAction } from "../components/ui";
 import type { HostRow, Status, TaskView } from "../types";
 import { countsText, fmtTime, usePersistentState } from "../util";
+import { useI18n } from "../i18n";
 
 const ACTIVE = ["queued", "running", "launching"];
 
@@ -47,6 +48,7 @@ export function PriorityControl({ task }: { task: TaskView }) {
 }
 
 function CapField({ label, used, cap, keyName, onSaved }: { label: string; used: number; cap: number; keyName: string; onSaved: () => void }) {
+  const { t } = useI18n();
   const act = useAction();
   const [text, setText] = useState(String(cap));
   useEffect(() => setText(String(cap)), [cap]);
@@ -67,7 +69,7 @@ function CapField({ label, used, cap, keyName, onSaved }: { label: string; used:
       </div>
       <input type="text" className="mono cap-input" aria-label={`${keyName}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && valid && save()} />
       <button disabled={!valid || Number(text) === cap || act.busy} onClick={save}>
-        Set
+        {t("Set")}
       </button>
       <span className="muted small mono">{keyName} (0 = no cap)</span>
       <ErrorBox error={act.error} />
@@ -138,11 +140,12 @@ export function TaskTable({ tasks }: { tasks: TaskView[] }) {
 }
 
 export function TasksPage() {
+  const { t } = useI18n();
   const q = useQuery({ queryKey: ["tasks", "all"], queryFn: () => api.get<TaskView[]>("/tasks", { limit: 200 }), refetchInterval: 5000 });
   const hosts = useQuery({ queryKey: ["hosts"], queryFn: () => api.get<HostRow[]>("/hosts"), refetchInterval: 60000 });
   const [showDone, setShowDone] = usePersistentState("tasks:showFinished", true);
   const [filter, setFilter] = usePersistentState("tasks:filter", "");
-  if (q.isLoading) return <Loading what="tasks" />;
+  if (q.isLoading) return <Loading what={t("Tasks")} />;
   const all = q.data ?? [];
   const f = filter.trim();
   const mine = (t: TaskView) => !f || t.node.includes(f) || t.runset.includes(f) || t.id.includes(f);
@@ -153,25 +156,25 @@ export function TasksPage() {
   active.sort(order);
   return (
     <div>
-      <h1>Tasks</h1>
+      <h1>{t("Tasks")}</h1>
       <ErrorBox error={q.error} />
-      <h2>Capacity</h2>
+      <h2>{t("Capacity")}</h2>
       <CapacityPanel />
       <div className="row">
-        <input type="text" placeholder="filter by node / runset / task id" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <input type="text" placeholder={t("filter by node / runset / task id")} value={filter} onChange={(e) => setFilter(e.target.value)} />
         <label>
-          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> show finished
+          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> {t("show finished")}
         </label>
       </div>
-      <h2>Active ({active.length})</h2>
+      <h2>{t("Active")} ({active.length})</h2>
       <TaskTable tasks={active} />
       {showDone && (
         <>
-          <h2>Finished ({done.length})</h2>
+          <h2>{t("Finished")} ({done.length})</h2>
           <TaskTable tasks={done.slice(0, 100)} />
         </>
       )}
-      <h2>Hosts</h2>
+      <h2>{t("Hosts")}</h2>
       <table>
         <thead>
           <tr>

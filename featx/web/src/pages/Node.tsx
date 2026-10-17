@@ -10,6 +10,7 @@ import { YamlEditor } from "../components/YamlEditor";
 import type { CheckpointSet, ConfigView, NodeContext, RunsetSummary } from "../types";
 import { NO_PRESETS, checkpointGroups, deepMerge, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
+import { useI18n } from "../i18n";
 
 const VERDICTS = ["open", "supported", "refuted", "inconclusive"];
 const STATUSES = ["active", "parked", "done", "abandoned"];
@@ -105,6 +106,7 @@ function initialForm(): SubmitForm {
 }
 
 function SubmitTab({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const nav = useNavigate();
   const qc = useQueryClient();
   const act = useAction();
@@ -179,7 +181,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
     });
   return (
     <div className="form">
-      <label>stages</label>
+      <label>{t("stages")}</label>
       <div className="row">
         {KINDS.map((k) => (
           <label key={k}>
@@ -188,11 +190,11 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         ))}
         {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">without build the run recipe's emu (or --bin) is used</span>}
         <span className="spacer" />
-        <button className="link small" title="forget this node's remembered form" onClick={() => setForm({ ...EMPTY_FORM })}>
-          reset form
+        <button className="link small" title={t("reset form")} onClick={() => setForm({ ...EMPTY_FORM })}>
+          {t("reset form")}
         </button>
       </div>
-      <label>build</label>
+      <label>{t("build")}</label>
       <div className="row">
         <span className="muted small">tool</span>
         {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
@@ -203,9 +205,9 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         <span className="muted small">chiselmap</span>
         {pick("chiselmap", onOff, opts.chiselmap, "WITH_CHISELMAP=1 (placeholder: no Makefile reads it yet)")}
       </div>
-      <label>run</label>
+      <label>{t("run")}</label>
       <div className="row">
-        <span className="muted small">workload</span>
+        <span className="muted small">{t("workload")}</span>
         {pick(
           "workload",
           workloads.map(([name, w]) => [name, w.description ? `${name} — ${w.description}` : name]),
@@ -214,7 +216,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         )}
         {showCheckpoint && (
           <>
-            <span className="muted small">checkpoint</span>
+            <span className="muted small">{t("checkpoint")}</span>
             <select
               value={quick.checkpoint}
               title={`exec runs: the SimPoint checkpoint set (run.checkpoint)${wlSpec ? `; spec${wlSpec} sets only, as the workload is ${wlName}` : ""}`}
@@ -238,7 +240,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
             </Link>
           </>
         )}
-        <span className="muted small">coverage</span>
+        <span className="muted small">{t("coverage")}</span>
         <select
           value={customCoverage ? "custom" : quick.coverage}
           title="per benchmark, the heaviest points until their weights sum to c (0.3 = the -0.3c configs)"
@@ -263,7 +265,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
           keys
         </Link>
       </div>
-      <label>post</label>
+      <label>{t("post")}</label>
       <div className="row">
         <label title="SPEC score as perf_trigger --report computes it (spec-score plugin)">
           <input type="checkbox" checked={inheritedSpecScore || quick.specScore === "on"} disabled={inheritedSpecScore} onChange={(e) => setQuick({ ...quick, specScore: e.target.checked ? "on" : "" })} /> spec-score
@@ -273,20 +275,20 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
           plugins
         </Link>
       </div>
-      <label>priority</label>
+      <label>{t("priority")}</label>
       <div className="row">
         <input type="number" className="mono narrow" value={priority} placeholder="0" onChange={(e) => setForm({ priority: e.target.value })} />
         <span className="muted small">higher launches first (FIFO within a priority); running jobs are never preempted</span>
       </div>
-      <label>purpose</label>
-      <input type="text" value={purpose} onChange={(e) => setForm({ purpose: e.target.value })} placeholder="what this runset is meant to show" />
+      <label>{t("purpose")}</label>
+      <input type="text" value={purpose} onChange={(e) => setForm({ purpose: e.target.value })} placeholder={t("what this runset is meant to show")} />
       <label>binary</label>
-      <input type="text" className="mono" value={bin} onChange={(e) => setForm({ bin: e.target.value })} placeholder="optional: bincache key, runset ref, or /abs/path/emu" />
+      <input type="text" className="mono" value={bin} onChange={(e) => setForm({ bin: e.target.value })} placeholder={t("optional: bincache key, runset ref, or /abs/path/emu")} />
       <label>points</label>
-      <input type="text" className="mono" value={points} onChange={(e) => setForm({ points: e.target.value })} placeholder="optional subset, comma or space separated" />
-      <label>post steps</label>
-      <input type="text" className="mono" value={postSteps} onChange={(e) => setForm({ postSteps: e.target.value })} placeholder="optional subset of the post recipe's steps" />
-      <label>overrides</label>
+      <input type="text" className="mono" value={points} onChange={(e) => setForm({ points: e.target.value })} placeholder={t("optional subset, comma or space separated")} />
+      <label>{t("post steps")}</label>
+      <input type="text" className="mono" value={postSteps} onChange={(e) => setForm({ postSteps: e.target.value })} placeholder={t("optional subset of the post recipe's steps")} />
+      <label>{t("overrides")}</label>
       <div>
         <textarea className="mono" rows={4} value={overrides} onChange={(e) => setForm({ overrides: e.target.value })} placeholder={"run.W=20000000\nrun.I=20000000"} />
         {parseError ? <div className="error">{parseError}</div> : overrides.trim() && <pre className="mono small">{JSON.stringify(parsed)}</pre>}
@@ -294,7 +296,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
       <span />
       <div>
         <button className="primary" disabled={act.busy || !!parseError || !kinds.length} onClick={submit}>
-          Submit
+          {t("Submit")}
         </button>
         <span className="muted small mono">
           {" "}
@@ -540,6 +542,7 @@ function evidenceLink(ev: string) {
 }
 
 function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy: boolean; save: (list: string[]) => Promise<unknown>; add: (ev: string) => Promise<unknown> }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [fresh, setFresh] = useState("");
@@ -571,9 +574,9 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
               }}
             />
             <button disabled={busy || draft.trim() === ev} onClick={commitEdit}>
-              Save
+              {t("Save")}
             </button>
-            <button onClick={() => setEditing(null)}>Cancel</button>
+            <button onClick={() => setEditing(null)}>{t("Cancel")}</button>
           </div>
         ) : (
           <div key={`ev:${i}`} className="row evidence-row">
@@ -582,15 +585,15 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
             </span>
             <button
               className="link small"
-              title="edit this entry"
+              title={t("edit this entry")}
               onClick={() => {
                 setEditing(i);
                 setDraft(ev);
               }}
             >
-              edit
+              {t("edit this entry")}
             </button>
-            <button className="link small danger-link" title="remove this entry" aria-label={`remove evidence ${i + 1}`} disabled={busy} onClick={() => save(evidence.filter((_, j) => j !== i))}>
+            <button className="link small danger-link" title={t("remove this entry")} aria-label={`remove evidence ${i + 1}`} disabled={busy} onClick={() => save(evidence.filter((_, j) => j !== i))}>
               ×
             </button>
           </div>
@@ -602,14 +605,14 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
           rows={2}
           style={{ flex: 1 }}
           value={fresh}
-          placeholder="runset ref or note (Ctrl+Enter adds)"
+          placeholder={t("runset ref or note (Ctrl+Enter adds)")}
           onChange={(e) => setFresh(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) addFresh();
           }}
         />
         <button disabled={!fresh.trim() || busy} onClick={addFresh}>
-          Add evidence
+          {t("Add evidence")}
         </button>
       </div>
     </div>
@@ -842,6 +845,7 @@ function NotesTab({ ctx }: { ctx: NodeContext }) {
 }
 
 function Header({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const n = ctx.node;
   const nav = useNavigate();
   const act = useAction();
@@ -882,30 +886,30 @@ function Header({ ctx }: { ctx: NodeContext }) {
         ))}
         {ctx.git && <ChangesBadge path={n.path} />}
         <span className="spacer" />
-        <button onClick={() => setDialog("add")}>Add child…</button>
-        <button onClick={() => setDialog("mv")}>Move…</button>
+        <button onClick={() => setDialog("add")}>{t("Add child…")}</button>
+        <button onClick={() => setDialog("mv")}>{t("Move…")}</button>
         <button className="danger" onClick={() => setDialog("rm")}>
-          Remove…
+          {t("Remove…")}
         </button>
       </div>
       <div className="card form" style={{ marginTop: 10 }}>
-        <label>hypothesis</label>
+        <label>{t("hypothesis")}</label>
         <div className="row">
           <textarea rows={2} style={{ flex: 1 }} value={hyp} onChange={(e) => setHyp(e.target.value)} />
           <button disabled={hyp === n.hypothesis || act.busy} onClick={() => update({ hypothesis: hyp })}>
             Save
           </button>
         </div>
-        <label>verdict</label>
+        <label>{t("verdict")}</label>
         <div className="row">
           <select value={n.verdict} onChange={(e) => update({ verdict: e.target.value })}>
             {VERDICTS.map((v) => (
               <option key={v}>{v}</option>
             ))}
           </select>
-          <input type="text" style={{ flex: 1 }} value={note} placeholder="verdict note" onChange={(e) => setNote(e.target.value)} />
+          <input type="text" style={{ flex: 1 }} value={note} placeholder={t("verdict note")} onChange={(e) => setNote(e.target.value)} />
           <button disabled={note === n.verdict_note || act.busy} onClick={() => update({ verdict_note: note })}>
-            Save note
+            {t("Save note")}
           </button>
           <label>status</label>
           <select value={n.status} onChange={(e) => update({ status: e.target.value })}>
@@ -914,11 +918,11 @@ function Header({ ctx }: { ctx: NodeContext }) {
             ))}
           </select>
         </div>
-        <label>evidence</label>
+        <label>{t("evidence")}</label>
         <EvidenceList evidence={n.evidence} busy={act.busy} save={(list) => update({ evidence: list })} add={(ev) => update({ add_evidence: [ev] })} />
-        <label>comment</label>
+        <label>{t("comment")}</label>
         <div className="row" style={{ alignItems: "flex-start" }}>
-          <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder="your thoughts on this node: ideas, doubts, what to try next" onChange={(e) => setComment(e.target.value)} />
+          <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder={t("your thoughts on this node: ideas, doubts, what to try next")} onChange={(e) => setComment(e.target.value)} />
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <button disabled={comment === (n.comment ?? "") || act.busy} onClick={() => update({ comment })}>
               Save
@@ -945,6 +949,7 @@ function Header({ ctx }: { ctx: NodeContext }) {
 }
 
 export function NodePage() {
+  const { t } = useI18n();
   const path = useParams()["*"] ?? "";
   const notice = (useLocation().state as { notice?: string } | null)?.notice;
   const [sp, setSp] = useSearchParams();
@@ -971,7 +976,7 @@ export function NodePage() {
       {tab === "notes" && <NotesTab key={`notes:${ctx.node.id}`} ctx={ctx} />}
       {ctx.children.length > 0 && (
         <>
-          <h2>Children</h2>
+          <h2>{t("Children")}</h2>
           <ul>
             {ctx.children.map((c) => (
               <li key={c.path}>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fmtDuration } from "../util";
+import { useI18n } from "../i18n";
 
 export function Badge({ kind, children }: { kind?: string; children: ReactNode }) {
   return <span className={`badge ${kind ?? ""}`}>{children}</span>;
@@ -30,7 +31,8 @@ export function Progress({ pct, label }: { pct: number | null | undefined; label
 }
 
 export function Eta({ seconds }: { seconds: number | null | undefined }) {
-  if (seconds === 0) return <span className="muted">done</span>;
+  const { t } = useI18n();
+  if (seconds === 0) return <span className="muted">{t("done")}</span>;
   return <span title="estimated time remaining">{fmtDuration(seconds)}</span>;
 }
 
@@ -40,11 +42,12 @@ export function ErrorBox({ error }: { error: unknown }) {
 }
 
 export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: readonly T[]; value: T; onChange: (t: T) => void }) {
+  const { t: translate } = useI18n();
   return (
     <div className="tabs">
-      {tabs.map((t) => (
-        <button key={t} className={t === value ? "active" : ""} onClick={() => onChange(t)}>
-          {t}
+      {tabs.map((tab) => (
+        <button key={tab} className={tab === value ? "active" : ""} onClick={() => onChange(tab)}>
+          {translate(tab)}
         </button>
       ))}
     </div>
@@ -88,7 +91,8 @@ export function useAction() {
 }
 
 export function Loading({ what }: { what?: string }) {
-  return <div className="muted">loading {what ?? ""}…</div>;
+  const { t } = useI18n();
+  return <div className="muted">{t("Loading")} {what ?? ""}…</div>;
 }
 
 export function Json({ value }: { value: unknown }) {
