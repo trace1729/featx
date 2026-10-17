@@ -31,7 +31,7 @@ const M: Record<string, string> = {
   "what failed and the evidence for the suspected cause": "描述失败内容以及支持怀疑原因的证据", "what was changed": "描述修改内容", "how the code change solves it (optional)": "描述代码修改如何解决问题（可选）",
   runsets: "运行集合", submit: "提交", recipes: "配方", scripts: "脚本", verdict: "结论", evidence: "证据", comment: "备注",
   "Add evidence": "添加证据", "Save note": "保存 note", "verdict note": "结论 note", "your thoughts on this node: ideas, doubts, what to try next": "记录你对该节点的想法、疑问和下一步计划",
-  "edit this entry": "编辑此条目", "remove this entry": "移除此条目", "runset ref or note (Ctrl+Enter adds)": "runset 引用或 note（Ctrl+Enter 添加）",
+  edit: "编辑", "edit this entry": "编辑此条目", "remove this entry": "移除此条目", "runset ref or note (Ctrl+Enter adds)": "runset 引用或 note（Ctrl+Enter 添加）",
   "Add child…": "添加子节点…", "Move…": "移动…", "Remove…": "移除…", Children: "子节点", "Save notes": "保存 notes",
 };
 

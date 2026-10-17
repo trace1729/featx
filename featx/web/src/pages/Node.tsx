@@ -591,7 +591,7 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
                 setDraft(ev);
               }}
             >
-              {t("edit this entry")}
+              {t("edit")}
             </button>
             <button className="link small danger-link" title={t("remove this entry")} aria-label={`remove evidence ${i + 1}`} disabled={busy} onClick={() => save(evidence.filter((_, j) => j !== i))}>
               ×

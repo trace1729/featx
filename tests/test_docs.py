@@ -11,7 +11,7 @@ from featx.sched import daemon
 from featx.tree import Tree, TreeError
 
 TOPICS = ("concepts", "launch", "recipes", "build", "run", "points", "workloads", "post",
-          "variables", "references", "plugins", "worktrees", "baselines", "checkpoints")
+          "variables", "references", "wait", "plugins", "worktrees", "baselines", "checkpoints")
 
 
 def test_reference_plugin_section_is_current():
