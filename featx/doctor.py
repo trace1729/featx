@@ -2,7 +2,7 @@
 
 Each check gives ok / warn / fail. fail = featx can't work (data root, the site profile);
 warn = a feature that needs it is off (worktrees without git.repo, exec mode without the NEMU
-diff .so, the collect/pair plugins without analysis_dir, ...)."""
+diff .so, pair/diagnose without the XiangShan top-down configs, ...)."""
 
 from __future__ import annotations
 
@@ -54,8 +54,11 @@ def local_checks() -> list[dict]:
     root = config.root()
     out.append(_item("data root", OK if _writable(root) else FAIL, str(root)))
     site = s.get("site")
+    found = None if site else config.detect_site()
     out.append(_item("site profile", OK if site else WARN, str(config.site_path(site)) if site else
-                     "none (featx init --site <name>; known: " + (", ".join(config.sites()) or "none") + ")"))
+                     (f"none, but this host has the {found} storage: featx config set site={found}" if found else
+                      "none: hosts, workloads, checkpoints and baselines are all unset (featx config set "
+                      "site=<name>; known: " + (", ".join(config.sites()) or "none") + ")")))
     tok = config.token_path()
     out.append(_item("api token", OK if tok.is_file() else WARN, str(tok) if tok.is_file() else
                      f"{tok} missing (featx init or featx daemon start creates it)"))
@@ -73,11 +76,15 @@ def local_checks() -> list[dict]:
     out.append(_item("paths.dramsim3", OK if dram and (Path(dram) / "build").is_dir() else WARN,
                      dram if dram and (Path(dram) / "build").is_dir() else
                      f"{dram or 'unset'}: needs <dir>/build (builds with options.dramsim3)"))
-    out.append(_path("paths.nemu_diff", paths.get("nemu_diff"), why="exec runs use --no-diff"))
+    out.append(_path("paths.nemu_diff", paths.get("nemu_diff"),
+                     why=f"no {config.NEMU_SO} in git.repo either; exec runs use --no-diff"))
     out.append(_path("paths.gcpt_restorer", paths.get("gcpt_restorer"), why="exec runs of .gz checkpoints"))
     out.append(_path("paths.perf_trigger", paths.get("perf_trigger"), why="run.executor=perf_trigger"))
-    out.append(_path("analysis_dir", s.get("analysis_dir"), "dir",
-                     why="post plugins collect / pair / diagnose / branch-mpki are off"))
+    tools = config.analysis_dir()
+    out.append(_item("analysis scripts", OK if (tools / "collect_gsim_spec_perf.py").is_file() else FAIL,
+                     f"{tools}{'' if s.get('analysis_dir') else ' (shipped with featx)'}"
+                     if (tools / "collect_gsim_spec_perf.py").is_file() else
+                     f"{tools}: no collect_gsim_spec_perf.py (featx.yaml analysis_dir)"))
     xs = paths.get("xiangshan") or repo
     cfg = Path(xs) / "scripts" / "top-down" / "configs.py" if xs else None
     out.append(_path("paths.xiangshan top-down", cfg, why="pair / diagnose TopDown definitions"))

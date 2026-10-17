@@ -1,93 +1,102 @@
 # Site profile "nfs-share": the shared, cluster-wide values of the XiangShan/TraceRTL cluster
-# (node0xx hosts, /nfs/share and /nfs/home/share visible on every host). Select it with
-# `site: nfs-share` in $FEATX_ROOT/featx.yaml (`featx init --site nfs-share` does). Everything here
-# can be overridden in that user layer; personal paths (git.repo, paths.dramsim3, ...) go there.
+# (node0xx hosts, the shared storage). Select it with `site: nfs-share` in $FEATX_ROOT/featx.yaml
+# (`featx init` picks it on its own where the paths under `detect:` exist). Everything here can be
+# overridden in that user layer; personal paths (git.repo, paths.dramsim3, ...) go there.
+
+# `featx init` without --site selects this profile on a host where these exist.
+detect: [/nfs/home/share/checkpoints_profiles]
+
+# The shared storage is mounted at /nfs/home/share on every host and also at /nfs/share on some
+# (the same file system); every path below is written as ${share}/..., so `share: /nfs/share` in
+# the user layer switches them all.
+share: /nfs/home/share
 
 hosts: [node003, node004, node005, node006, node007, node008, node009, node020, node021, node022,
         node023, node024, node025, node026, node027, node028, node034, node036, node037, node038,
         node039, node040, node041, node042]
 
 paths:
-  gsim: /nfs/share/bin/gsim
-  nemu_diff: /nfs/share/gkc/wpe-synthetic_PA/0903/bin/riscv64-nemu-interpreter-so
-  gcpt_restorer: /nfs/home/share/ci-workloads/old-gcpt-restorer/gcpt.bin
+  gsim: ${share}/bin/gsim
+  # nemu_diff is unset: exec runs diff against <git.repo>/ready-to-run/riscv64-nemu-interpreter-so,
+  # the NEMU that matches your XiangShan checkout (set paths.nemu_diff to use another one).
+  gcpt_restorer: ${share}/ci-workloads/old-gcpt-restorer/gcpt.bin
   # perf_trigger with the TraceRTL --tracertl-file support and the profile fix (1010 vendored copy)
-  perf_trigger: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr-after-anchor/1010/perf_trigger/main.py
+  perf_trigger: ${share}/gkc/wpe-WrongPathEmu-nogenpaddr-after-anchor/1010/perf_trigger/main.py
 
 checkpoints:
   roots:
-    - /nfs/home/share/checkpoints_profiles
-    - /nfs/home/share/checkpoints_profiles/legacy
+    - ${share}/checkpoints_profiles
+    - ${share}/checkpoints_profiles/legacy
 
 default_workload: spec06
 
 workloads:
   spec06:
     description: SPEC CPU2006, 55 benchmarks, 1090 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec06-v1/_manifest.tsv
+    manifest: ${share}/gkc/traces/nemu-trace-spec06-v1/_manifest.tsv
     label: spec06
     reference: exec-0903
     checkpoint: spec06_gcc15_rv64gcb_base_260122
-    insts: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/cluster-0-0.json
+    insts: ${share}/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/cluster-0-0.json
     run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+      trace_root: ${share}/gkc/traces/nemu-trace-spec06-v1
       # the manifest's checkpoint column points at a moved directory; legacy/ has them all
-      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
+      checkpoint_file: ${share}/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
   spec17:
     description: SPEC CPU2017, 31 benchmarks, 590 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec17-v1/_manifest.tsv
+    manifest: ${share}/gkc/traces/nemu-trace-spec17-v1/_manifest.tsv
     label: spec17
     reference: exec-0903-spec17
     checkpoint: spec17_rv64gcb_o2_20m
     # from legacy/spec17_rv64gcb_o2_20m logs/profiling "total guest instructions" + simpoint_summary.json
     insts: insts/spec17_rv64gcb_o2_20m.json
     run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec17-v1
-      checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec17_rv64gcb_o2_20m/take_cpt/${point.name}/0/_${point.cp}_.gz
+      trace_root: ${share}/gkc/traces/nemu-trace-spec17-v1
+      checkpoint_file: ${share}/checkpoints_profiles/legacy/spec17_rv64gcb_o2_20m/take_cpt/${point.name}/0/_${point.cp}_.gz
   spec26:
     description: SPEC CPU2026 (v1 traces), 1529 SimPoints
-    manifest: /nfs/share/gkc/traces/nemu-trace-spec26-v1/_manifest.tsv
+    manifest: ${share}/gkc/traces/nemu-trace-spec26-v1/_manifest.tsv
     label: spec26
     reference: null
     checkpoint: spec26_gcc15_rv64gc_base_260517
-    insts: /nfs/home/share/checkpoints_profiles/spec26_gcc15_rv64gc_base_260517/json/checkpoints_all.json
+    insts: ${share}/checkpoints_profiles/spec26_gcc15_rv64gc_base_260517/json/checkpoints_all.json
     run:
-      trace_root: /nfs/share/gkc/traces/nemu-trace-spec26-v1
+      trace_root: ${share}/gkc/traces/nemu-trace-spec26-v1
       checkpoint_file: ${point.checkpoint}
 
 # A run without run.workload: the spec06 traces / checkpoints (what featx always defaulted to).
 recipe_defaults:
   run:
-    trace_root: /nfs/share/gkc/traces/nemu-trace-spec06-v1
-    checkpoint_file: /nfs/home/share/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
+    trace_root: ${share}/gkc/traces/nemu-trace-spec06-v1
+    checkpoint_file: ${share}/checkpoints_profiles/legacy/spec06_gcc15_rv64gcb_base_260122/checkpoint-0-0-0/${point.bench}/${point.cp}/_${point.cp}_${point.weight}_.zstd
     perf_trigger:
-      gcpt_path: /nfs/share/gkc/traces/nemu-trace-spec06-v1
+      gcpt_path: ${share}/gkc/traces/nemu-trace-spec06-v1
 
 # Shared result roots (readable by everyone); $FEATX_ROOT/baselines.yaml overlays them per entry.
 baselines:
   exec-0903:
-    root: /nfs/share/gkc/wpe-synthetic_PA/0903/spec06-1.0c/execution
+    root: ${share}/gkc/wpe-synthetic_PA/0903/spec06-1.0c/execution
     description: XiangShan execution-driven reference (synthetic-PA 0903 campaign), 20M+20M
     checkpoint: spec06_gcc15_rv64gcb_base_260122
   exec-0903-spec17:
-    root: /nfs/share/gkc/wpe-synthetic_PA/0903/spec17-1.0c/execution
+    root: ${share}/gkc/wpe-synthetic_PA/0903/spec17-1.0c/execution
     description: XiangShan execution-driven SPEC17 reference (0903), 20M+20M; 579/590 points completed,
       lbm_400000000 named 5.1e-05
     checkpoint: spec17_rv64gcb_o2_20m
   nowpe-0912:
-    root: /nfs/share/gkc/wpe-NEMU_PA/0912/spec06-1.0c/trace
+    root: ${share}/gkc/wpe-NEMU_PA/0912/spec06-1.0c/trace
     description: TraceRTL, NEMU PA, no wrong-path emulation (0912 unified binary)
     checkpoint: spec06_gcc15_rv64gcb_base_260122
   overlay-0928:
-    root: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/0928/spec06-1.0c/trace
+    root: ${share}/gkc/wpe-WrongPathEmu-nogenpaddr/0928/spec06-1.0c/trace
     description: TraceRTL overlay WPE, NEMU PA (0928)
-    binary: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/0928/bin/trace-emu-wpe-gsim
+    binary: ${share}/gkc/wpe-WrongPathEmu-nogenpaddr/0928/bin/trace-emu-wpe-gsim
     checkpoint: spec06_gcc15_rv64gcb_base_260122
   real-1007:
-    root: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/1007/spec06-1.0c/trace
+    root: ${share}/gkc/wpe-WrongPathEmu-nogenpaddr/1007/spec06-1.0c/trace
     description: TraceRTL real WPE (past-instance wp addresses, 1007)
     checkpoint: spec06_gcc15_rv64gcb_base_260122
   memfut-1010:
-    root: /nfs/share/gkc/wpe-WrongPathEmu-nogenpaddr/1010/spec06-1.0c/trace
+    root: ${share}/gkc/wpe-WrongPathEmu-nogenpaddr/1010/spec06-1.0c/trace
     description: TraceRTL real WPE + A' future-instance wp addresses (1010)
     checkpoint: spec06_gcc15_rv64gcb_base_260122

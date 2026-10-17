@@ -54,10 +54,7 @@ def main() -> int:
         if not (out / "points.csv").is_file():
             (out / "config.json").write_text(cfg)
             (out / "source").write_text(str(ref.resolve()) + "\n")
-            tools = os.environ.get("FEATX_TOOLS")
-            if not tools:
-                print("ensure_collected: FEATX_TOOLS (featx.yaml analysis_dir) is not set", file=sys.stderr)
-                return 2
+            tools = os.environ.get("FEATX_TOOLS") or str(Path(__file__).resolve().parent / "analysis")
             proc = subprocess.run([sys.executable, f"{tools}/collect_gsim_spec_perf.py", "-r", str(ref),
                                    "--config", str(out / "config.json"), "--suite", args.suite,
                                    "-N", str(args.N), "-o", str(out)],

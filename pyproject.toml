@@ -26,7 +26,8 @@ build-backend = "setuptools.build_meta"
 include = ["featx*"]
 
 [tool.setuptools.package-data]
-featx = ["post/manifests/*.yaml", "post/scripts/*.py", "defaults/*.yaml", "defaults/recipes/*.yaml",
+featx = ["post/manifests/*.yaml", "post/scripts/*.py", "post/scripts/analysis/*",
+         "defaults/*.yaml", "defaults/recipes/*.yaml",
          "defaults/insts/*.json", "sites/*.yaml", "bin/*", "docs/*.md",
          "web/dist/*", "web/dist/**/*"]
 

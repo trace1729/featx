@@ -7,7 +7,8 @@ else ~/.local/share/featx. Settings, later wins:
      cluster-wide values (workloads, checkpoint roots, tools on shared storage, hosts)
   -> $FEATX_ROOT/featx.yaml (the user layer: personal paths, ports, caps)
   -> FEATX_WT_ROOT.
-${root} and ${home} in string values expand to the data root and the user's home.
+${root}, ${home} and ${share} in string values expand to the data root, the user's home and
+the `share:` setting (the shared storage mount a site profile's paths sit under).
 """
 
 from __future__ import annotations
@@ -149,16 +150,32 @@ def site_layer(name: str | None) -> dict:
     if not isinstance(data, dict):
         raise ConfigError(f"site profile {path}: expected a mapping")
     data.pop("site", None)
+    data.pop("detect", None)
     return data
 
 
-_EXPAND_RE = re.compile(r"\$\{(root|home)\}")
+def detect_site() -> str | None:
+    """The first site profile whose `detect:` paths all exist on this host (what `featx init`
+    picks without --site)."""
+    for name in sites():
+        try:
+            data = yaml.safe_load(site_path(name).read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        detect = data.get("detect") if isinstance(data, dict) else None
+        if detect and all(Path(p).exists() for p in detect):
+            return name
+    return None
+
+
+_EXPAND_RE = re.compile(r"\$\{(root|home|share)\}")
 
 
 def expand(obj, values: dict):
-    """${root} / ${home} in every string of obj (other ${...} pass through)."""
+    """${root} / ${home} / ${share} in every string of obj (other ${...}, and ones whose value
+    is unset, pass through)."""
     if isinstance(obj, str):
-        return _EXPAND_RE.sub(lambda m: values[m.group(1)], obj)
+        return _EXPAND_RE.sub(lambda m: values.get(m.group(1)) or m.group(0), obj)
     if isinstance(obj, dict):
         return {k: expand(v, values) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -187,7 +204,25 @@ def _settings_for(root_str: str) -> dict:
     env_wt = os.environ.get("FEATX_WT_ROOT")
     if env_wt:
         base["wt_root"] = env_wt
-    return expand(base, {"root": root_str, "home": str(Path.home())})
+    share = str(base.get("share") or "").rstrip("/")
+    base = expand(base, {"root": root_str, "home": str(Path.home()), "share": share})
+    paths = base.get("paths")
+    if isinstance(paths, dict) and paths.get("nemu_diff") is None:
+        nemu = repo_nemu((base.get("git") or {}).get("repo"))
+        if nemu:
+            paths["nemu_diff"] = nemu
+    return base
+
+
+NEMU_SO = "ready-to-run/riscv64-nemu-interpreter-so"
+
+
+def repo_nemu(repo: str | None) -> str | None:
+    """The XiangShan checkout's own NEMU reference .so (paths.nemu_diff when that is unset)."""
+    if not repo:
+        return None
+    so = Path(repo) / NEMU_SO
+    return str(so) if so.is_file() else None
 
 
 def settings() -> dict:
@@ -196,6 +231,15 @@ def settings() -> dict:
 
 def reload_settings() -> None:
     _settings_for.cache_clear()
+
+
+ANALYSIS_DIR = PKG_DIR / "post" / "scripts" / "analysis"
+
+
+def analysis_dir() -> Path:
+    """The spec_trace_compare analysis scripts (${tools}): featx.yaml analysis_dir, else the
+    copy shipped with featx."""
+    return Path(settings().get("analysis_dir") or ANALYSIS_DIR)
 
 
 def wt_root() -> Path:

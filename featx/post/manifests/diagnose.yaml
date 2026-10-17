@@ -2,7 +2,6 @@ name: diagnose
 description: >-
   diagnose_top_ipc_gaps.py: per-point TopDown reports for the N largest IPC gaps vs a
   reference (ranking.csv, topdown_nodes.csv, summary.md, points/*.md).
-requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 after: [collect]
 with:
   trace: ${post.collect}/points.csv

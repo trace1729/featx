@@ -1,7 +1,6 @@
 name: branch-mpki
 description: >-
   extract_branch_type_mpki.py: per-point branch-type MPKI, this runset vs a reference.
-requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 after: [collect]
 with:
   trace: ${post.collect}/points.csv

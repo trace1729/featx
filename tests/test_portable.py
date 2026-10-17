@@ -1,5 +1,6 @@
-"""Portability: config layering (package -> site -> user -> env), featx init / doctor, the
-root pointer, site baselines, plugin requirements, and package resources without REPO_DIR."""
+"""Portability: config layering (package -> site -> user -> env), ${share}, the NEMU .so of
+git.repo, site detection, featx init / doctor, the root pointer, site baselines, plugin
+requirements, the shipped analysis scripts, and package resources without REPO_DIR."""
 
 import os
 from pathlib import Path
@@ -47,6 +48,52 @@ def test_layers_package_site_user_env(root, tmp_path, monkeypatch):
     config.reload_settings()
     with pytest.raises(config.ConfigError, match="site profile 'nosuch' not found"):
         config.settings()
+
+
+def test_share_moves_every_site_path(root, tmp_path):
+    site = _site(tmp_path, share="/mnt/a", paths={"gsim": "${share}/bin/gsim"},
+                 checkpoints={"roots": ["${share}/ck"]}, baselines={"b": {"root": "${share}/b"}})
+    update_layer(root, site=site)
+    s = config.settings()
+    assert s["paths"]["gsim"] == "/mnt/a/bin/gsim" and s["checkpoints"]["roots"] == ["/mnt/a/ck"]
+    assert baselines.load()["b"]["root"] == "/mnt/a/b"
+    update_layer(root, share="/mnt/b/")
+    assert config.settings()["paths"]["gsim"] == "/mnt/b/bin/gsim"
+    # the committed profile: everything under /nfs/home/share unless the user layer says otherwise
+    update_layer(root, site="nfs-share", share=None)
+    s = config.settings()
+    assert s["share"] == "/nfs/home/share" and s["paths"]["gsim"] == "/nfs/home/share/bin/gsim"
+    assert all(r.startswith("/nfs/home/share/") for r in s["checkpoints"]["roots"])
+    assert "${share}" not in repr(s) and "/nfs/share/" not in repr(s)
+    update_layer(root, share="/nfs/share")
+    assert config.settings()["workloads"]["spec06"]["manifest"].startswith("/nfs/share/gkc/traces/")
+
+
+def test_nemu_diff_defaults_to_the_repo_ready_to_run(root, tmp_path):
+    repo = tmp_path / "xs"
+    update_layer(root, git={"repo": str(repo)})
+    assert config.settings()["paths"]["nemu_diff"] is None              # no ready-to-run .so: --no-diff
+    so = repo / "ready-to-run" / "riscv64-nemu-interpreter-so"
+    so.parent.mkdir(parents=True)
+    so.write_text("so")
+    config.reload_settings()
+    assert config.settings()["paths"]["nemu_diff"] == str(so) and recipes.path_vars()["paths.nemu_diff"] == str(so)
+    update_layer(root, paths={"nemu_diff": "/other.so"})
+    assert config.settings()["paths"]["nemu_diff"] == "/other.so"
+    update_layer(root, paths={"nemu_diff": ""})                         # explicitly off
+    assert recipes.path_vars()["paths.nemu_diff"] == ""
+
+
+def test_detect_site(tmp_path, monkeypatch):
+    sites = tmp_path / "sites"
+    sites.mkdir()
+    (sites / "a.yaml").write_text(yaml.safe_dump({"detect": [str(tmp_path / "nope")], "hosts": ["x"]}))
+    (sites / "b.yaml").write_text(yaml.safe_dump({"detect": [str(tmp_path)], "hosts": ["y"]}))
+    (sites / "c.yaml").write_text(yaml.safe_dump({"hosts": ["z"]}))   # no detect: never picked
+    monkeypatch.setattr(config, "SITES_DIR", sites)
+    assert config.detect_site() == "b" and "detect" not in config.site_layer("b")
+    (sites / "b.yaml").unlink()
+    assert config.detect_site() is None
 
 
 def test_user_layer_validation_knows_the_site(root, tmp_path):
@@ -106,20 +153,40 @@ def test_init_new_and_adopt(tmp_path, monkeypatch):
             bootstrap.init(str(tmp_path / "r2"), site="nosuch")
         with pytest.raises(config.ConfigError, match="not a git checkout"):
             bootstrap.init(str(tmp_path / "r2"), repo=str(tmp_path))
+        monkeypatch.setattr(config, "detect_site", lambda: None)
         out = CliRunner().invoke(cli.app, ["init", "--root", str(tmp_path / "r3"), "--port", "9001"])
         assert out.exit_code == 0, out.output
         assert "featx daemon start" in out.output and ":9001/ui/" in out.output
+        assert "site" not in yaml.safe_load((tmp_path / "r3" / "featx.yaml").read_text())
+        # without --site the profile detected on this host is taken; --site none opts out
+        monkeypatch.setattr(config, "detect_site", lambda: "nfs-share")
+        out = CliRunner().invoke(cli.app, ["init", "--root", str(tmp_path / "r4")])
+        assert "detected on this host" in out.output
+        assert yaml.safe_load((tmp_path / "r4" / "featx.yaml").read_text())["site"] == "nfs-share"
+        r = bootstrap.init(str(tmp_path / "r5"), site="none")
+        assert not r["site_detected"] and "site" not in yaml.safe_load((tmp_path / "r5" / "featx.yaml").read_text())
+        r = bootstrap.init(str(target), adopt=True)         # a layer with a site keeps it
+        assert not r["site_detected"] and "site" not in r["written"]
     finally:
         config._pointed_root.cache_clear()
         config.reload_settings()
 
 
-def test_doctor_local(root, tmp_path):
+def test_doctor_local(root, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "detect_site", lambda: None)
     r = doctor.run(ssh=False)
     by = {c["check"]: c for c in r["checks"]}
     assert by["data root"]["status"] == "ok" and by["site profile"]["status"] == "warn"
-    assert by["git.repo"]["status"] == "warn" and by["analysis_dir"]["status"] == "warn"
+    assert "workloads, checkpoints and baselines are all unset" in by["site profile"]["detail"]
+    assert by["git.repo"]["status"] == "warn" and by["analysis scripts"]["status"] == "ok"
+    assert "shipped with featx" in by["analysis scripts"]["detail"]
     assert r["ok"]
+    monkeypatch.setattr(config, "detect_site", lambda: "nfs-share")
+    by = {c["check"]: c for c in doctor.run(ssh=False)["checks"]}
+    assert "featx config set site=nfs-share" in by["site profile"]["detail"]
+    update_layer(root, analysis_dir=str(tmp_path / "noanalysis"))
+    assert {c["check"]: c for c in doctor.run(ssh=False)["checks"]}["analysis scripts"]["status"] == "fail"
+    update_layer(root, analysis_dir=None)
     update_layer(root, paths={"gsim": str(tmp_path / "nogsim")},
                  workloads={"w": {"manifest": str(tmp_path / "none.tsv")}})
     by = {c["check"]: c for c in doctor.run(ssh=False)["checks"]}
@@ -145,12 +212,27 @@ def test_site_baselines_overlay(root, tmp_path):
 
 def test_plugin_requires_refuses_submit(root, fake_emu):
     from test_sched_local import make_node
-    make_node(fake_emu, ["ok_1_0.5"], steps={"c": {"plugin": "collect"}})
-    assert plugins.missing_requirements(plugins.get("collect")) == ["analysis_dir"]
-    with pytest.raises(SchedError, match="needs analysis_dir"):
+    (root / "plugins").mkdir()
+    (root / "plugins" / "needs-pt.yaml").write_text(yaml.safe_dump(
+        {"name": "needs-pt", "requires": ["paths.perf_trigger"], "cmd": "true"}))
+    make_node(fake_emu, ["ok_1_0.5"], steps={"c": {"plugin": "needs-pt"}})
+    assert plugins.missing_requirements(plugins.get("needs-pt")) == ["paths.perf_trigger"]
+    with pytest.raises(SchedError, match="needs paths.perf_trigger"):
         sched().submit("t/sched/x", ["run", "post"], bin_ref=str(fake_emu[0]))
     out = CliRunner().invoke(cli.app, ["plugin", "list"])
-    assert "[off: set analysis_dir]" in out.output
+    assert "[off: set paths.perf_trigger]" in out.output
+
+
+def test_analysis_scripts_ship_with_featx(root, tmp_path):
+    """collect / pair / diagnose / branch-mpki run the packaged scripts unless analysis_dir is set."""
+    for m in ("collect", "pair", "diagnose", "branch-mpki"):
+        assert not plugins.missing_requirements(plugins.get(m)), m
+        script = plugins.get(m)["cmd"].split("${tools}/")[1].split()[0]
+        assert (config.ANALYSIS_DIR / script).is_file(), script
+    entry = Tree().add("t/a", parents=True)
+    assert recipes.base_context(Tree(), entry)["tools"] == str(config.ANALYSIS_DIR)
+    update_layer(root, analysis_dir=str(tmp_path / "mine"))
+    assert recipes.base_context(Tree(), entry)["tools"] == str(tmp_path / "mine")
 
 
 def test_trace_root_unset_is_refused(root, fake_emu):

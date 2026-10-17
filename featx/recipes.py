@@ -121,7 +121,7 @@ def base_context(tree: Tree, entry: Entry, runset_dir: Path | None = None, runse
         "featx.home": str(config.REPO_DIR),
         "featx.bin": str(config.BIN_DIR),
         "util": str(config.BIN_DIR),       # was toolsets/util; runwatch.sh / add-worktree.sh live here now
-        "tools": s.get("analysis_dir") or "",
+        "tools": str(config.analysis_dir()),
         "git.repo": (s.get("git") or {}).get("repo") or "",
         "date": store.today(),
     }

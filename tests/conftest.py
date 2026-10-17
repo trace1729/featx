@@ -47,9 +47,10 @@ def nfs_site(root, tmp_path):
 
 
 # The pre-portability package defaults of gongkaichen's setup: `featx init --adopt` writes
-# these into his user layer, and bincache keys of existing builds must not change.
+# these into that user layer, and bincache keys of existing builds must not change.
 MIGRATED = {
     "site": "nfs-share",
+    "share": "/nfs/share",
     "paths": {"dramsim3": "/nfs/home/gongkaichen/tracertl/DRAMsim3",
               "verilator_bin": "/nfs/home/gongkaichen/verilator/bin"},
 }

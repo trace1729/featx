@@ -1,14 +1,18 @@
 # Built-in defaults: only values that hold on any machine. Shared, cluster-wide values come
 # from a site profile (`site:`, featx/sites/<name>.yaml), personal ones from the user layer
 # $FEATX_ROOT/featx.yaml (`featx init` writes it; deep-merged, later wins).
-# ${root} = the data root, ${home} = your home dir.
+# ${root} = the data root, ${home} = your home dir, ${share} = the `share:` value below.
 
 # Site profile: a name under featx/sites/ (e.g. nfs-share) or a path to a YAML file.
 site: null
+# The shared storage mount the site profile's paths are written under (${share}); the profile
+# sets its default, override it if your hosts mount that storage elsewhere.
+share: null
 
 wt_root: ${root}/worktrees     # node worktrees go to <wt_root>/<node path>
-# Dir of the spec_trace_compare analysis scripts (collect_gsim_spec_perf.py, ...). The collect /
-# pair / diagnose / branch-mpki post plugins need it; null disables them.
+# Dir of the spec_trace_compare analysis scripts (collect_gsim_spec_perf.py, ...) the collect /
+# pair / diagnose / branch-mpki post plugins run; null = the copy shipped in
+# featx/post/scripts/analysis. Set it only to use your own edited copy.
 analysis_dir: null
 
 # Tools and checkouts that recipes and plugins use as ${paths.<name>} (null = unset).
@@ -16,7 +20,8 @@ paths:
   gsim: gsim               # gsim binary (build tool: gsim); a bare name is looked up in PATH
   verilator_bin: null      # dir prepended to PATH for tool: verilator (null = PATH as is)
   dramsim3: null           # DRAMsim3 checkout with build/ (WITH_DRAMSIM3 builds and their runs)
-  nemu_diff: null          # exec mode: --diff reference .so (null = --no-diff)
+  nemu_diff: null          # exec mode: --diff reference .so (null = <git.repo>/ready-to-run/
+                           # riscv64-nemu-interpreter-so when it exists, else --no-diff; "" = --no-diff)
   gcpt_restorer: null      # exec mode: -r restorer for .gz checkpoints
   perf_trigger: null       # run executor perf_trigger: its main.py
   xiangshan: null          # XiangShan checkout with scripts/top-down (pair, diagnose); null = git.repo

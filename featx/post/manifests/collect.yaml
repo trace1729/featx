@@ -2,7 +2,6 @@ name: collect
 description: >-
   collect_gsim_spec_perf.py over the runset's point dirs (formal window -N 2):
   points.csv, benchmarks.csv, suite.json (-> summary.json).
-requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 with:
   input: ${run}               # dir of <bench>_<cp>_<weight> point dirs
   config: ${points_config}    # collector JSON (points of this runset)

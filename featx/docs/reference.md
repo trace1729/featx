@@ -141,7 +141,7 @@ featx submit NODE build --set build.tool=verilator --set build.options.chiseldb=
 | `trace_root`, `trace_file` | spec06 v1 | trace mode input; `trace_file` is a template over the point vars |
 | `checkpoint` | `null` | exec mode: a checkpoint set name (`featx ckpt list`) or set dir; it gives the points and their images (see `featx help checkpoints`). `null` = the workload's own set via `checkpoint_file` |
 | `checkpoint_file` | the workload's | exec mode input (`-i`); the workload sets it; a `checkpoint` set replaces it |
-| `exec.diff` | NEMU `.so` | `--diff <so>`; `null` gives `--no-diff` |
+| `exec.diff` | `${paths.nemu_diff}` | NEMU `.so` for `--diff <so>`; empty gives `--no-diff`. `paths.nemu_diff` unset = `<git.repo>/ready-to-run/riscv64-nemu-interpreter-so` when that exists |
 | `exec.gcpt_restorer` | `gcpt.bin` | `-r <bin>`, passed only for `.gz` checkpoints |
 | `dramsim3_home` | DRAMsim3 checkout | `<dir>/build` is put on `LD_LIBRARY_PATH` (the emu links libdramsim3); `null` = none |
 | `dump_db` | `false` | `--dump-db --db-path=<point dir>/chiseldb.sqlite` (needs `build.options.chiseldb`) |
@@ -243,7 +243,7 @@ Available in every recipe:
 |---|---|
 | `${node.path}`, `${node.name}`, `${node.id}`, `${node.dir}` | the node |
 | `${featx.root}`, `${featx.home}` | `$FEATX_ROOT`, the featx code dir |
-| `${util}`, `${tools}` | featx's `bin/` (runwatch.sh, add-worktree.sh), `analysis_dir` |
+| `${util}`, `${tools}` | featx's `bin/` (runwatch.sh, add-worktree.sh); the analysis scripts (`analysis_dir`, default the copy shipped in `featx/post/scripts/analysis`) |
 | `${date}` | today, `YYYYMMDD` |
 | `${worktree}`, `${repo}`, `${branch}`, `${sub.<name>}` | the node's own worktree (unset without one) |
 | `${scripts}` | the runset's snapshot of the inherited helper scripts |

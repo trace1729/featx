@@ -25,12 +25,20 @@ def init(root: str | None = None, site: str | None = None, repo: str | None = No
          extra: dict | None = None) -> dict:
     """Write the user layer of `root` (default: the current root). A root with a featx.yaml
     already needs adopt=True: the given keys are then merged into it, everything else in it
-    stays (an existing setup keeps its port unless one is given)."""
+    stays (an existing setup keeps its port unless one is given).
+    Without `site` a layer that has none gets the site profile detected on this host
+    (config.detect_site); site="none" skips that."""
     target = Path(os.path.abspath(Path(root).expanduser())) if root else config.root()
     layer_path = target / "featx.yaml"
     existing = (yaml.safe_load(layer_path.read_text()) or {}) if layer_path.is_file() else None
     if existing is not None and not adopt:
         raise config.ConfigError(f"{layer_path} exists; pass --adopt to merge the given keys into it")
+    detected = False
+    if site == "none":
+        site = None
+    elif site is None and not (existing or {}).get("site"):
+        site = config.detect_site()
+        detected = bool(site)
     if site:
         config.site_layer(site)      # raises for an unknown site
     if repo and not (Path(repo).expanduser() / ".git").exists():
@@ -68,6 +76,7 @@ def init(root: str | None = None, site: str | None = None, repo: str | None = No
     from .sched.daemon import ensure_token
     ensure_token()
     return {"root": str(target), "user_layer": str(layer_path), "written": keys, "adopted": existing is not None,
+            "site_detected": detected,
             "pointer": str(pointer) if pointer else None, "token": str(config.token_path())}
 
 

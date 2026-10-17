@@ -3,7 +3,6 @@ description: >-
   compare_gsim_spec_points.py: pair this runset's collected points with a reference
   (baseline name / point-dir root / collector dir; raw roots are collected once and cached
   under $FEATX_ROOT/compare/collect-cache restricted to this runset's points).
-requires: [analysis_dir]    # featx.yaml analysis_dir (spec_trace_compare/03_analysis)
 after: [collect]
 with:
   trace: ${post.collect}/points.csv

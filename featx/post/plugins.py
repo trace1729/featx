@@ -7,7 +7,7 @@ Manifest (featx/post/manifests/<name>.yaml, overridable in $FEATX_ROOT/plugins/<
   after:   default step dependencies (only those present in the recipe are kept)
   cmd:     bash template; must leave summary.json (flat metrics) in ${out} — or name a
            JSON file with `summary_from:` that featx flattens into summary.json.
-  requires: featx.yaml keys that must be set (e.g. [analysis_dir]); the plugin is refused
+  requires: featx.yaml keys that must be set (e.g. [paths.perf_trigger]); the plugin is refused
            at submit with a hint while one is unset.
 
 A recipe step can also skip the manifest and give its own `cmd:` (plus optional `with:`,
@@ -202,7 +202,7 @@ def render(tree, task, step_name: str, step: dict, runset_dir: Path, out_dir: Pa
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "params.yaml").write_text(yaml.safe_dump({"plugin": man.get("name", step_name),
                                                           "with": params}, sort_keys=False))
-    env = {"FEATX_ROOT": str(config.root()), "FEATX_TOOLS": config.settings().get("analysis_dir") or ""}
+    env = {"FEATX_ROOT": str(config.root()), "FEATX_TOOLS": str(config.analysis_dir())}
     return "\n".join(lines) + "\n", env
 
 

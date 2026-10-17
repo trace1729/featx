@@ -503,3 +503,35 @@ spec06_2harts_e（无 manifest）覆盖此路径。
 代码修改说明:
 - featx/sched/scheduler.py submit：built 的计算提到 substitute 之前（逻辑不变）。kind=="run"、spec.checkpoint 非空且 presets.run_mode(spec, built)=="exec" 时，先写 spec["checkpoint_file"]="${point.checkpoint}" 再自代入；按点生成命令时，由 point_vars 从集合索引给出镜像。未设 run.checkpoint 和 trace 模式的配方完全不变，没有改动非 checkpoint 路径的行为。
 - tests/test_ckpt.py test_exec_run_with_a_checkpoint_set：recipe_defaults 加一个 checkpoint_file 模板，断言 argv 用的是集合镜像。已确认：不带本修复时该测试失败，带修复时通过。
+
+## 2026-10-17 15:40 同事部署 featx 遇到的四个问题（共享盘挂载点、NEMU .so、analysis_dir、site 未设置）
+问题与解决方案总结:
+同事按 README 部署时遇到四个问题。(1) 有的机器只挂了 /nfs/home/share，没有 /nfs/share；site 配置
+nfs-share.yaml 把 gsim、restorer、perf_trigger、trace manifest、checkpoint 根、baseline 根都写死为
+/nfs/share/...，这些机器上全部失效。查证：两者是同一文件系统（同 inode 4757877860，gkc 目录 inode
+29124238215），24 台计算节点两者都有，所以统一写成 ${share}/...，默认 share=/nfs/home/share，
+用户层可用 `featx config set share=...` 改挂载点；我自己的根固定 share=/nfs/share，解析结果与 bincache key 不变。
+(2) NEMU diff .so 写死为 /nfs/share/gkc/wpe-synthetic_PA/0903/bin/... 的私人副本；实际上它与 XiangShan
+checkout 的 ready-to-run/riscv64-nemu-interpreter-so 字节相同（md5 f9d809eb...），于是 paths.nemu_diff 未设置时
+回落到 <git.repo>/ready-to-run/riscv64-nemu-interpreter-so（存在才用，否则 --no-diff），显式设为 "" 仍是 --no-diff。
+(3) collect/pair/diagnose/branch-mpki 依赖 analysis_dir（我机器上的 spec_trace_compare/03_analysis），之前
+没有随包发布，同事处于“插件 off”状态。这些脚本只依赖标准库、无硬编码路径，直接 vendored 到
+featx/post/scripts/analysis，analysis_dir 变为可选覆盖项，manifests 去掉 requires。
+(4) 同事 init 时没带 --site，doctor 只提示 "no site profile"，不知道是什么、有什么后果。site 文件新增
+detect: 字段，init 不带 --site 时自动选中本机满足 detect 的 site（--site none 可关闭），doctor 也会提示
+“本机有 nfs-share 存储，执行 featx config set site=nfs-share”，并说明缺 site 时 hosts/workloads/checkpoints/baselines 都为空。
+
+代码修改说明:
+- config.py：expand 支持 ${share}（未设置时原样保留）；_settings_for 先合并各层再按 share 展开；paths.nemu_diff 为 None
+  时调用 repo_nemu(git.repo) 回落；新增 detect_site()（读原始 YAML 的 detect，site_layer 合并时丢弃 detect）；
+  新增 ANALYSIS_DIR / analysis_dir()。
+- sites/nfs-share.yaml：所有 /nfs/share、/nfs/home/share 前缀换成 ${share}，share: /nfs/home/share，detect 保留字面路径
+  （detect_site 读的是未展开的 YAML），删除 nemu_diff。
+- defaults/featx.yaml：新增 share: null 及注释说明。
+- recipes.base_context 与 plugins 环境变量 FEATX_TOOLS 改用 config.analysis_dir()；ensure_collected.py 没有
+  FEATX_TOOLS 时用同目录下的 analysis/，不再 return 2；四个 manifest 删除 requires: [analysis_dir]；pyproject 加入 package-data。
+- bootstrap.init / cli init：未给 --site 且已有层里也没有 site 时调用 detect_site，返回 site_detected 并打印提示；--site none 表示不用 site。
+- doctor.py：site profile 未设置时给出检测到的 site 或说明后果；nemu_diff 的 unset 说明改为“git.repo 里也没有”；
+  analysis_dir 检查改为 "analysis scripts"（脚本存在为 ok）。
+- 测试：test_portable 新增 ${share} 展开/覆盖、nemu 回落、detect_site、init 自动检测与 --site none、随包脚本；
+  requires 机制改用自定义插件 (requires: [paths.perf_trigger]) 测试；conftest 迁移层加 share: /nfs/share。108 passed。

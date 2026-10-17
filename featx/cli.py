@@ -622,7 +622,8 @@ def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric",
 def init(root: Optional[str] = typer.Option(None, "--root", help="data root (default: the current one, "
                                              "~/.local/share/featx for a new user)"),
          site: Optional[str] = typer.Option(None, "--site", help="site profile: featx/sites/<name>.yaml "
-                                             "or a YAML path (e.g. nfs-share)"),
+                                             "or a YAML path (default: the one detected on this host, "
+                                             "e.g. nfs-share; 'none' for no site)"),
          repo: Optional[str] = typer.Option(None, "--repo", help="your XiangShan checkout (git.repo)"),
          daemon_host: Optional[str] = typer.Option(None, "--daemon-host", help="host featxd runs on"),
          port: Optional[int] = typer.Option(None, "--port", help="featxd port (default 8765 + uid % 200)"),
@@ -633,6 +634,8 @@ def init(root: Optional[str] = typer.Option(None, "--root", help="data root (def
     r = bootstrap.init(root, site, repo, daemon_host, port, adopt, parse_kv(set_))
     typer.echo(f"{tr('adopted' if r['adopted'] else 'created')} {r['root']}  (user layer {r['user_layer']})")
     typer.echo(yaml.safe_dump(r["written"], sort_keys=False).rstrip() if r["written"] else "(no keys changed)")
+    if r["site_detected"]:
+        typer.echo(f"(site {r['written']['site']} detected on this host; --site none to go without)")
     if r["pointer"]:
         typer.echo(f"root pointer: {r['pointer']}")
     typer.echo("\n" + tr("next:"))
