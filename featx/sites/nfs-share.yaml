@@ -19,8 +19,8 @@ paths:
   # nemu_diff is unset: exec runs diff against <git.repo>/ready-to-run/riscv64-nemu-interpreter-so,
   # the NEMU that matches your XiangShan checkout (set paths.nemu_diff to use another one).
   gcpt_restorer: ${share}/ci-workloads/old-gcpt-restorer/gcpt.bin
-  # Optional external executor; set this to your perf_trigger/main.py when needed.
-  perf_trigger: null
+  # External executor entry point; override paths.perf_trigger for another checkout.
+  perf_trigger: ${share}/ci-workloads/env-scripts/perf_trigger/main.py
 
 checkpoints:
   roots:

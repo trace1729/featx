@@ -136,6 +136,10 @@ featx submit NODE build --set build.tool=verilator --set build.options.chiseldb=
 
 ## run — Run recipe keys
 
+The nfs-share profile defaults `paths.perf_trigger` to
+`${share}/ci-workloads/env-scripts/perf_trigger/main.py`, trying `/nfs/share` first and
+`/nfs/home/share` when the path is missing. Override `paths.perf_trigger` for another checkout.
+
 | key | default | meaning |
 |---|---|---|
 | `mode` | `null` | `trace` or `exec`. Unset: the build's mode (same submit, the `--bin` runset's build, or the bincache manifest's `mode`), else `trace`. A mismatch with the build is an error. |

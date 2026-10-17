@@ -41,6 +41,10 @@ The `nfs-share` profile defaults DRAMsim3 to `${share}/ci-workloads/DRAMsim3` (w
 including shared-path fallback. Override `paths.dramsim3` for another checkout;
 new installations also prefer `DRAMSIM3_HOME` when set.
 
+The default `paths.perf_trigger` entry point is
+`${share}/ci-workloads/env-scripts/perf_trigger/main.py`, with the same shared-path fallback.
+Set `paths.perf_trigger` to use another checkout.
+
 Requirements: passwordless ssh to the `hosts` of the site profile (restrict them with
 `exclude_hosts` or replace them with `hosts:` in your layer), and the featx checkout, the data
 root and the worktree root on paths all hosts see.
