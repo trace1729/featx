@@ -77,13 +77,7 @@ featx daemon start
 
 安装完成后，可以用 `featx config show effective` 查看最终配置，用 `featx daemon status` 查看调度器状态。
 
-默认关闭 trace（`trace_enabled: false`），构建和运行使用 exec，worktree 不管理 TraceRTL，`doctor` 跳过 trace manifest 和 trace 目录检查。测试点直接从 checkpoint 集合读取，无需 `.trace.zstd` 文件。压缩 checkpoint 本身所需的解压依赖仍需安装。需要 trace 时，初始化加 `--trace`，或执行 `featx config set trace_enabled=true` 后重启 daemon；`--no-trace` 可显式关闭。
 
-`nfs-share` 站点默认使用 `${share}/ci-workloads/DRAMsim3`（需要已有 `build/`），也支持共享路径回退。自定义目录用 `featx config set paths.dramsim3=/your/DRAMsim3`；新安装也会优先采用环境变量 `DRAMSIM3_HOME`。
-
-`featx init` 未指定 `--site` 时自动检测站点；`--site none` 禁用检测。`nfs-share` 站点的 `${share}/...` 路径优先使用 `/nfs/share`，路径不存在时回退到 `/nfs/home/share`；含 `${point.*}` 的路径按已知父目录选择。设置 `share_fallbacks: []` 可关闭回退。路径在配置加载时选择，修改挂载后需重启 daemon。共享存储挂载不同时，用 `featx config set share=/your/shared/mount` 调整路径。未配置 `paths.nemu_diff` 时使用代码仓库 `ready-to-run/` 下可用的 NEMU 参考库，设为空字符串可禁用 diff。常用分析脚本随包提供，`analysis_dir` 仅用于覆盖位置。
-
-公开的 `nfs-share` 是站点模板：用户数据目录使用 `${share}/${USER}/...`，`${USER}` 取运行 featx 的用户名；任务主机默认 `localhost`，实验基线需自行注册。个人部署信息建议保存在仓库外的 site YAML，通过 `site: /path/to/private-site.yaml` 引用。`problem-analysis.log` 是本地记录，不纳入版本控制。
 
 ## 使用方式
 
@@ -223,5 +217,16 @@ featx log append frontend/bpu/cursor/<runset> \
 featx node set frontend/bpu/cursor \
   --verdict supported --evidence <runset>
 ```
+
+### MISC
+
+默认关闭 trace（`trace_enabled: false`），构建和运行使用 exec，worktree 不管理 TraceRTL，`doctor` 跳过 trace manifest 和 trace 目录检查。测试点直接从 checkpoint 集合读取，无需 `.trace.zstd` 文件。压缩 checkpoint 本身所需的解压依赖仍需安装。需要 trace 时，初始化加 `--trace`，或执行 `featx config set trace_enabled=true` 后重启 daemon；`--no-trace` 可显式关闭。
+
+`nfs-share` 站点默认使用 `${share}/ci-workloads/DRAMsim3`（需要已有 `build/`），也支持共享路径回退。自定义目录用 `featx config set paths.dramsim3=/your/DRAMsim3`；新安装也会优先采用环境变量 `DRAMSIM3_HOME`。
+
+`featx init` 未指定 `--site` 时自动检测站点；`--site none` 禁用检测。`nfs-share` 站点的 `${share}/...` 路径优先使用 `/nfs/share`，路径不存在时回退到 `/nfs/home/share`；含 `${point.*}` 的路径按已知父目录选择。设置 `share_fallbacks: []` 可关闭回退。路径在配置加载时选择，修改挂载后需重启 daemon。共享存储挂载不同时，用 `featx config set share=/your/shared/mount` 调整路径。未配置 `paths.nemu_diff` 时使用代码仓库 `ready-to-run/` 下可用的 NEMU 参考库，设为空字符串可禁用 diff。常用分析脚本随包提供，`analysis_dir` 仅用于覆盖位置。
+
+公开的 `nfs-share` 是站点模板：用户数据目录使用 `${share}/${USER}/...`，`${USER}` 取运行 featx 的用户名；任务主机默认 `localhost`，实验基线需自行注册。个人部署信息建议保存在仓库外的 site YAML，通过 `site: /path/to/private-site.yaml` 引用。`problem-analysis.log` 是本地记录，不纳入版本控制。
+
 
 更多 recipe、checkpoint、point selection、后处理插件和 MCP 接口说明，参见 [`featx/docs/reference.md`](featx/docs/reference.md)。
