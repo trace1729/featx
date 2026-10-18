@@ -27,8 +27,12 @@ featx 是一个面向香山的功能探索和实验任务调度的系统：它�
 ### 实现策略
 
 - 使用树形结构管理开发上下文，每个 feature 或 subfeature 都是树上的一个节点。
-    - 节点关联对应的 worktree、branch、构建产物、运行日志、实验数据和结论。
+    - 节点关联对应的 worktree、branch、构建产物、运行日志、实验动机，实验数据和结论。
     - 每个 feature 可以定义 build、run、post recipe，并创建多个 runset。
+        * build: 构建参数
+        * run: 运行参数
+        * post: 后处理方式
+    - 之后可以通过诸如 <feature, subfeature, .., runset> 的标签来引用之前的任意实验。
 - featx 负责构建、运行、后处理、任务调度、状态监控和上下文记录。
     - 提供 CLI、MCP 和 Web UI；人和 Agent 使用同一套任务状态和日志。
     - 运行进度、资源占用、失败原因和后处理结果集中展示。
@@ -86,7 +90,7 @@ featx daemon start
 可以用自然语言描述目标，例如：
 
 ```text
-我要在香山上运行 SPEC06。请创建一个 feature 节点，使用 exec 模式构建，运行指定的 checkpoint，完成后执行后处理并汇总结果，如果缺少什么必要的输入提示我。
+我要在香山上运行 SPEC06。请创建一个 feature 节点(test-spec26), 执行模式构建，运行指定的 checkpoint，完成后执行后处理并汇总结果，如果缺少什么必要的输入提示我。
 ```
 
 或者：
@@ -97,8 +101,7 @@ featx daemon start
 
 Agent 可以通过 CLI/ MCP 获取 feature 上下文、提交任务、查看进度、读取日志、处理失败事件和记录实验结论。
 提交任务后，Agent 可使用 CLI 的 featx wait 或者 MCP 的`task_wait` 等待任务完成，避免反复轮询任务状态。
-
-`featx wait TASK1 TASK2 --timeout 3600` 可同时等待多个任务。上游 build 失败或取消时，run/post 会被报告为 `blocked`，不会一直等到超时，CLI 返回 1。全部成功返回 0。`--json` 和 MCP 返回 `finished`、`blocked`、`pending`、`timed_out`；`blocked` 中的 `failed_dependencies` 列出失败依赖。这不会改变调度器中的任务状态，也不会确认全局事件。`--timeout 0` 只检查一次。
+也可以使用`featx wait TASK1 TASK2 --timeout 3600` 等待多个任务。
 
 ### Manual
 
