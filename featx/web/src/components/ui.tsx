@@ -2,8 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fmtDuration } from "../util";
 import { useI18n } from "../i18n";
 
-export function Badge({ kind, children }: { kind?: string; children: ReactNode }) {
-  return <span className={`badge ${kind ?? ""}`}>{children}</span>;
+export function Badge({ kind, title, children }: { kind?: string; title?: string; children: ReactNode }) {
+  return <span className={`badge ${kind ?? ""}`} title={title}>{children}</span>;
 }
 
 export function StateBadge({ state }: { state: string }) {

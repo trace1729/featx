@@ -4,10 +4,11 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import YAML from "yaml";
 import { api } from "../api";
 import { AddNodeDialog, MoveDialog, RemoveDialog } from "../components/NodeDialogs";
+import { ChangesView } from "../components/Changes";
 import { Markdown } from "../components/FileViewer";
 import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { CheckpointSet, ConfigView, NodeContext, RunsetSummary } from "../types";
+import type { Changes, CheckpointSet, CodeView, ConfigView, NodeContext, RunsetSummary } from "../types";
 import { NO_PRESETS, checkpointGroups, deepMerge, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
 import { useI18n } from "../i18n";
@@ -34,47 +35,137 @@ function keyMetrics(rs: RunsetSummary): [string, unknown][] {
   return out;
 }
 
-function RunsetsTab({ ctx }: { ctx: NodeContext }) {
-  if (!ctx.runsets.length) return <div className="muted">no runsets yet: use the submit tab.</div>;
+function valueAt(obj: Record<string, unknown> | undefined, key: string): unknown {
+  let cur: unknown = obj ?? {};
+  for (const part of key.split(".")) {
+    if (typeof cur !== "object" || cur === null) return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/** The recipe keys on which this node's runsets disagree, with this runset's value when it is a
+ * headline parameter (the rest is just the key name: a command difference has no headline). */
+function ParamsCell({ rs, differing }: { rs: RunsetSummary; differing: string[] }) {
+  const { t } = useI18n();
+  const shown = differing.slice(0, 5).map((key) => {
+    const v = valueAt(rs.params, key);
+    return v === undefined ? key : `${key}=${fmtValue(v)}`;
+  });
+  if (!shown.length) return <span className="muted">—</span>;
+  return (
+    <div className="small mono" title={differing.join("\n")}>
+      {shown.map((line) => (
+        <div key={line}>{line}</div>
+      ))}
+      {differing.length > shown.length && <div className="muted">+{differing.length - shown.length} {t("more")}</div>}
+    </div>
+  );
+}
+
+/** Snapshot id from the summary (cheap); files and +/− vs base from the code API (cached). */
+function CodeCell({ rs, enabled }: { rs: RunsetSummary; enabled: boolean }) {
+  const snap = (rs.provenance as { snapshot?: { super?: { commit?: string } } } | undefined)?.snapshot?.super?.commit;
+  const q = useQuery({
+    queryKey: ["code-totals", rs.ref],
+    queryFn: () => api.get<CodeView>("/runsets/code", { ref: rs.ref, against: "base" }),
+    enabled: enabled && !!snap,
+    staleTime: 300000,
+    retry: false,
+  });
+  if (!snap) return <span className="muted small">{rs.provenance ? "legacy" : "—"}</span>;
+  const t = q.data?.total;
+  return (
+    <span className="mono small" title={`snapshot ${snap}`}>
+      {snap.slice(0, 8)}{" "}
+      {t ? (
+        <span className="muted">
+          {t.files} files <span className="diff-add">+{t.added}</span> <span className="diff-del">−{t.deleted}</span>
+        </span>
+      ) : q.isLoading ? (
+        "…"
+      ) : null}
+    </span>
+  );
+}
+
+function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; showArchived: boolean; onShowArchived: (v: boolean) => void }) {
+  const { t } = useI18n();
+  const nav = useNavigate();
+  const [selected, setSelected] = useState<string[]>([]);
+  const differing = ctx.params_differing ?? [];
+  const rank = (ref: string) => ctx.runsets.findIndex((r) => r.ref === ref);
+  const toggle = (ref: string) => setSelected((old) => (old.includes(ref) ? old.filter((x) => x !== ref) : [...old, ref]));
+  const compare = () => {
+    const [a, b] = [...selected].sort((x, y) => rank(x) - rank(y));
+    nav(`/runset/${b}?tab=code&against=${encodeURIComponent(a)}`);
+  };
   return (
     <div>
-      <table>
-        <thead>
-          <tr>
-            <th>runset</th>
-            <th>created</th>
-            <th>purpose</th>
-            <th>tasks</th>
-            <th>key metrics</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ctx.runsets.map((rs) => (
-            <tr key={rs.ref}>
-              <td className="mono">
-                <Link to={`/runset/${rs.ref}`}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
-                {rs.derived_from && <div className="muted small">from {rs.derived_from}</div>}
-              </td>
-              <td className="muted">{fmtTime(rs.created)}</td>
-              <td>{rs.purpose}</td>
-              <td>
-                {rs.tasks.map((t) => (
-                  <span key={t.id} style={{ marginRight: 4 }}>
-                    {t.kind}: <StateBadge state={t.state} />
-                  </span>
-                ))}
-              </td>
-              <td className="small">
-                {keyMetrics(rs).map(([k, v]) => (
-                  <div key={k}>
-                    {metricLabel(k)} <b className="mono">{fmtValue(v)}</b>
-                  </div>
-                ))}
-              </td>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <button className={`chip ${showArchived ? "active" : ""}`} onClick={() => { setSelected([]); onShowArchived(!showArchived); }}>
+          {showArchived ? t("hide archived") : `${t("show archived")} (${ctx.archived_count ?? 0})`}
+        </button>
+        {selected.length === 2 && (
+          <button className="primary" onClick={compare}>
+            {t("compare")}
+          </button>
+        )}
+        {selected.length > 0 && <button onClick={() => setSelected([])}>{t("clear selection")}</button>}
+        {!ctx.runsets.length && <span className="muted">no runsets yet: use the submit tab.</span>}
+      </div>
+      {ctx.runsets.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th />
+              <th>runset</th>
+              <th>created</th>
+              <th>purpose</th>
+              <th>{t("parameters")}</th>
+              <th>{t("code")}</th>
+              <th>tasks</th>
+              <th>key metrics</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {ctx.runsets.map((rs, i) => (
+              <tr key={rs.ref} className={selected.includes(rs.ref) ? "selected" : ""}>
+                <td>
+                  <input type="checkbox" checked={selected.includes(rs.ref)} onChange={() => toggle(rs.ref)} aria-label={`select ${rs.ref}`} />
+                </td>
+                <td className="mono">
+                  <Link to={`/runset/${rs.ref}`}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
+                  {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
+                  {rs.derived_from && <div className="muted small">from {rs.derived_from}</div>}
+                </td>
+                <td className="muted">{fmtTime(rs.created)}</td>
+                <td>{rs.purpose}</td>
+                <td>
+                  <ParamsCell rs={rs} differing={differing} />
+                </td>
+                <td>
+                  <CodeCell rs={rs} enabled={i < 20} />
+                </td>
+                <td>
+                  {rs.tasks.map((t) => (
+                    <span key={t.id} style={{ marginRight: 4 }}>
+                      {t.kind}: <StateBadge state={t.state} />
+                    </span>
+                  ))}
+                </td>
+                <td className="small">
+                  {keyMetrics(rs).map(([k, v]) => (
+                    <div key={k}>
+                      {metricLabel(k)} <b className="mono">{fmtValue(v)}</b>
+                    </div>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       {ctx.runset_count > ctx.runsets.length && (
         <p className="muted">
           showing the latest {ctx.runsets.length} of {ctx.runset_count}
@@ -619,27 +710,6 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
   );
 }
 
-interface RepoChanges {
-  path: string;
-  base: string;
-  exists: boolean;
-  error?: string;
-  merge_base?: string;
-  ahead?: number;
-  behind?: number;
-  commits?: { sha: string; author: string; when: string; subject: string }[];
-  files?: { status: string; path: string; old_path: string | null; added: number | null; deleted: number | null; uncommitted: boolean }[];
-  untracked?: string[];
-  truncated?: boolean;
-  added?: number;
-  deleted?: number;
-}
-
-interface Changes {
-  repos: Record<string, RepoChanges>;
-  total?: { files: number; added: number; deleted: number; ahead: number };
-}
-
 function useChanges(path: string) {
   return useQuery({
     queryKey: ["wt-changes", path],
@@ -663,130 +733,18 @@ function ChangesBadge({ path }: { path: string }) {
   );
 }
 
-function DiffView({ text }: { text: string }) {
-  return (
-    <pre className="diff">
-      {text.split("\n").map((line, i) => (
-        <div key={i} className={line.startsWith("+++") || line.startsWith("---") ? "meta" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("@@") ? "hunk" : ""}>
-          {line || " "}
-        </div>
-      ))}
-    </pre>
-  );
-}
-
-function FileDiff({ path, sub, file }: { path: string; sub: string; file: string }) {
-  const q = useQuery({
-    queryKey: ["wt-diff", path, sub, file],
-    queryFn: () => api.get<{ diff: string; truncated: boolean }>("/worktrees/diff", { ref: path, sub, path: file }),
-  });
-  if (q.isLoading) return <Loading what="diff" />;
-  if (q.error) return <ErrorBox error={q.error} />;
-  return (
-    <div>
-      {q.data!.truncated && <div className="notice">diff truncated</div>}
-      {q.data!.diff ? <DiffView text={q.data!.diff} /> : <div className="muted small">no textual diff (binary or mode change)</div>}
-    </div>
-  );
-}
-
-function RepoChangesView({ path, sub, r }: { path: string; sub: string; r: RepoChanges }) {
-  const [open, setOpen] = useState<string | null>(null);
-  const title = sub || "worktree";
-  if (!r.exists) return <div className="notice">{title}: {r.path} is missing on disk</div>;
-  if (r.error) return <div className="notice">{title}: {r.error}</div>;
-  const files = r.files ?? [];
-  const untracked = r.untracked ?? [];
-  const toggle = (f: string) => setOpen(open === f ? null : f);
-  return (
-    <div className="card">
-      <h3 style={{ marginTop: 0 }}>
-        {title} <span className="muted small mono">vs {r.base} (merge-base {r.merge_base})</span>
-      </h3>
-      <div className="muted small">
-        {r.ahead ?? 0} commit(s) ahead, {r.behind ?? 0} behind · {files.length} file(s) changed, +{r.added ?? 0} −{r.deleted ?? 0}
-        {untracked.length > 0 && ` · ${untracked.length} untracked`}
-      </div>
-      {!files.length && !untracked.length && !r.ahead && <div className="muted">no changes</div>}
-      {(r.commits ?? []).length > 0 && (
-        <table className="small" style={{ marginTop: 8 }}>
-          <tbody>
-            {r.commits!.map((c) => (
-              <tr key={c.sha}>
-                <td className="mono">{c.sha}</td>
-                <td>{c.subject}</td>
-                <td className="muted">{c.author}</td>
-                <td className="muted">{c.when}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {(files.length > 0 || untracked.length > 0) && (
-        <table className="small" style={{ marginTop: 8 }}>
-          <thead>
-            <tr>
-              <th>st</th>
-              <th className="num">+</th>
-              <th className="num">−</th>
-              <th>file</th>
-            </tr>
-          </thead>
-          <tbody>
-            {files.map((f) => [
-              <tr key={f.path} className={`clickable ${open === f.path ? "selected" : ""}`} onClick={() => toggle(f.path)}>
-                <td className="mono">{f.status}</td>
-                <td className="num diff-add">{f.added ?? "bin"}</td>
-                <td className="num diff-del">{f.deleted ?? "bin"}</td>
-                <td className="mono">
-                  {f.old_path ? `${f.old_path} → ` : ""}
-                  {f.path} {f.uncommitted && <Badge kind="warn">uncommitted</Badge>}
-                </td>
-              </tr>,
-              open === f.path && (
-                <tr key={`${f.path}:diff`}>
-                  <td colSpan={4}>
-                    <FileDiff path={path} sub={sub} file={f.path} />
-                  </td>
-                </tr>
-              ),
-            ])}
-            {untracked.map((u) => [
-              <tr key={`?${u}`} className={`clickable ${open === u ? "selected" : ""}`} onClick={() => toggle(u)}>
-                <td className="mono">?</td>
-                <td />
-                <td />
-                <td className="mono">
-                  {u} <Badge>untracked</Badge>
-                </td>
-              </tr>,
-              open === u && (
-                <tr key={`?${u}:diff`}>
-                  <td colSpan={4}>
-                    <FileDiff path={path} sub={sub} file={u} />
-                  </td>
-                </tr>
-              ),
-            ])}
-          </tbody>
-        </table>
-      )}
-      {r.truncated && <div className="muted small">file list truncated</div>}
-    </div>
-  );
-}
-
 function ChangesSection({ path }: { path: string }) {
   const q = useChanges(path);
   if (q.isLoading) return <Loading what="changes" />;
   if (q.error) return <ErrorBox error={q.error} />;
-  const repos = Object.entries(q.data?.repos ?? {});
   return (
     <div>
       <h2>Changes vs base</h2>
-      {repos.map(([sub, r]) => (
-        <RepoChangesView key={sub || "."} path={path} sub={sub} r={r} />
-      ))}
+      <ChangesView
+        changes={q.data}
+        scope={`wt:${path}`}
+        fetchDiff={(sub, file) => api.get("/worktrees/diff", { ref: path, sub, path: file })}
+      />
     </div>
   );
 }
@@ -953,10 +911,11 @@ export function NodePage() {
   const path = useParams()["*"] ?? "";
   const notice = (useLocation().state as { notice?: string } | null)?.notice;
   const [sp, setSp] = useSearchParams();
+  const [showArchived, setShowArchived] = usePersistentState("node:showArchived", false);
   const tab = (TABS as readonly string[]).includes(sp.get("tab") ?? "") ? (sp.get("tab") as Tab) : "runsets";
   const q = useQuery({
-    queryKey: ["node", path],
-    queryFn: () => api.get<NodeContext>("/nodes/context", { ref: path, max_runsets: 50 }),
+    queryKey: ["node", path, showArchived],
+    queryFn: () => api.get<NodeContext>("/nodes/context", { ref: path, max_runsets: 50, include_archived: showArchived }),
     refetchInterval: 10000,
   });
   if (q.isLoading) return <Loading what={path} />;
@@ -968,7 +927,7 @@ export function NodePage() {
       {/* sibling keys must differ: a shared key made React leave a stale Header behind when ScriptsTab unmounted */}
       <Header key={`header:${ctx.node.id}`} ctx={ctx} />
       <Tabs tabs={TABS} value={tab} onChange={(t) => setSp({ tab: t }, { replace: true })} />
-      {tab === "runsets" && <RunsetsTab ctx={ctx} />}
+      {tab === "runsets" && <RunsetsTab ctx={ctx} showArchived={showArchived} onShowArchived={setShowArchived} />}
       {tab === "submit" && <SubmitTab ctx={ctx} />}
       {tab === "recipes" && <RecipesTab ctx={ctx} />}
       {tab === "scripts" && <ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} />}

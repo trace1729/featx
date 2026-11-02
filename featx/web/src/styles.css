@@ -90,6 +90,8 @@ tr.selected td { background: var(--accent-bg); }
    renders lines as they scroll into view) widened its column while the other one shrank */
 .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .grid2 > * { min-width: 0; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.grid3 > * { min-width: 0; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
 .muted { color: var(--muted); } .small { font-size: 11px; }

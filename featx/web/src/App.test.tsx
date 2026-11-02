@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -278,5 +278,145 @@ describe("App", () => {
     expect((await screen.findByText("+new")).className).toBe("add");
     expect(screen.getByText("-old").className).toBe("del");
     expect(writes()).toEqual([]);
+  });
+
+  it("folds the untracked files into a collapsed directory tree", async () => {
+    setToken("t0k");
+    extra["/nodes/context"] = withNode({}, { git: GIT });
+    extra["/worktrees/status"] = { worktree: "/wt/wpe", branch: "wpe", exists: true, head: "d00d1e", dirty: 0 };
+    extra["/worktrees/changes"] = {
+      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 0, behind: 0, files: [],
+        untracked: ["a/b/c/one.txt", "a/b/c/two.txt", "top.txt"], untracked_total: 3, untracked_truncated: false } },
+      total: { files: 0, added: 0, deleted: 0, ahead: 0 },
+    };
+    extra["/worktrees/diff"] = { sub: "", path: "a/b/c/one.txt", diff: "+hello\n", truncated: false };
+    renderAt("/node/wpe?tab=worktree");
+    await screen.findByText(/untracked: 3 files in 1 dir/);
+    expect(screen.queryByTestId("untracked-tree")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /untracked:/ }));
+    const tree = await screen.findByTestId("untracked-tree");
+    // the a/b/c single-child chain folds into one directory row
+    expect(tree.textContent).toContain("a/b/c");
+    expect(tree.textContent).not.toContain("one.txt");
+    fireEvent.click(within(tree).getByText(/a\/b\/c/));
+    expect(await screen.findByText("one.txt")).toBeTruthy();
+    fireEvent.click(screen.getByText("one.txt"));
+    expect(await screen.findByText("+hello")).toBeTruthy();
+    const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
+    expect(urls.some((u) => u.includes("/worktrees/diff") && u.includes("path=a%2Fb%2Fc%2Fone.txt"))).toBe(true);
+  });
+
+  it("filters a task's jobs by state and keeps the filter in the URL", async () => {
+    setToken("t0k");
+    extra["/tasks/T1"] = {
+      ...(FIXTURES["/tasks/T1"] as Record<string, unknown>),
+      jobs: [
+        { name: "a_1_0.5", state: "failed", host: "h1", attempt: 1, rc: 1, progress: {}, failure: { class: "design", signature: "boom" }, eta_s: 0 },
+        { name: "b_1_0.5", state: "succeeded", host: "h1", attempt: 1, rc: 0, progress: {}, failure: null, eta_s: 0 },
+        { name: "c_1_0.5", state: "succeeded", host: "h1", attempt: 1, rc: 0, progress: {}, failure: null, eta_s: 0 },
+      ],
+    };
+    renderAt("/runset/wpe/overlay/20261013-1");
+    const table = await screen.findByTestId("jobs-scroll");
+    const inTable = (name: string) => within(table).getByText(name);
+    expect(inTable("a_1_0.5")).toBeTruthy();
+    const chip = [...screen.getAllByRole("button")].find((b) => b.getAttribute("aria-pressed") !== null && /succeeded/.test(b.textContent ?? ""))!;
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() => expect(within(table).queryByText("a_1_0.5")).toBeNull());
+    expect(inTable("b_1_0.5")).toBeTruthy();
+    fireEvent.click(chip);
+    expect(await within(table).findByText("a_1_0.5")).toBeTruthy();
+  });
+
+  it("shows the runset parameters with the overridden keys marked", async () => {
+    setToken("t0k");
+    extra["/result"] = {
+      ...(FIXTURES["/result"] as Record<string, unknown>),
+      params: { build: { tool: "gsim", mode: "trace" }, run: { W: 1000000, I: 2000000, points: 1090 }, post: { "pk.plugin": "perf-keys" } },
+      overrides: { run: { W: 1000000 } },
+      recipes: { build: { tool: "gsim" }, run: { W: 1000000 }, post: { steps: {} } },
+    };
+    renderAt("/runset/wpe/overlay/20261013-1");
+    expect(await screen.findByText("1,000,000")).toBeTruthy();
+    expect(screen.getByText("overrides: 1")).toBeTruthy();
+    const overrideBadge = [...document.querySelectorAll(".badge")].find((b) => b.textContent === "set");
+    expect(overrideBadge).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "full recipe (YAML)" }));
+    expect(await screen.findByRole("button", { name: "hide full recipe" })).toBeTruthy();
+  });
+
+  it("shows the runset code tab and can compare against the worktree", async () => {
+    setToken("t0k");
+    extra["/runsets"] = [{ ...(FIXTURES["/result"] as object), ref: "wpe/overlay/20261012-2", archived: false }];
+    extra["/runsets/code"] = {
+      ref: "wpe/overlay/20261013-1", against: "base", legacy: false, no_code: false, drift: null, source_runset: null,
+      compared_runset: null, snapshot: { super: { commit: "abcdef1234567890" } },
+      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
+        commits: [{ sha: "d00d1e", author: "me", when: "1 hour ago", subject: "try a wider window" }],
+        files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] } },
+      total: { files: 1, added: 3, deleted: 1, ahead: 1 },
+    };
+    extra["/runsets/code/diff"] = { sub: "", path: "src/core.scala", diff: "+new", truncated: false };
+    renderAt("/runset/wpe/overlay/20261013-1?tab=code");
+    expect(await screen.findByText(/snapshot abcdef123456/)).toBeTruthy();
+    expect(await screen.findByText("try a wider window")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("against"), { target: { value: "worktree" } });
+    await waitFor(() => {
+      const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.startsWith("/runsets/code?") && u.includes("against=worktree"))).toBe(true);
+    });
+  });
+
+  it("archives a runset from its page", async () => {
+    setToken("t0k");
+    renderAt("/runset/wpe/overlay/20261013-1");
+    fireEvent.click(await screen.findByRole("button", { name: "archive" }));
+    await waitFor(() => expect(writes()).toEqual([["/runsets/archive", { ref: "wpe/overlay/20261013-1", archived: true }]]));
+  });
+
+  it("filters the task list by state and compares two runsets", async () => {
+    setToken("t0k");
+    extra["/tasks"] = [
+      { id: "T1", kind: "run", node: "wpe/overlay", runset: "20261013-1", state: "succeeded", note: "", after: [],
+        counts: { succeeded: 1 }, failure: null, created: "2026-10-13T10:00:00", priority: 0, blocked: false,
+        design_relaunches: 0, outputs: {}, eta_s: null },
+      { id: "T2", kind: "run", node: "wpe/overlay", runset: "20261013-2", state: "cancelled", note: "dependency run x failed",
+        after: [], counts: {}, failure: null, created: "2026-10-13T11:00:00", priority: 0, blocked: false,
+        cancelled_by: "UP", design_relaunches: 0, outputs: {}, eta_s: null },
+      { id: "T3", kind: "run", node: "wpe/overlay", runset: "20261013-3", state: "queued", note: "", after: [],
+        counts: { queued: 1 }, failure: null, created: "2026-10-13T12:00:00", priority: 0, blocked: true,
+        design_relaunches: 0, outputs: {}, eta_s: null },
+    ];
+    const ctx = extra["/nodes/context"] as Record<string, unknown> | undefined;
+    renderAt("/tasks");
+    expect(await screen.findByText("wpe/overlay/20261013-1")).toBeTruthy();
+    const chip = (label: string) =>
+      [...screen.getAllByRole("button")].find((b) => b.getAttribute("aria-pressed") !== null && new RegExp(label).test(b.textContent ?? ""))!;
+    fireEvent.click(chip("blocked"));
+    await waitFor(() => expect(screen.queryByText("wpe/overlay/20261013-1")).toBeNull());
+    expect(screen.getByText("wpe/overlay/20261013-2")).toBeTruthy();   // dependency-cancelled counts as blocked
+    expect(screen.getByText("wpe/overlay/20261013-3")).toBeTruthy();   // design-blocked too
+    fireEvent.click(chip("blocked"));
+    expect(await screen.findByText("wpe/overlay/20261013-1")).toBeTruthy();
+    void ctx;
+
+    // two selected runsets open the code tab comparing the newer one against the older
+    const summaries = ["20261013-1", "20261013-2"].map((name) => ({
+      ...(FIXTURES["/result"] as object), ref: `wpe/${name}`, name, params: { run: { W: name === "20261013-1" ? 1 : 2 } },
+    }));
+    extra["/nodes/context"] = withNode({}, { runsets: summaries, runset_count: 2, params_differing: ["run.W"], archived_count: 0 });
+    extra["/runsets/code"] = { ref: "wpe/20261013-2", against: "wpe/20261013-1", legacy: false, no_code: false,
+      repos: {}, total: { files: 0, added: 0, deleted: 0, ahead: 0 } };
+    renderAt("/node/wpe");
+    await screen.findByText("20261013-1");
+    expect(await screen.findByText(/run.W=1/)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));
+    fireEvent.click(screen.getByLabelText("select wpe/20261013-2"));
+    fireEvent.click(screen.getByRole("button", { name: "compare" }));
+    await waitFor(() => {
+      const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
+      expect(urls.some((u) => u.startsWith("/runsets/code?") && u.includes("against=wpe%2F20261013-1"))).toBe(true);
+    });
   });
 });

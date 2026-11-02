@@ -133,3 +133,32 @@ describe("checkpointGroups", () => {
     expect(setFlags(merged)).toEqual(["--set run.W=5", "--set run.workload=spec06", "--set 'run.points=[\"a_1_0.1\"]'"]);
   });
 });
+
+import { foldUntracked, overrideKeys, untrackedDirCount } from "./util";
+
+describe("foldUntracked", () => {
+  it("folds single-child directory chains and counts files", () => {
+    const nodes = foldUntracked(["a/b/c/x.txt", "a/b/c/y.txt", "a/b/d/z.txt", "top.txt"]);
+    expect(nodes.map((n) => n.type)).toEqual(["dir", "file"]);
+    const a = nodes[0] as import("./util").UntrackedDir;
+    expect(a.name).toBe("a/b");
+    expect(a.count).toBe(3);
+    expect(a.children.map((n) => (n.type === "dir" ? `${n.name}:${n.count}` : n.name))).toEqual(["c:2", "d:1"]);
+    expect((nodes[1] as import("./util").UntrackedFile).name).toBe("top.txt");
+    expect(untrackedDirCount(["a/b/c/x.txt", "a/b/c/y.txt", "a/b/d/z.txt", "top.txt"])).toBe(2);
+  });
+
+  it("keeps files of a directory that also has subdirectories", () => {
+    const [dir] = foldUntracked(["src/a.txt", "src/sub/b.txt"]);
+    expect((dir as import("./util").UntrackedDir).name).toBe("src");
+    expect((dir as import("./util").UntrackedDir).children.map((n) => n.type)).toEqual(["dir", "file"]);
+  });
+});
+
+describe("overrideKeys", () => {
+  it("flattens the raw submit overrides, keeping nulls", () => {
+    expect([...overrideKeys({ run: { W: 1, coverage: null }, build: { options: { threads: 4 } } })].sort())
+      .toEqual(["build.options.threads", "run.W", "run.coverage"]);
+    expect(overrideKeys(undefined).size).toBe(0);
+  });
+});

@@ -1,0 +1,195 @@
+import { useQuery } from "@tanstack/react-query";
+import { Fragment, useState } from "react";
+import { Badge, ErrorBox, Loading } from "./ui";
+import { foldUntracked, untrackedDirCount, type UntrackedNode } from "../util";
+import type { Changes, CodeRepo } from "../types";
+
+export type DiffFetcher = (sub: string, path: string) => Promise<{ diff: string; truncated: boolean }>;
+
+export function DiffView({ text }: { text: string }) {
+  return (
+    <pre className="diff">
+      {text.split("\n").map((line, i) => (
+        <div key={i} className={line.startsWith("+++") || line.startsWith("---") ? "meta" : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith("@@") ? "hunk" : ""}>
+          {line || " "}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
+function FileDiff({ scope, sub, file, fetchDiff }: { scope: string; sub: string; file: string; fetchDiff: DiffFetcher }) {
+  const q = useQuery({
+    queryKey: ["diff", scope, sub, file],
+    queryFn: () => fetchDiff(sub, file),
+  });
+  if (q.isLoading) return <Loading what="diff" />;
+  if (q.error) return <ErrorBox error={q.error} />;
+  return (
+    <div>
+      {q.data!.truncated && <div className="notice">diff truncated</div>}
+      {q.data!.diff ? <DiffView text={q.data!.diff} /> : <div className="muted small">no textual diff (binary or mode change)</div>}
+    </div>
+  );
+}
+
+function UntrackedTree({ nodes, sub, level, scope, fetchDiff }: { nodes: UntrackedNode[]; sub: string; level: number; scope: string; fetchDiff: DiffFetcher }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [open, setOpen] = useState<string | null>(null);
+  const toggle = (path: string) =>
+    setExpanded((old) => {
+      const next = new Set(old);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  return (
+    <>
+      {nodes.map((node) => {
+        if (node.type === "dir") {
+          const isOpen = expanded.has(node.path);
+          return (
+            <Fragment key={`d:${node.path}`}>
+              <tr className="clickable" onClick={() => toggle(node.path)}>
+                <td className="mono">{isOpen ? "▾" : "▸"}</td>
+                <td />
+                <td />
+                <td className="mono" style={{ paddingLeft: level * 14 }}>
+                  {node.name}/ <span className="muted">({node.count})</span>
+                </td>
+              </tr>
+              {isOpen && <UntrackedTree nodes={node.children} sub={sub} level={level + 1} scope={scope} fetchDiff={fetchDiff} />}
+            </Fragment>
+          );
+        }
+        return (
+          <Fragment key={`f:${node.path}`}>
+            <tr className={`clickable ${open === node.path ? "selected" : ""}`} onClick={() => setOpen(open === node.path ? null : node.path)}>
+              <td className="mono">?</td>
+              <td />
+              <td />
+              <td className="mono" style={{ paddingLeft: 14 + level * 14 }}>
+                {node.name} <Badge>untracked</Badge>
+              </td>
+            </tr>
+            {open === node.path && (
+              <tr>
+                <td colSpan={4}>
+                  <FileDiff scope={scope} sub={sub} file={node.path} fetchDiff={fetchDiff} />
+                </td>
+              </tr>
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function UntrackedSection({ paths, sub, total, truncated, scope, fetchDiff }: { paths: string[]; sub: string; total: number; truncated: boolean; scope: string; fetchDiff: DiffFetcher }) {
+  const [show, setShow] = useState(false);
+  const nodes = foldUntracked(paths);
+  const dirs = untrackedDirCount(paths);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button className="link small" onClick={() => setShow(!show)}>
+        {show ? "▾" : "▸"} untracked: {total} file{total === 1 ? "" : "s"}
+        {dirs > 0 ? ` in ${dirs} dir${dirs === 1 ? "" : "s"}` : ""}
+        {truncated ? " (list truncated)" : ""}
+      </button>
+      {show && (
+        <table className="small" style={{ marginTop: 4 }} data-testid="untracked-tree">
+          <tbody>
+            <UntrackedTree nodes={nodes} sub={sub} level={0} scope={scope} fetchDiff={fetchDiff} />
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+export function RepoChangesView({ r, sub, scope, fetchDiff }: { r: CodeRepo; sub: string; scope: string; fetchDiff: DiffFetcher }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const title = sub || "worktree";
+  if (!r.exists) return <div className="notice">{title}: {r.path} is missing on disk</div>;
+  if (r.error) return <div className="notice">{title}: {r.error}</div>;
+  const files = r.files ?? [];
+  const untracked = r.untracked ?? [];
+  const total = r.untracked_total ?? untracked.length;
+  const toggle = (f: string) => setOpen(open === f ? null : f);
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>
+        {title} <span className="muted small mono">vs {r.base} (merge-base {r.merge_base})</span>
+      </h3>
+      <div className="muted small">
+        {r.ahead ?? 0} commit(s) ahead, {r.behind ?? 0} behind · {files.length} file(s) changed, +{r.added ?? 0} −{r.deleted ?? 0}
+        {total > 0 && ` · ${total} untracked`}
+      </div>
+      {!files.length && !total && !r.ahead && <div className="muted">no changes</div>}
+      {(r.commits ?? []).length > 0 && (
+        <table className="small" style={{ marginTop: 8 }}>
+          <tbody>
+            {r.commits!.map((c) => (
+              <tr key={c.sha}>
+                <td className="mono">{c.sha}</td>
+                <td>{c.subject}</td>
+                <td className="muted">{c.author}</td>
+                <td className="muted">{c.when}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {files.length > 0 && (
+        <table className="small" style={{ marginTop: 8 }}>
+          <thead>
+            <tr>
+              <th>st</th>
+              <th className="num">+</th>
+              <th className="num">−</th>
+              <th>file</th>
+            </tr>
+          </thead>
+          <tbody>
+            {files.map((f) => [
+              <tr key={f.path} className={`clickable ${open === f.path ? "selected" : ""}`} onClick={() => toggle(f.path)}>
+                <td className="mono">{f.status}</td>
+                <td className="num diff-add">{f.added ?? "bin"}</td>
+                <td className="num diff-del">{f.deleted ?? "bin"}</td>
+                <td className="mono">
+                  {f.old_path ? `${f.old_path} → ` : ""}
+                  {f.path} {f.uncommitted && <Badge kind="warn">uncommitted</Badge>}
+                </td>
+              </tr>,
+              open === f.path && (
+                <tr key={`${f.path}:diff`}>
+                  <td colSpan={4}>
+                    <FileDiff scope={scope} sub={sub} file={f.path} fetchDiff={fetchDiff} />
+                  </td>
+                </tr>
+              ),
+            ])}
+          </tbody>
+        </table>
+      )}
+      {total > 0 && (
+        <UntrackedSection paths={untracked} sub={sub} total={total} truncated={!!r.untracked_truncated} scope={scope} fetchDiff={fetchDiff} />
+      )}
+      {r.truncated && <div className="muted small">file list truncated</div>}
+    </div>
+  );
+}
+
+export function ChangesView({ changes, scope, fetchDiff }: { changes?: Changes; scope: string; fetchDiff: DiffFetcher }) {
+  const repos = Object.entries(changes?.repos ?? {});
+  if (!repos.length) return <div className="muted">no changes</div>;
+  return (
+    <div>
+      {repos.map(([sub, r]) => (
+        <RepoChangesView key={sub || "."} sub={sub} r={r} scope={scope} fetchDiff={fetchDiff} />
+      ))}
+    </div>
+  );
+}
+

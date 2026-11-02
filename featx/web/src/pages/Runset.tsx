@@ -1,17 +1,20 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import YAML from "yaml";
 import { api } from "../api";
+import { ChangesView, DiffView } from "../components/Changes";
 import { FileBrowser, FileView, Markdown } from "../components/FileViewer";
 import { LogTail } from "../components/LogTail";
 import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
-import type { JobView, RunsetSummary, TaskView } from "../types";
-import { countsText, fmtCount, fmtTime, fmtValue, splitRunset } from "../util";
+import { YamlEditor } from "../components/YamlEditor";
+import type { CodeView, JobView, RunsetSummary, TaskView } from "../types";
+import { countsText, fmtCount, fmtTime, fmtValue, overrideKeys, splitRunset } from "../util";
 import { PriorityControl } from "./Tasks";
 import { useI18n } from "../i18n";
 
 const ACTIVE = ["queued", "running", "launching"];
-const TABS = ["jobs", "post", "files", "problem log", "provenance"] as const;
+const TABS = ["jobs", "code", "post", "files", "problem log", "provenance"] as const;
 type Tab = (typeof TABS)[number];
 
 function jobPct(job: JobView, target?: number): number | null {
@@ -20,9 +23,34 @@ function jobPct(job: JobView, target?: number): number | null {
   return (100 * job.progress.inst) / target;
 }
 
-function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; onJob: (j: string) => void }) {
+const JOB_STATES = ["running", "queued", "succeeded", "failed", "cancelled"];
+
+function JobFilter({ jobs, selected, onChange }: { jobs: JobView[]; selected: string[]; onChange: (next: string[]) => void }) {
+  const counts: Record<string, number> = {};
+  for (const j of jobs) counts[j.state] = (counts[j.state] ?? 0) + 1;
+  const states = JOB_STATES.filter((s) => counts[s]);
+  for (const s of Object.keys(counts)) if (!states.includes(s)) states.push(s);
+  if (states.length < 2) return null;
+  return (
+    <div className="chips" style={{ marginBottom: 6 }}>
+      {states.map((s) => (
+        <button
+          key={s}
+          className={`chip ${selected.includes(s) ? "active" : ""}`}
+          aria-pressed={selected.includes(s)}
+          onClick={() => onChange(selected.includes(s) ? selected.filter((x) => x !== s) : [...selected, s])}
+        >
+          <StateBadge state={s} /> {counts[s]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function JobsTable({ task, job, onJob, states }: { task: TaskView; job: string | null; onJob: (j: string) => void; states?: string[] }) {
   const { t } = useI18n();
-  const jobs = task.jobs ?? [];
+  const all = task.jobs ?? [];
+  const jobs = states && states.length ? all.filter((j) => states.includes(j.state)) : all;
   const wrap = useRef<HTMLDivElement>(null);
   // A campaign has ~1000 jobs: the table scrolls in its own box (header kept visible) so the
   // log below stays reachable; keep the selected job (e.g. from ?job=) in view without
@@ -36,7 +64,8 @@ function JobsTable({ task, job, onJob }: { task: TaskView; job: string | null; o
       box.scrollTop = row.offsetTop - head - (box.clientHeight - head) / 2;
     }
   }, [job, jobs.length]);
-  if (!jobs.length) return <div className="muted">{t("this task has no per-point jobs.")}</div>;
+  if (!all.length) return <div className="muted">{t("this task has no per-point jobs.")}</div>;
+  if (!jobs.length) return <div className="muted">{t("no job matches the state filter.")}</div>;
   return (
     <div className="table-wrap jobs-wrap" ref={wrap} data-testid="jobs-scroll">
       <table>
@@ -217,7 +246,180 @@ function ProblemLogTab({ rs, task }: { rs: RunsetSummary; task?: TaskView }) {
   );
 }
 
+const STAGES = ["build", "run", "post"] as const;
+
+function ParamsCard({ rs }: { rs: RunsetSummary }) {
+  const { t } = useI18n();
+  const [full, setFull] = useState(false);
+  const overrides = new Set([...overrideKeys(rs.overrides)].map((k) => k.replace(/^post\.steps\./, "post.")));
+  const params = rs.params ?? {};
+  return (
+    <div className="card">
+      <div className="row">
+        <b>{t("parameters")}</b>
+        {overrides.size > 0 && (
+          <Badge kind="warn" title={[...overrides].join(", ")}>
+            {t("overrides")}: {overrides.size}
+          </Badge>
+        )}
+        <span className="spacer" />
+        <button className="link small" onClick={() => setFull(!full)}>
+          {full ? t("hide full recipe") : t("full recipe (YAML)")}
+        </button>
+      </div>
+      {full ? (
+        <YamlEditor value={YAML.stringify(rs.recipes ?? {})} readOnly height="420px" />
+      ) : (
+        <div className="grid3">
+          {STAGES.map((stage) => {
+            const items = params[stage] ?? {};
+            return (
+              <div key={stage}>
+                <h3 style={{ marginTop: 4 }}>{stage}</h3>
+                {Object.keys(items).length === 0 ? (
+                  <div className="muted small">—</div>
+                ) : (
+                  <table className="small">
+                    <tbody>
+                      {Object.entries(items).map(([key, value]) => {
+                        const dotted = `${stage}.${key}`;
+                        const set = overrides.has(dotted);
+                        return (
+                          <tr key={key}>
+                            <td className="mono">
+                              {key} {set && <Badge kind="warn">{t("set")}</Badge>}
+                            </td>
+                            <td className="mono">{fmtValue(value)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CodeTab({ rs }: { rs: RunsetSummary }) {
+  const { t } = useI18n();
+  const [sp, setSp] = useSearchParams();
+  const against = sp.get("against") || "base";
+  const node = splitRunset(rs.ref).node;
+  const setAgainst = (value: string) => {
+    const next = new URLSearchParams(sp);
+    if (value && value !== "base") next.set("against", value);
+    else next.delete("against");
+    setSp(next, { replace: true });
+  };
+  const runsets = useQuery({
+    queryKey: ["runsets", node],
+    queryFn: () => api.get<RunsetSummary[]>("/runsets", { ref: node }),
+    staleTime: 30000,
+  });
+  const q = useQuery({
+    queryKey: ["code", rs.ref, against],
+    queryFn: () => api.get<CodeView>("/runsets/code", { ref: rs.ref, against }),
+  });
+  const choices = (runsets.data ?? []).filter((r) => r.ref !== rs.ref);
+  const known = ["base", "prev", "worktree"].includes(against) || choices.some((r) => r.ref === against);
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <span className="muted small">{t("against")}</span>
+        <select value={against} onChange={(e) => setAgainst(e.target.value)} aria-label="against">
+          <option value="base">{t("node base")}</option>
+          <option value="prev">{t("previous runset")}</option>
+          <option value="worktree">{t("worktree now")}</option>
+          {choices.map((r) => (
+            <option key={r.ref} value={r.ref}>
+              {r.ref.slice(node.length + 1)}
+            </option>
+          ))}
+          {!known && <option value={against}>{against}</option>}
+        </select>
+        {q.data?.compared_runset && <span className="muted small">{t("vs")} {q.data.compared_runset}</span>}
+        {q.data?.source_runset && (
+          <span className="muted small">
+            {t("code from runset")} <Link to={`/runset/${q.data.source_runset}?tab=code`}>{q.data.source_runset}</Link>
+          </span>
+        )}
+        <span className="spacer" />
+        {q.data?.snapshot?.super?.commit && <span className="mono small">snapshot {q.data.snapshot.super.commit.slice(0, 12)}</span>}
+      </div>
+      {q.data?.snapshot?.submodules && Object.keys(q.data.snapshot.submodules).length > 0 && (
+        <div className="muted small mono">
+          {Object.entries(q.data.snapshot.submodules).map(([name, s]) => (
+            <span key={name} style={{ marginRight: 10 }}>
+              {name}: {String(s.commit ?? "").slice(0, 8)}
+              {s.shared ? ` (${t("shared")})` : ""}
+            </span>
+          ))}
+        </div>
+      )}
+      {q.data?.drift && (
+        <div className="notice">
+          {t("snapshot drift")}: {q.data.drift} — {t("the binary may not match this snapshot")}
+        </div>
+      )}
+      {q.isLoading ? (
+        <Loading what="code" />
+      ) : q.error ? (
+        <ErrorBox error={q.error} />
+      ) : q.data?.no_code ? (
+        <div className="notice">
+          {t("no code recorded")}: {q.data.reason}
+        </div>
+      ) : q.data?.legacy ? (
+        <div>
+          <p className="muted small">
+            {t("legacy runset")}: HEAD <span className="mono">{q.data.head}</span> + src-patches (tracked changes at submit).
+          </p>
+          {Object.entries(q.data.patches ?? {}).map(([name, text]) => (
+            <div key={name} className="card">
+              <h3 className="mono">{name}</h3>
+              <DiffView text={text} />
+            </div>
+          ))}
+          {!Object.keys(q.data.patches ?? {}).length && <div className="muted">no saved patches</div>}
+        </div>
+      ) : q.data ? (
+        <ChangesView
+          changes={q.data}
+          scope={`code:${rs.ref}:${against}`}
+          fetchDiff={(sub, path) => api.get("/runsets/code/diff", { ref: rs.ref, against, sub, path })}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ArchiveButton({ rs }: { rs: RunsetSummary }) {
+  const { t } = useI18n();
+  const qc = useQueryClient();
+  const act = useAction();
+  return (
+    <button
+      title={rs.archive_note || undefined}
+      disabled={act.busy}
+      onClick={() =>
+        act.run(async () => {
+          await api.post("/runsets/archive", { ref: rs.ref, archived: !rs.archived });
+          await qc.invalidateQueries();
+        })
+      }
+    >
+      {rs.archived ? t("unarchive") : t("archive")}
+    </button>
+  );
+}
+
 export function RunsetPage() {
+  const { t } = useI18n();
   const ref = useParams()["*"] ?? "";
   const { node, name } = splitRunset(ref);
   const [sp, setSp] = useSearchParams();
@@ -228,6 +430,7 @@ export function RunsetPage() {
     setSp(next, { replace: true });
   };
   const tab = (TABS as readonly string[]).includes(sp.get("tab") ?? "") ? (sp.get("tab") as Tab) : "jobs";
+  const jobStates = (sp.get("jobs") ?? "").split(",").filter(Boolean);
   const rsq = useQuery({ queryKey: ["result", ref], queryFn: () => api.get<RunsetSummary>("/result", { ref }), refetchInterval: 5000 });
   const briefs = rsq.data?.tasks ?? [];
   const tq = useQueries({
@@ -262,15 +465,18 @@ export function RunsetPage() {
           {name}
         </h1>
         {rs.sealed && <Badge kind="sealed">sealed</Badge>}
+        {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
         <span>{rs.purpose}</span>
         <span className="spacer" />
         <span className="muted">{fmtTime(rs.created)}</span>
+        <ArchiveButton rs={rs} />
       </div>
       {rs.derived_from && (
         <p className="muted">
           derived from <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
         </p>
       )}
+      <ParamsCard rs={rs} />
       <div className="row" style={{ margin: "10px 0" }}>
         {tasks.map((t, i) => (
           <span key={t.id} className="row" style={{ gap: 4 }}>
@@ -300,7 +506,8 @@ export function RunsetPage() {
       <Tabs tabs={TABS} value={tab} onChange={(t) => setParam("tab", t)} />
       {tab === "jobs" && pick && (
         <div>
-          <JobsTable task={pick} job={job} onJob={(j) => setParam("job", j)} />
+          <JobFilter jobs={jobs} selected={jobStates} onChange={(next) => setParam("jobs", next.join(",") || null)} />
+          <JobsTable task={pick} job={job} onJob={(j) => setParam("job", j)} states={jobStates} />
           <h3>
             Log {job ? <span className="mono">{job}</span> : `(${pick.kind})`}
           </h3>
@@ -313,6 +520,7 @@ export function RunsetPage() {
           />
         </div>
       )}
+      {tab === "code" && <CodeTab rs={rs} />}
       {tab === "post" && <PostTab rs={rs} />}
       {tab === "files" && <FileBrowser dir={rs.dir} depth={3} />}
       {tab === "problem log" && <ProblemLogTab rs={rs} task={pick} />}

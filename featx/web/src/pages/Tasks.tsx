@@ -139,16 +139,55 @@ export function TaskTable({ tasks }: { tasks: TaskView[] }) {
   );
 }
 
+const STATE_CHIPS = ["queued", "running", "blocked", "succeeded", "failed", "cancelled"] as const;
+
+function matchesStates(task: TaskView, states: string[]): boolean {
+  if (!states.length) return true;
+  if (task.state === "running" || task.state === "launching") {
+    if (states.includes("running")) return true;
+  } else if (states.includes(task.state)) {
+    return true;
+  }
+  return states.includes("blocked") && (task.blocked || !!task.cancelled_by);
+}
+
+function StateFilter({ tasks, selected, onChange }: { tasks: TaskView[]; selected: string[]; onChange: (next: string[]) => void }) {
+  const { t } = useI18n();
+  const counts = Object.fromEntries(STATE_CHIPS.map((s) => [s, 0])) as Record<string, number>;
+  for (const task of tasks) {
+    if (task.state === "running" || task.state === "launching") counts.running += 1;
+    else if (task.state in counts) counts[task.state] += 1;
+    if (task.blocked || task.cancelled_by) counts.blocked += 1;
+  }
+  return (
+    <div className="chips" style={{ marginBottom: 8 }}>
+      {STATE_CHIPS.map((s) => (
+        <button
+          key={s}
+          className={`chip ${selected.includes(s) ? "active" : ""}`}
+          aria-pressed={selected.includes(s)}
+          title={t("filter tasks by state")}
+          onClick={() => onChange(selected.includes(s) ? selected.filter((x) => x !== s) : [...selected, s])}
+        >
+          <StateBadge state={s} /> {counts[s]}
+        </button>
+      ))}
+      {selected.length > 0 && <button className="link small" onClick={() => onChange([])}>{t("clear selection")}</button>}
+    </div>
+  );
+}
+
 export function TasksPage() {
   const { t } = useI18n();
   const q = useQuery({ queryKey: ["tasks", "all"], queryFn: () => api.get<TaskView[]>("/tasks", { limit: 200 }), refetchInterval: 5000 });
   const hosts = useQuery({ queryKey: ["hosts"], queryFn: () => api.get<HostRow[]>("/hosts"), refetchInterval: 60000 });
   const [showDone, setShowDone] = usePersistentState("tasks:showFinished", true);
   const [filter, setFilter] = usePersistentState("tasks:filter", "");
+  const [states, setStates] = usePersistentState<string[]>("tasks:states", []);
   if (q.isLoading) return <Loading what={t("Tasks")} />;
   const all = q.data ?? [];
   const f = filter.trim();
-  const mine = (t: TaskView) => !f || t.node.includes(f) || t.runset.includes(f) || t.id.includes(f);
+  const mine = (t: TaskView) => (!f || t.node.includes(f) || t.runset.includes(f) || t.id.includes(f)) && matchesStates(t, states);
   const done = all.filter((t) => !ACTIVE.includes(t.state) && mine(t)).sort((a, b) => b.created.localeCompare(a.created));
   const active = all.filter((t) => ACTIVE.includes(t.state) && mine(t));
   // launch order: priority first, FIFO within a priority (as the scheduler picks)
@@ -166,6 +205,7 @@ export function TasksPage() {
           <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> {t("show finished")}
         </label>
       </div>
+      <StateFilter tasks={all} selected={states} onChange={setStates} />
       <h2>{t("Active")} ({active.length})</h2>
       <TaskTable tasks={active} />
       {showDone && (

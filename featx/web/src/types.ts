@@ -56,6 +56,14 @@ export interface RunsetSummary {
   bin?: Record<string, unknown> | null;
   provenance?: Record<string, unknown>;
   reports?: Record<string, string>;
+  archived?: boolean;
+  archived_at?: string;
+  archive_note?: string;
+  /** the raw submit --set overrides ({run: {W: 1}}) */
+  overrides?: Record<string, unknown>;
+  /** headline build/run/post parameters: {build: {tool: ...}, run: {...}, post: {...}} */
+  params?: Record<string, Record<string, unknown>>;
+  recipes?: Record<string, Record<string, unknown>>;
 }
 
 export interface GitInfo {
@@ -79,6 +87,10 @@ export interface NodeContext {
   scripts: string[];
   runsets: RunsetSummary[];
   runset_count: number;
+  archived_count?: number;
+  archived_runsets?: string[];
+  /** recipe keys whose values differ across this node's runsets (plan params.differing) */
+  params_differing?: string[];
 }
 
 export interface JobView {
@@ -105,6 +117,7 @@ export interface TaskView {
   created: string;
   priority?: number;
   blocked: boolean;
+  cancelled_by?: string | null;
   design_relaunches: number;
   outputs: Record<string, unknown>;
   eta_s: number | null;
@@ -299,4 +312,66 @@ export interface DocsIndex {
 export interface DocsTopic {
   topic: string;
   text: string;
+}
+
+/** Per-repo changes for the worktree view and the runset code view (worktree._diff_shape). */
+export interface CodeFile {
+  status: string;
+  path: string;
+  old_path: string | null;
+  added: number | null;
+  deleted: number | null;
+  uncommitted: boolean;
+}
+
+export interface CodeRepo {
+  path: string;
+  base: string;
+  exists: boolean;
+  error?: string;
+  merge_base?: string;
+  ahead?: number;
+  behind?: number;
+  commits?: { sha: string; author: string; when: string; subject: string }[];
+  files?: CodeFile[];
+  untracked?: string[];
+  untracked_total?: number;
+  untracked_truncated?: boolean;
+  truncated?: boolean;
+  added?: number;
+  deleted?: number;
+}
+
+export interface Changes {
+  repos: Record<string, CodeRepo>;
+  total?: { files: number; added: number; deleted: number; ahead: number };
+}
+
+export interface SnapshotRepo {
+  commit?: string;
+  head?: string;
+  branch?: string;
+  base?: string;
+  merge_base?: string;
+  clean?: boolean;
+  shared?: boolean;
+  untracked?: string[];
+  skipped?: { path: string; reason: string }[];
+  error?: string;
+}
+
+/** GET /runsets/code: a runset's build snapshot diffed against base|prev|worktree|<runset>. */
+export interface CodeView extends Changes {
+  ref: string;
+  against: string;
+  requested_against?: string;
+  compared_runset?: string | null;
+  legacy: boolean;
+  no_code?: boolean;
+  reason?: string;
+  head?: string | null;
+  snapshot?: { super?: SnapshotRepo; submodules?: Record<string, SnapshotRepo> } | null;
+  drift?: string | null;
+  source_runset?: string | null;
+  patches?: Record<string, string>;
 }

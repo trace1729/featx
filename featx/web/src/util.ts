@@ -284,3 +284,79 @@ export function usePersistentState<T>(key: string, fallback: T): [T, (v: T | ((o
     });
   return [current, set];
 }
+
+// ------------------------------------------------------- untracked folding
+export interface UntrackedDir { type: "dir"; name: string; path: string; count: number; children: UntrackedNode[] }
+export interface UntrackedFile { type: "file"; name: string; path: string }
+export type UntrackedNode = UntrackedDir | UntrackedFile;
+
+interface RawDir { dirs: Map<string, RawDir>; files: string[] }
+
+export function countUntracked(nodes: UntrackedNode[]): number {
+  return nodes.reduce((n, x) => n + (x.type === "file" ? 1 : x.count), 0);
+}
+
+function dirNode(name: string, path: string, raw: RawDir): UntrackedDir {
+  // single-child chains collapse into one row: a/b/c instead of a, b, c
+  while (raw.dirs.size === 1 && raw.files.length === 0) {
+    const [childName, child] = [...raw.dirs.entries()][0];
+    name = `${name}/${childName}`;
+    path = `${path}/${childName}`;
+    raw = child;
+  }
+  const children: UntrackedNode[] = [
+    ...[...raw.dirs.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([child, dir]) => dirNode(child, `${path}/${child}`, dir)),
+    ...raw.files
+      .slice()
+      .sort()
+      .map((file) => ({ type: "file" as const, name: file.slice(file.lastIndexOf("/") + 1), path: file })),
+  ];
+  return { type: "dir", name, path, count: countUntracked(children), children };
+}
+
+/** Untracked paths -> a directory tree (folded single-child chains), dirs before files. */
+export function foldUntracked(paths: string[]): UntrackedNode[] {
+  const root: RawDir = { dirs: new Map(), files: [] };
+  for (const path of paths) {
+    const parts = path.split("/");
+    let cur = root;
+    for (const dir of parts.slice(0, -1)) {
+      let next = cur.dirs.get(dir);
+      if (!next) {
+        next = { dirs: new Map(), files: [] };
+        cur.dirs.set(dir, next);
+      }
+      cur = next;
+    }
+    cur.files.push(path);
+  }
+  return [
+    ...[...root.dirs.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, dir]) => dirNode(name, name, dir)),
+    ...root.files
+      .slice()
+      .sort()
+      .map((file) => ({ type: "file" as const, name: file, path: file })),
+  ];
+}
+
+/** How many distinct directories below the root the untracked files sit in. */
+export function untrackedDirCount(paths: string[]): number {
+  return new Set(paths.filter((p) => p.includes("/")).map((p) => p.slice(0, p.lastIndexOf("/")))).size;
+}
+
+// ------------------------------------------------------------- overrides
+/** Leaf keys of the raw submit overrides: {run: {W: 1}} -> ["run.W"]. */
+export function overrideKeys(overrides: Record<string, unknown> | undefined): Set<string> {
+  const out = new Set<string>();
+  const walk = (prefix: string, v: unknown) => {
+    if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+      for (const [k, x] of Object.entries(v)) walk(prefix ? `${prefix}.${k}` : k, x);
+    } else if (prefix) out.add(prefix);
+  };
+  walk("", overrides ?? {});
+  return out;
+}
