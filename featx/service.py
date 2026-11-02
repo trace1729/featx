@@ -12,7 +12,7 @@ import shutil
 import time
 from pathlib import Path
 
-from . import baselines, config, context, problemlog, provenance, recipes, snapshots, store, taskstore, worktree
+from . import baselines, coderec, config, context, problemlog, provenance, recipes, store, taskstore, worktree
 from .model import ACTIVE_TASK_STATES
 from .tree import Tree, TreeError, purge_trash, render_tree, run_git
 
@@ -188,71 +188,54 @@ def worktree_changes(ref: str) -> dict:
     return worktree.changes(entry.node)
 
 
-def _snapshot_of(rs):
-    return (rs.provenance or {}).get("snapshot") or None
-
-
 def _bin_code_source(rs) -> str | None:
     """The runset that built this runset's binary, from the bincache manifest."""
     bin = rs.bin or {}
-    if not bin or bin.get("imported"):
-        return None
     emu = bin.get("emu")
     if not emu:
         return None
-    man = store.read_json(Path(emu).parent / "manifest.json", {})
+    man = store.read_json(Path(emu).parent / "manifest.json", {}) or {}
     node, runset = man.get("node"), man.get("runset")
     return f"{node}/{runset}" if node and runset else None
 
 
-def _code_source(tree: Tree, entry, rs):
-    """(entry, runset, snapshot) whose code produced this runset, or None (legacy / imported)."""
-    snap = _snapshot_of(rs)
-    if snap:
-        return entry, rs, snap
-    ref = _bin_code_source(rs)
-    if not ref:
+def _record_of(entry, rs) -> dict | None:
+    """The code record a build wrote: per repo HEAD + patch under <runset>/code/."""
+    code = (rs.provenance or {}).get("code") or {}
+    if not (code.get("super") or {}).get("head"):
         return None
-    try:
-        e2, rs2 = tree.find_runset(ref)
-    except TreeError:
-        return None
-    snap2 = _snapshot_of(rs2)
-    return (e2, rs2, snap2) if snap2 else None
+    return {"legacy": False, "dir": entry.dir / rs.name / "code", "super": code["super"],
+            "submodules": code.get("submodules") or {}}
 
 
-def _has_legacy_code(entry, rs) -> bool:
-    """A runset from before snapshots: it recorded a HEAD at submit and/or saved src-patches."""
-    prov = rs.provenance or {}
-    return bool((prov.get("super") or {}).get("head") or prov.get("head")
-                or (entry.dir / rs.name / "src-patches").is_dir())
-
-
-def _legacy_snapshot(rs) -> dict | None:
-    """The HEADs a pre-snapshot runset recorded at submit, in snapshot shape. Its tracked changes
-    at submit live in src-patches/ and its untracked files were never saved, so diffs built on it
-    cover committed code only (flagged `legacy`)."""
+def _legacy_record(entry, rs) -> dict | None:
+    """A runset from before code records: the HEADs it recorded at submit plus src-patches/ (the
+    tracked changes at submit; its untracked files were never saved). Runsets of the short-lived
+    git-snapshot scheme (provenance.snapshot) are read this way too."""
     prov = rs.provenance or {}
     sup = prov.get("super") or {}
     head = sup.get("head") or prov.get("head")
     if not head:
         return None
-    snap = {"legacy": True, "super": {"commit": head, "branch": sup.get("branch"),
-                                      "dirty": sup.get("dirty", prov.get("dirty"))}, "submodules": {}}
-    for name, info in (prov.get("submodules") or {}).items():
-        if (info or {}).get("head"):
-            snap["submodules"][name] = {"commit": info["head"], "branch": info.get("branch"),
-                                        "dirty": info.get("dirty"), "shared": info.get("shared", False)}
-    return snap
+    pdir = entry.dir / rs.name / "src-patches"
+
+    def info(name: str, i: dict) -> dict:
+        pn = coderec.patch_name(name)
+        return {"head": i.get("head"), "branch": i.get("branch"), "dirty": i.get("dirty"),
+                "shared": i.get("shared", False), "patch": pn if (pdir / pn).is_file() else None,
+                "unsaved_untracked": i.get("untracked_files", 0)}
+    return {"legacy": True, "dir": pdir,
+            "super": info("", {**sup, "head": head, "dirty": sup.get("dirty", prov.get("dirty"))}),
+            "submodules": {n: info(n, i) for n, i in (prov.get("submodules") or {}).items() if (i or {}).get("head")}}
 
 
 def _code_of(tree: Tree, entry, rs):
-    """(entry, runset, snapshot) behind a runset's binary: its build snapshot, the snapshot of the
+    """(entry, runset, record) behind a runset's binary: its own build record, the record of the
     runset that built its --bin, or else the HEADs recorded by that (legacy) build runset or by
     this runset itself. None for imported binaries and runsets that recorded nothing."""
-    source = _code_source(tree, entry, rs)
-    if source is not None:
-        return source
+    own = _record_of(entry, rs)
+    if own is not None:
+        return entry, rs, own
     candidates = []
     ref2 = _bin_code_source(rs)
     if ref2 and ref2 != f"{entry.rel}/{rs.name}":
@@ -260,17 +243,21 @@ def _code_of(tree: Tree, entry, rs):
             candidates.append(tree.find_runset(ref2))
         except TreeError:
             pass
+    for e2, rs2 in candidates:
+        rec = _record_of(e2, rs2)
+        if rec is not None:
+            return e2, rs2, rec
     if not (rs.bin or {}).get("imported"):
         candidates.append((entry, rs))
     for e2, rs2 in candidates:
-        snap = _legacy_snapshot(rs2)
-        if snap:
-            return e2, rs2, snap
+        rec = _legacy_record(e2, rs2)
+        if rec is not None:
+            return e2, rs2, rec
     return None
 
 
-def _prev_snapshot(tree: Tree, entry, rs):
-    """The closest earlier runset of the node with recorded code (snapshot or legacy HEADs)."""
+def _prev_code(tree: Tree, entry, rs):
+    """The closest earlier runset of the node with recorded code (record or legacy HEADs)."""
     for r in reversed([r for r in tree.runsets(entry) if r.name < rs.name]):
         code = _code_of(tree, entry, r)
         if code is not None:
@@ -279,13 +266,13 @@ def _prev_snapshot(tree: Tree, entry, rs):
 
 
 def _resolve_against(tree: Tree, entry_s, rs_s, requested: str):
-    """(mode, other snapshot, compared runset ref) for against=base|prev|worktree|<runset>."""
+    """(mode, other record, compared runset ref) for against=base|prev|worktree|<runset>."""
     if requested == "prev":
-        found = _prev_snapshot(tree, entry_s, rs_s)
+        found = _prev_code(tree, entry_s, rs_s)
         if found is None:
             return "base", None, None
-        prev, snap = found
-        return "prev", snap, f"{entry_s.rel}/{prev.name}"
+        prev, rec = found
+        return "prev", rec, f"{entry_s.rel}/{prev.name}"
     if requested in ("base", "worktree"):
         return requested, None, None
     try:
@@ -298,53 +285,111 @@ def _resolve_against(tree: Tree, entry_s, rs_s, requested: str):
     return "runset", code[2], requested
 
 
-def _code_repo_specs(git, snap: dict, mode: str, other: dict | None) -> list[dict]:
-    """Per repo (super + every snapshotted submodule): path, base and the two sides of the diff."""
-    items = [("", git.worktree, git.base, snap.get("super") or {},
+def _patch_bytes(rec: dict, info: dict, lost: list[str]) -> bytes | None:
+    """The saved patch of one repo; a recorded but missing file is noted in `lost`."""
+    name = info.get("patch")
+    if not name:
+        return None
+    path = Path(rec["dir"]) / name
+    if not path.is_file():
+        lost.append(name)
+        return None
+    return path.read_bytes()
+
+
+NOT_IN_BASE = "not in the node base (the submodule was added on this branch)"
+
+
+def _code_repo_specs(git, rec: dict, mode: str, other: dict | None) -> list[dict]:
+    """Per repo (super + every recorded submodule): path, base and the two sides of the diff,
+    each side = (commit, patch bytes or None)."""
+    items = [("", git.worktree, git.base, rec.get("super") or {},
               (other or {}).get("super") or {})]
-    for name, info in (snap.get("submodules") or {}).items():
+    for name, info in (rec.get("submodules") or {}).items():
         sub = git.submodule_worktrees.get(name)
-        # a shared submodule's base is the commit the superproject's base records (legacy
-        # snapshots carry no base of their own)
-        base = sub.base if sub else (info.get("base") or snapshots._recorded_base(
-            Path(git.worktree), git.base, name))
+        # a shared submodule's base is the commit the superproject's base records
+        base = sub.base if sub else (info.get("base") or coderec.recorded_base(Path(git.worktree), git.base, name))
         items.append((name, sub.path if sub else str(Path(git.worktree) / name), base, info,
                       ((other or {}).get("submodules") or {}).get(name) or {}))
     specs = []
     for name, path, base, info, prev in items:
-        commit = info.get("commit")
-        if not commit:
+        head = info.get("head")
+        if not head:
             continue
-        spec = {"name": name, "path": path, "base": base, "info": info}
+        lost: list[str] = []
+        spec = {"name": name, "path": path, "base": base, "info": info, "merge_base": None,
+                "b": (head, _patch_bytes(rec, info, lost)), "lost": lost}
         if mode == "worktree":
-            spec.update(a=commit, b=None, merge_base=None)
+            spec["a"], spec["b"] = spec["b"], None      # b = the live worktree, recorded on demand
+        elif mode == "base" and not base:
+            # a submodule added on the node's branch has no base to diff: its HEAD -> its record
+            spec.update(a=(head, None), note=f"{NOT_IN_BASE}: only its uncommitted changes are shown")
+            if not Path(path).is_dir():
+                spec["error"] = NOT_IN_BASE
         elif mode == "base":
             mb = info.get("merge_base") or ""
-            if not mb and base and snap.get("legacy"):
-                mb = run_git(["-C", path, "merge-base", base, commit], check=False).strip()
-            spec.update(a=mb, b=commit, merge_base=mb)
-            if not base:
-                spec["error"] = "not in the node base (the submodule was added on this branch)"
-            elif not mb:
-                spec["error"] = f"no merge-base between {base[:12]} and the snapshot"
+            if not mb:
+                mb = run_git(["-C", path, "merge-base", base, head], check=False).strip()
+            spec.update(a=(mb, None), merge_base=mb)
+            if not mb:
+                spec["error"] = f"no merge-base between {base[:12]} and {head[:12]}"
         else:
-            a = prev.get("commit")
-            spec.update(a=a, b=commit, merge_base=info.get("merge_base"))
-            if not a:
-                spec["error"] = "the compared runset has no snapshot for this repo"
-        if snap.get("legacy") or (other or {}).get("legacy"):
-            # recorded HEADs of old runsets may since have been rebased away and pruned
-            # (the root cause of a failed merge-base too, so it takes precedence over that)
-            missing = [c for c in (spec.get("a"), spec.get("b")) if c and run_git(
-                ["-C", path, "cat-file", "-t", c], check=False).strip() != "commit"]
-            if missing and not (mode == "base" and not base):
-                spec["error"] = f"commit {missing[0][:12]} is no longer in this repo"
+            spec["a"] = (prev.get("head"), _patch_bytes(other, prev, lost)) if prev.get("head") else (None, None)
+            if not prev.get("head"):
+                spec["error"] = "the compared runset recorded nothing for this repo"
+        # recorded HEADs may since have been rebased away and pruned (the root cause of a
+        # failed merge-base too, so it takes precedence over that)
+        commits = [s[0] for s in (spec.get("a"), spec.get("b")) if s and s[0]]
+        missing = [c for c in commits if Path(path).is_dir() and run_git(
+            ["-C", path, "cat-file", "-t", c], check=False).strip() != "commit"]
+        if missing:
+            spec["error"] = NOT_IN_BASE if mode == "base" and not base else f"commit {missing[0][:12]} is no longer in this repo"
         specs.append(spec)
     return specs
 
 
+def _record_view(info: dict, rec: dict) -> dict:
+    """What the record holds for one repo (the code tab's record table)."""
+    out = {k: info.get(k) for k in ("head", "branch", "dirty", "shared", "files", "added", "deleted")}
+    out["patch"] = info.get("patch")
+    out["untracked"] = len(info.get("untracked") or [])
+    out["omitted"] = info.get("omitted") or []
+    out["unsaved_untracked"] = info.get("unsaved_untracked", 0)
+    if rec.get("legacy") and info.get("patch"):
+        out.update(coderec.patch_text_stat(_patch_bytes(rec, info, []) or b""))
+    return out
+
+
+def _with_trees(spec: dict, fn):
+    """Run fn(trees, a_tree, b_tree, commits, uncommitted, extra) with both sides rebuilt as trees
+    in a throwaway object dir. A patch that no longer applies falls back to that side's commit
+    and is reported as `patch_error`."""
+    path = spec["path"]
+    extra: dict = {}
+    if spec["lost"]:
+        extra["patch_error"] = f"saved patch {spec['lost'][0]} is missing: committed code only"
+    b = spec["b"]
+    if b is None:                                   # the live worktree, recorded now (not saved)
+        live = run_git(["-C", path, "rev-parse", "--verify", "HEAD"], check=False).strip()
+        patch, _, omitted = coderec.repo_patch(path)
+        b = (live, patch)
+        extra["omitted"] = omitted
+    else:
+        extra["omitted"] = spec["info"].get("omitted") or []
+    with coderec.Trees(path) as trees:
+        sides = []
+        for label, (commit, patch) in (("a", spec["a"]), ("b", b)):
+            try:
+                sides.append(trees.tree(commit, patch))
+            except RuntimeError as error:
+                extra.setdefault("patch_error", f"{label} side patch does not apply ({error}): committed code only")
+                sides.append(commit)
+        uncommitted = set(coderec.patch_files(path, b[1] or b""))
+        return fn(trees, sides[0], sides[1], (spec["a"][0], b[0]), uncommitted, extra)
+
+
 def _code_totals(repos: dict) -> dict:
-    return {"files": sum(len(r.get("files", [])) + len(r.get("untracked", [])) for r in repos.values()),
+    return {"files": sum(len(r.get("files", [])) for r in repos.values()),
             "added": sum(r.get("added", 0) for r in repos.values()),
             "deleted": sum(r.get("deleted", 0) for r in repos.values()),
             "ahead": sum(r.get("ahead", 0) for r in repos.values())}
@@ -352,73 +397,63 @@ def _code_totals(repos: dict) -> dict:
 
 def _no_code(entry, rs, reason: str) -> dict:
     return {"ref": f"{entry.rel}/{rs.name}", "legacy": False, "no_code": True, "reason": reason,
-            "snapshot": None, "drift": None, "source_runset": None, "repos": {}, "total": {}}
+            "record": None, "drift": None, "source_runset": None, "repos": {}, "total": {}}
 
 
-def _legacy_code(entry, rs) -> dict:
-    """A runset from before snapshots: the recorded HEAD plus its src-patches/*.patch."""
-    prov = rs.provenance or {}
+def _patches_only(entry, rs) -> dict:
+    """A runset that saved src-patches but recorded no HEAD: the raw patches."""
     patches = {}
     pdir = entry.dir / rs.name / "src-patches"
-    if pdir.is_dir():
-        for path in sorted(pdir.iterdir()):
-            if path.is_file():
-                patches[path.name] = path.read_text(errors="replace")[:200000]
-    return {"ref": f"{entry.rel}/{rs.name}", "legacy": True, "no_code": False, "snapshot": None,
-            "drift": None, "source_runset": None, "head": (prov.get("super") or {}).get("head") or prov.get("head"),
-            "provenance": prov, "patches": patches, "repos": {}, "total": {}}
+    for path in sorted(pdir.iterdir()) if pdir.is_dir() else []:
+        if path.is_file():
+            patches[path.name] = path.read_text(errors="replace")[:200000]
+    return {"ref": f"{entry.rel}/{rs.name}", "legacy": True, "no_code": False, "record": None,
+            "drift": None, "source_runset": None, "patches": patches, "repos": {}, "total": {}}
 
 
 def runset_code(ref: str, against: str = "base") -> dict:
-    """The code a runset ran: its build snapshot diffed against the node base, the previous
-    runset, the worktree as it is now, or another runset. A legacy runset (from before
-    snapshots) is diffed by the HEADs it recorded, plus its src-patches."""
+    """The code a runset ran (the HEADs its build recorded plus the saved uncommitted patches),
+    diffed against the node base, the previous runset, the worktree as it is now, or another
+    runset. A legacy runset (from before code records) uses the HEADs recorded at submit and its
+    src-patches. Files a saved patch adds are marked `uncommitted`."""
     tree = Tree()
     entry, rs = tree.find_runset(ref)
-    bin = rs.bin or {}
-    if bin.get("imported") and not _snapshot_of(rs):
-        return _no_code(entry, rs, "imported binary: its source is not recorded")
     source = _code_of(tree, entry, rs)
     if source is None:
-        if _has_legacy_code(entry, rs):  # src-patches without a recorded HEAD
-            return _legacy_code(entry, rs)
-        return _no_code(entry, rs, "no build snapshot and no legacy source recorded")
-    entry_s, rs_s, snap = source
+        if (rs.bin or {}).get("imported"):
+            return _no_code(entry, rs, "imported binary: its source is not recorded")
+        if (entry.dir / rs.name / "src-patches").is_dir():
+            return _patches_only(entry, rs)
+        return _no_code(entry, rs, "no code record and no legacy source recorded")
+    entry_s, rs_s, rec = source
     git = entry_s.node.git
     if git is None:
         return _no_code(entry, rs, "the code runset has no worktree record")
     code_ref = f"{entry_s.rel}/{rs_s.name}"
     requested = against or "base"
     mode, other, compared = _resolve_against(tree, entry_s, rs_s, requested)
-    repos = {}
-    for spec in _code_repo_specs(git, snap, mode, other):
-        if spec.get("error"):
-            repos[spec["name"]] = {"path": spec["path"], "base": spec["base"],
-                                   "exists": Path(spec["path"]).is_dir(), "error": spec["error"]}
+    repos, record = {}, {}
+    for spec in _code_repo_specs(git, rec, mode, other):
+        record[spec["name"]] = _record_view(spec["info"], rec)
+        if spec.get("error") or not Path(spec["path"]).is_dir():
+            repos[spec["name"]] = {"path": spec["path"], "base": spec["base"], "exists": Path(spec["path"]).is_dir(),
+                                   "error": spec.get("error") or "the checkout no longer exists"}
             continue
-        # ahead/behind count against the base branch only in the base view; otherwise against
-        # the compared side (the other runset's or the snapshot's commit)
-        shape = worktree._diff_shape(spec["path"], spec["a"], spec["b"], base=spec["base"] if mode == "base" else "",
-                                     merge_base=spec["merge_base"] if mode == "base" else None,
-                                     with_untracked=mode == "worktree")
-        if mode == "worktree":
-            # files the snapshot already committed are not differences just because git still
-            # calls them untracked in the live worktree
-            keep = [p for p in shape.get("untracked", [])
-                    if not snapshots.has_path(spec["path"], spec["info"].get("commit"), p)]
-            shape["untracked"] = keep
-            shape["untracked_total"] = len(keep)
-        repos[spec["name"]] = shape
-    out = {"ref": f"{entry.rel}/{rs.name}", "against": mode, "requested_against": requested,
-           "compared_runset": compared, "legacy": bool(snap.get("legacy")), "no_code": False,
-           "snapshot": None if snap.get("legacy") else snap, "drift": (rs_s.provenance or {}).get("drift"),
-           "source_runset": None if code_ref == f"{entry.rel}/{rs.name}" else code_ref,
-           "compared_legacy": bool((other or {}).get("legacy")),
-           "repos": repos, "total": _code_totals(repos)}
-    if snap.get("legacy"):
-        legacy = _legacy_code(entry_s, rs_s)
-        out.update(head=legacy["head"], provenance=legacy["provenance"], patches=legacy["patches"])
-    return out
+
+        def shape(trees, ta, tb, commits, uncommitted, extra, spec=spec):
+            # ahead/behind count against the base branch only in the base view; otherwise
+            # against the compared side
+            out = worktree._diff_shape(spec["path"], ta, tb, base=spec["base"] if mode == "base" else "",
+                                       merge_base=spec["merge_base"] if mode == "base" else None,
+                                       commits=commits, env=trees.env, uncommitted=uncommitted)
+            return {**out, **extra, **({"note": spec["note"]} if spec.get("note") else {})}
+        repos[spec["name"]] = _with_trees(spec, shape)
+    return {"ref": f"{entry.rel}/{rs.name}", "against": mode, "requested_against": requested,
+            "compared_runset": compared, "legacy": rec["legacy"], "no_code": False,
+            "record": record, "drift": (rs_s.provenance or {}).get("drift"),
+            "source_runset": None if code_ref == f"{entry.rel}/{rs.name}" else code_ref,
+            "compared_legacy": bool((other or {}).get("legacy")),
+            "repos": repos, "total": _code_totals(repos)}
 
 
 def runset_code_diff(ref: str, against: str, sub: str, path: str) -> dict:
@@ -428,31 +463,24 @@ def runset_code_diff(ref: str, against: str, sub: str, path: str) -> dict:
     source = _code_of(tree, entry, rs)
     if source is None:
         raise TreeError("this runset has no recorded code")
-    entry_s, rs_s, snap = source
-    git = entry_s.node.git
+    entry_s, rs_s, rec = source
     mode, other, _ = _resolve_against(tree, entry_s, rs_s, against or "base")
-    specs = {s["name"]: s for s in _code_repo_specs(git, snap, mode, other)}
+    specs = {s["name"]: s for s in _code_repo_specs(entry_s.node.git, rec, mode, other)}
     if sub not in specs:
-        raise TreeError(f"no repo {sub!r} in this runset's snapshot")
+        raise TreeError(f"no repo {sub!r} in this runset's code record")
     spec = specs[sub]
     if spec.get("error"):
         raise TreeError(spec["error"])
-    shape = worktree._diff_shape(spec["path"], spec["a"], spec["b"], base=spec["base"],
-                                 with_untracked=mode == "worktree")
-    known = {f["path"]: f for f in shape.get("files", [])}
-    truncated = False
-    if path in (shape.get("untracked") or []):
-        fp = Path(spec["path"]) / path
-        text = fp.read_text(errors="replace") if fp.is_file() else ""
-        diff = "".join(f"+{line}\n" for line in text.splitlines())
-        diff = f"--- /dev/null\n+++ b/{path}\n" + diff
-    elif path in known:
+
+    def one(trees, ta, tb, commits, uncommitted, extra):
+        shape = worktree._diff_shape(spec["path"], ta, tb, commits=commits, env=trees.env, uncommitted=uncommitted)
+        known = {f["path"]: f for f in shape.get("files", [])}
+        if path not in known:
+            raise TreeError(f"{path} is not among the changed files of {sub or 'the repo'}")
         f = known[path]
         paths = [f["old_path"], path] if f["old_path"] else [path]
-        sides = [spec["a"]] + ([spec["b"]] if spec["b"] else [])
-        diff = run_git(["-C", spec["path"], "diff", "-M", *sides, "--", *paths], check=False)
-    else:
-        raise TreeError(f"{path} is not among the changed files of {sub or 'the repo'}")
+        return run_git(["-C", spec["path"], "diff", "-M", ta, tb, "--", *paths], check=False, env=trees.env)
+    diff = _with_trees(spec, one)
     truncated = len(diff) > worktree.MAX_DIFF_BYTES
     return {"sub": sub, "path": path, "diff": diff[:worktree.MAX_DIFF_BYTES], "truncated": truncated}
 

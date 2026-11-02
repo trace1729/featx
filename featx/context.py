@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import params as params_mod
-from . import recipes, store, taskstore, worktree
+from . import coderec, recipes, store, taskstore, worktree
 from .tree import Entry, Tree
 
 
@@ -17,12 +17,11 @@ def node_summary(entry: Entry) -> dict:
 
 
 def code_summary(entry: Entry, rs) -> dict:
-    """What the code column needs without the code API: the build snapshot commit, else the HEAD a
-    pre-snapshot runset recorded at submit (`legacy`); a run-only (--bin) runset names the runset
-    that built its binary (bincache manifest), like the code API does."""
+    """What the code column needs without the code API: the HEAD the build recorded and how much
+    uncommitted code its saved patches hold, else the HEAD (and src-patches) a runset from before
+    code records kept at submit (`legacy`); a run-only (--bin) runset names the runset that built
+    its binary (bincache manifest), like the code API does."""
     prov = rs.provenance or {}
-    snap = ((prov.get("snapshot") or {}).get("super") or {}).get("commit")
-    sup = prov.get("super") or {}
     bin = rs.bin or {}
     source = None
     if not (rs.recipes or {}).get("build") and bin.get("emu"):
@@ -31,10 +30,29 @@ def code_summary(entry: Entry, rs) -> dict:
             source = f"{man['node']}/{man['runset']}"
             if source == f"{entry.rel}/{rs.name}":
                 source = None
-    head = sup.get("head") or prov.get("head")
-    return {"snapshot": snap, "head": None if snap else head,
-            "dirty": None if snap else bool(sup.get("dirty") or prov.get("dirty")),
-            "legacy": not snap and bool(head), "from": source, "imported": bool(bin.get("imported")),
+    code = prov.get("code") or {}
+    legacy = not (code.get("super") or {}).get("head")
+    if not legacy:
+        repos = {"": code["super"], **(code.get("submodules") or {})}
+        head = code["super"]["head"]
+        stats = {n: {k: r.get(k, 0) for k in ("files", "added", "deleted")} for n, r in repos.items() if r.get("dirty")}
+        omitted = sum(len(r.get("omitted") or []) for r in repos.values())
+    else:
+        sup = prov.get("super") or {}
+        head = sup.get("head") or prov.get("head")
+        pdir = entry.dir / rs.name / "src-patches"
+        stats = {}
+        for path in sorted(pdir.glob("*.patch")) if pdir.is_dir() else []:
+            name = "" if path.name == "super.patch" else path.stem.replace("__", "/")
+            stats[name] = coderec.patch_text_stat(path.read_bytes())
+        omitted = 0
+    dirty = bool(stats) or (legacy and bool((prov.get("super") or {}).get("dirty", prov.get("dirty"))))
+    uncommitted = None
+    if stats:
+        uncommitted = {"repos": sorted(stats), **{k: sum(s[k] for s in stats.values()) for k in ("files", "added", "deleted")}}
+    return {"head": head, "branch": (code.get("super") or prov.get("super") or {}).get("branch"),
+            "dirty": dirty, "uncommitted": uncommitted, "omitted": omitted, "legacy": legacy and bool(head),
+            "from": source, "imported": bool(bin.get("imported")),
             "bin_key": bin.get("key"), "bin_emu": bin.get("emu")}
 
 

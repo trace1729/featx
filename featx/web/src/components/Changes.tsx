@@ -111,7 +111,7 @@ function UntrackedSection({ paths, sub, total, truncated, scope, fetchDiff }: { 
 
 /** A repo with nothing to show: no changed or untracked files and no commits of its own. */
 function unchanged(r: CodeRepo): boolean {
-  return !!r.exists && !r.error && !(r.files ?? []).length && !(r.untracked_total ?? (r.untracked ?? []).length) && !r.ahead && !r.truncated;
+  return !!r.exists && !r.error && !r.patch_error && !(r.files ?? []).length && !(r.untracked_total ?? (r.untracked ?? []).length) && !r.ahead && !r.truncated;
 }
 
 export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktree", vs }: {
@@ -138,6 +138,8 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
         {r.ahead ?? 0} commit(s) ahead, {r.behind ?? 0} behind · {files.length} file(s) changed, +{r.added ?? 0} −{r.deleted ?? 0}
         {total > 0 && ` · ${total} untracked`}
       </div>
+      {r.note && <div className="muted small">{r.note}</div>}
+      {r.patch_error && <div className="notice small">{r.patch_error}</div>}
       {!files.length && !total && !r.ahead && <div className="muted">no changes</div>}
       {(r.commits ?? []).length > 0 && (
         <table className="small" style={{ marginTop: 8 }}>
@@ -187,6 +189,11 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
       )}
       {total > 0 && (
         <UntrackedSection paths={untracked} sub={sub} total={total} truncated={!!r.untracked_truncated} scope={scope} fetchDiff={fetchDiff} />
+      )}
+      {(r.omitted ?? []).length > 0 && (
+        <div className="muted small" title={r.omitted!.map((o) => `${o.path}: ${o.reason}`).join("\n")}>
+          untracked, not saved: <span className="mono">{r.omitted!.slice(0, 3).map((o) => o.path).join(", ")}{r.omitted!.length > 3 ? `, … (${r.omitted!.length})` : ""}</span>
+        </div>
       )}
       {r.truncated && <div className="muted small">file list truncated</div>}
     </div>

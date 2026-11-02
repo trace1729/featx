@@ -358,29 +358,16 @@ class Tree:
             has_wt = [e for e in sub if e.node.git]
             if (has_runsets or has_wt) and not force:
                 raise TreeError("subtree has runsets or worktrees; pass --force (data goes to .trash)")
-            refs = {e.rel: [rs.id for rs in self.runsets(e)] for e in sub} if drop_worktrees else {}
             trash = config.tree_root() / ".trash"
             trash.mkdir(exist_ok=True)
             dst = trash / f"{store.today()}-{store.new_id()[-6:]}-{entry.rel.replace('/', '__')}"
             os.rename(entry.dir, dst)
             report = {"removed": entry.rel, "trash": str(dst), "worktrees": []}
             if drop_worktrees:
-                from . import snapshots, worktree as wt
-                dropped = []
+                from . import worktree as wt
                 for e in has_wt:
                     report["worktrees"].append(wt.remove(e.node, delete_branch=True,
                                                          force_branch=drop_branches))
-                    # the runset code refs of this node go with its worktree
-                    repos = list(dict.fromkeys([e.node.git.repo] +
-                                               [x.repo for x in e.node.git.submodule_worktrees.values()]))
-                    for rid in refs.get(e.rel, []):
-                        ok = False
-                        for repo in repos:
-                            ok = snapshots.drop_ref(repo, rid) or ok
-                        if ok:
-                            dropped.append(rid)
-                if dropped:
-                    report["refs"] = sorted(set(dropped))
             store.append_jsonl(config.root() / "tree-log.jsonl",
                                {"time": store.now_iso(), "op": "rm", **report})
             self.scan()
@@ -406,9 +393,10 @@ class Tree:
         store.write_yaml(entry.dir / rs.name / "experiment.yaml", rs.model_dump())
 
 
-def run_git(args: list[str], cwd: str | Path | None = None, check: bool = True) -> str:
+def run_git(args: list[str], cwd: str | Path | None = None, check: bool = True,
+            env: dict | None = None) -> str:
     proc = subprocess.run(["git", *args], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, check=False)
+                          text=True, check=False, env=env)
     if check and proc.returncode != 0:
         raise TreeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()

@@ -383,35 +383,38 @@ def _z_entries(raw: str, numstat: bool) -> list[tuple[list[str], list[str]]]:
 
 
 def _diff_shape(path: str, a: str, b: str | None = None, *, base: str = "",
-                merge_base: str | None = None, with_untracked: bool = False) -> dict:
+                merge_base: str | None = None, with_untracked: bool = False,
+                commits: tuple[str, str] | None = None, env: dict | None = None,
+                uncommitted: set[str] | None = None) -> dict:
     """Changes of `b` (None = the working tree) against `a`: commits ahead, files changed and
     totals. Shared by the live worktree view (a = merge-base, b = None) and the runset code
-    view (a = base/previous snapshot, b = the snapshot commit)."""
+    view, where a and b are trees rebuilt from HEAD + saved patch (`env` points git at their
+    throwaway object dir), `commits` the HEADs behind them and `uncommitted` the paths the
+    b side's patch touches."""
     out: dict = {"path": path, "base": base, "exists": Path(path).is_dir()}
     if not out["exists"]:
         return out
     if merge_base is not None:
         out["merge_base"] = merge_base[:12]
-    rev = b or "HEAD"
+    ca, cb = commits or (a, b or "HEAD")
+    git = lambda *args: run_git(["-C", path, *args], check=False, env=env)  # noqa: E731
     # behind/ahead are relative to the tracked base branch when we know it (the live view and
     # the code view against `base`), else to the diff's left side.
-    counts = run_git(["-C", path, "rev-list", "--left-right", "--count", f"{base or a}...{rev}"],
-                     check=False).split()
+    counts = git("rev-list", "--left-right", "--count", f"{base or ca}...{cb}").split()
     out["behind"], out["ahead"] = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (0, 0)
-    log = run_git(["-C", path, "log", f"-{MAX_COMMITS}", "--format=%h%x09%an%x09%ar%x09%s",
-                   f"{a}..{rev}"], check=False)
+    log = git("log", f"-{MAX_COMMITS}", "--format=%h%x09%an%x09%ar%x09%s", f"{ca}..{cb}")
     out["commits"] = [dict(zip(("sha", "author", "when", "subject"), line.split("\t", 3)))
                       for line in log.splitlines() if line]
     skip = _submodule_paths(path)
     # git options go before the revisions (as the original live-view command did)
-    args = ["-C", path, "diff", "-z", "-M", "--ignore-submodules=all"]
+    args = ["diff", "-z", "-M", "--ignore-submodules=all"]
     revs = [a] + ([b] if b else [])
-    stats = {tuple(p)[-1]: f for f, p in _z_entries(run_git(args + ["--numstat"] + revs, check=False), True)}
-    uncommitted = set() if b is not None else {
-        p[-1] for _, p in _z_entries(run_git(["-C", path, "diff", "-z", "-M", "--ignore-submodules=all",
-                                             "--name-status", "HEAD"], check=False), False)}
+    stats = {tuple(p)[-1]: f for f, p in _z_entries(git(*args, "--numstat", *revs), True)}
+    if uncommitted is None:
+        uncommitted = set() if b is not None else {
+            p[-1] for _, p in _z_entries(git(*args, "--name-status", "HEAD"), False)}
     files = []
-    for (code,), paths in _z_entries(run_git(args + ["--name-status"] + revs, check=False), False):
+    for (code,), paths in _z_entries(git(*args, "--name-status", *revs), False):
         if paths[-1] in skip:
             continue
         added, deleted = stats.get(paths[-1], ["0", "0"])
@@ -423,7 +426,7 @@ def _diff_shape(path: str, a: str, b: str | None = None, *, base: str = "",
     out["files"] = files[:MAX_FILES]
     untracked: list[str] = []
     if with_untracked:
-        raw = run_git(["-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
+        raw = git("ls-files", "--others", "--exclude-standard", "-z")
         untracked = [p for p in raw.split("\0") if p and p not in skip]
     out["untracked"] = untracked[:MAX_FILES]
     out["untracked_total"] = len(untracked)

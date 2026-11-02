@@ -64,9 +64,13 @@ export interface RunsetSummary {
   /** headline build/run/post parameters: {build: {tool: ...}, run: {...}, post: {...}} */
   params?: Record<string, Record<string, unknown>>;
   recipes?: Record<string, Record<string, unknown>>;
-  /** cheap code info for tables: the build snapshot, else the recorded HEAD (legacy) or the
-   * runset that built a --bin binary */
-  code?: { snapshot?: string | null; head?: string | null; dirty?: boolean | null; legacy?: boolean; from?: string | null; imported?: boolean; bin_key?: string | null; bin_emu?: string | null };
+  /** cheap code info for tables: the HEAD the build recorded and its uncommitted (saved) changes,
+   * else the HEAD a legacy runset recorded at submit, or the runset that built a --bin binary */
+  code?: {
+    head?: string | null; branch?: string | null; dirty?: boolean;
+    uncommitted?: { repos: string[]; files: number; added: number; deleted: number } | null;
+    omitted?: number; legacy?: boolean; from?: string | null; imported?: boolean; bin_key?: string | null; bin_emu?: string | null;
+  };
   /** (node context only) this runset's value of every key in params_differing */
   differing_values?: Record<string, unknown>;
 }
@@ -345,6 +349,18 @@ export interface CodeRepo {
   truncated?: boolean;
   added?: number;
   deleted?: number;
+  /** runset code view: untracked files the record (or the live worktree) did not save */
+  omitted?: OmittedEntry[];
+  /** runset code view: a saved patch that is missing or no longer applies (committed code only) */
+  patch_error?: string;
+  /** runset code view: how this repo is compared when it differs from the selected mode */
+  note?: string;
+}
+
+export interface OmittedEntry {
+  path: string;
+  files?: number;
+  reason: string;
 }
 
 export interface Changes {
@@ -352,20 +368,25 @@ export interface Changes {
   total?: { files: number; added: number; deleted: number; ahead: number };
 }
 
-export interface SnapshotRepo {
-  commit?: string;
-  head?: string;
-  branch?: string;
-  base?: string;
-  merge_base?: string;
-  clean?: boolean;
+/** One repo of a runset's code record (GET /runsets/code `record`). */
+export interface RecordRepo {
+  head?: string | null;
+  branch?: string | null;
+  dirty?: boolean | null;
   shared?: boolean;
-  untracked?: string[];
-  skipped?: { path: string; reason: string }[];
-  error?: string;
+  /** uncommitted changes in the saved patch */
+  files?: number;
+  added?: number;
+  deleted?: number;
+  patch?: string | null;
+  /** untracked files saved in the patch */
+  untracked?: number;
+  omitted?: OmittedEntry[];
+  /** legacy runsets: untracked files that existed at submit and were never saved */
+  unsaved_untracked?: number;
 }
 
-/** GET /runsets/code: a runset's build snapshot diffed against base|prev|worktree|<runset>. */
+/** GET /runsets/code: a runset's recorded code diffed against base|prev|worktree|<runset>. */
 export interface CodeView extends Changes {
   ref: string;
   against: string;
@@ -375,27 +396,9 @@ export interface CodeView extends Changes {
   legacy: boolean;
   no_code?: boolean;
   reason?: string;
-  head?: string | null;
-  snapshot?: { super?: SnapshotRepo; submodules?: Record<string, SnapshotRepo> } | null;
+  record?: Record<string, RecordRepo> | null;
   drift?: string | null;
   source_runset?: string | null;
+  /** a runset that saved src-patches but recorded no HEAD: the raw patches */
   patches?: Record<string, string>;
-  provenance?: LegacyProvenance;
-}
-
-/** One repo of a pre-snapshot runset's provenance (recorded at submit). */
-export interface LegacyRepoState {
-  head?: string;
-  branch?: string;
-  dirty?: boolean;
-  diff_lines?: number;
-  untracked_files?: number;
-  shared?: boolean;
-}
-
-export interface LegacyProvenance {
-  super?: LegacyRepoState;
-  head?: string;
-  dirty?: boolean;
-  submodules?: Record<string, LegacyRepoState>;
 }

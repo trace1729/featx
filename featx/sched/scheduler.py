@@ -17,7 +17,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .. import config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, snapshots, store, taskstore
+from .. import coderec, config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
 from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Task
 from ..tree import Tree, TreeError
 from . import classify, eta, executor
@@ -410,7 +410,7 @@ class Scheduler:
         if task.kind == "build":
             entry = tree.get(task.node_id)
             key = task.outputs["bincache_key"] = self._build_key(task, rdir)
-            self._snapshot_build(tree, task)   # the code this key describes, kept as a git ref
+            self._record_code(tree, task)   # the code this key describes (HEAD + patch, no commits)
             hit = provenance.bincache_lookup(key) if spec.get("cache", True) else None
             if hit:
                 task.outputs["emu"] = str(hit)
@@ -458,27 +458,29 @@ class Scheduler:
         task.outputs["build_state"] = state
         return provenance.bincache_key(state, presets.key_recipe(spec), rdir / "scripts")
 
-    def _snapshot_build(self, tree: Tree, task: Task, drift: str | None = None) -> dict | None:
-        """Record the build's source as refs/featx/runsets/<runset id> (super + every submodule)
-        and store it in the runset's provenance. A snapshot failure never fails the build."""
+    def _record_code(self, tree: Tree, task: Task, drift: str | None = None) -> dict | None:
+        """Record the build's source (HEAD + uncommitted patch per repo, under <runset>/code/) in
+        the runset's provenance. Nothing is committed; a record failure never fails the build."""
         workdir = task.spec.get("workdir")
         entry = tree.get(task.node_id)
         git = entry.node.git
         if not workdir or git is None or not (Path(workdir) / ".git").exists():
             return None
         try:
-            snap = snapshots.worktree_snapshot(workdir, f"{snapshots.REF_PREFIX}{task.runset_id}",
-                                               super_base=git.base,
-                                               sub_bases={n: s.base for n, s in git.submodule_worktrees.items()})
+            rec = coderec.record(workdir, self._runset_dir(tree, task) / "code", super_base=git.base,
+                                 sub_bases={n: s.base for n, s in git.submodule_worktrees.items()})
         except (RuntimeError, OSError) as error:
-            snap = {"error": str(error)}
-        task.outputs["snapshot"] = snap
+            rec = {"error": str(error)}
+        repos = [rec.get("super") or {}, *(rec.get("submodules") or {}).values()]
+        task.outputs["code"] = {"repos": len(repos), "dirty": sum(1 for r in repos if r.get("dirty")),
+                                "files": sum(r.get("files", 0) for r in repos), "error": rec.get("error")}
         _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
-        rs.provenance = {**(rs.provenance or {}), "snapshot": snap}
+        prov = {k: v for k, v in (rs.provenance or {}).items() if k != "snapshot"}
+        rs.provenance = {**prov, "code": rec}
         if drift:
             rs.provenance["drift"] = drift
         tree.save_runset(entry, rs)
-        return snap
+        return rec
 
     def _mark_drift(self, tree: Tree, task: Task, drift: str) -> None:
         entry = tree.get(task.node_id)
@@ -841,13 +843,13 @@ class Scheduler:
         (the job is then failed as a design error)."""
         if task.kind == "build" and job.name == "build" and task.outputs.get("bincache_key"):
             state = self._worktree_state(task.spec.get("workdir"))
-            # The key was computed at materialize time; the source may have moved since. Re-snapshot
+            # The key was computed at materialize time; the source may have moved since. Re-record
             # and re-key so the binary is cached under the code it was actually built from.
             if state and state != task.outputs.get("build_state"):
                 task.outputs["build_state"] = state
                 task.outputs["bincache_key"] = provenance.bincache_key(
                     state, presets.key_recipe(task.spec), self._runset_dir(tree, task) / "scripts")
-                self._snapshot_build(tree, task, drift="after submit")
+                self._record_code(tree, task, drift="after submit")
         jdir = self._job_dir(tree, task, job)
         job.attempt += 1
         job.started, job.finished, job.rc = None, None, None
@@ -1152,7 +1154,7 @@ class Scheduler:
                 # The fix being relaunched (worktree edit or script) changes what gets built:
                 # store the new binary under its own key, not the failed source's key.
                 task.outputs["bincache_key"] = self._build_key(task, rdir)
-                self._snapshot_build(tree, task, drift="after submit")
+                self._record_code(tree, task, drift="after submit")
             for job in targets:
                 job.state, job.failure, job.rc, job.host = "queued", None, None, None
             if not task.jobs:

@@ -1,12 +1,12 @@
-"""Code snapshots, the code API and drift handling (plan 3)."""
+"""Code records (HEAD + saved patch, nothing committed), the code API and drift handling."""
 
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from featx import provenance, service, snapshots, store
-from featx.model import GitInfo
+from featx import coderec, provenance, service, store
+from featx.model import GitInfo, SubWorktree
 from featx.sched import executor
 from featx.tree import Tree, TreeError
 
@@ -14,9 +14,9 @@ from test_core import _git
 from test_sched_local import make_node, run_until, sched
 
 
-def _git_out(*args, cwd=None) -> str:
+def _git_out(*args, cwd=None, env=None) -> str:
     return subprocess.run(["git", *args], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          text=True, check=True).stdout
+                          text=True, check=True, env=env).stdout
 
 
 def _repo_with_submodule(tmp_path):
@@ -34,42 +34,68 @@ def _repo_with_submodule(tmp_path):
     return repo
 
 
-def test_snapshot_ref_submodule_untracked_and_big_file(root, tmp_path):
+def _objects(repo) -> int:
+    out = _git_out("count-objects", "-v", cwd=repo)
+    vals = dict(line.split(": ") for line in out.splitlines())
+    return int(vals["count"]) + int(vals["in-pack"])
+
+
+def test_record_saves_patches_and_omits_build_dirs(root, tmp_path):
     repo = _repo_with_submodule(tmp_path)
     (repo / "deps" / "sub" / "s.txt").write_text("s changed\n")     # tracked change in the submodule
     (repo / "a.txt").write_text("one\ntwo\n")
     (repo / "u.txt").write_text("new\n")
-    (repo / "big.bin").write_bytes(b"x" * (9 << 20))
+    (repo / "tool.sh").write_text("#!/bin/sh\n")
+    (repo / "tool.sh").chmod(0o755)
+    (repo / "big.bin").write_bytes(b"x" * (2 << 20))
     (repo / ".gitignore").write_text("ignored.txt\n")
     (repo / "ignored.txt").write_text("ignored\n")
+    build = repo / "build-vlt"                                      # a stray build output dir
+    build.mkdir()
+    for i in range(60):
+        (build / f"f{i}.cpp").write_text(f"{i}\n")
+    (repo / "src").mkdir()
+    (repo / "src" / "new.scala").write_text("object X\n")          # a small new source dir is kept
     index_before = (repo / ".git" / "index").read_bytes()
+    objects_before = {r: _objects(r) for r in (repo, repo / "deps" / "sub")}
 
-    snap = snapshots.worktree_snapshot(repo, "featx/runsets/RS1", super_base="main")
+    dest = tmp_path / "code"
+    rec = coderec.record(repo, dest, super_base="main")
     assert (repo / ".git" / "index").read_bytes() == index_before   # the user's index is untouched
-    sup = snap["super"]
-    assert sup["commit"] != sup["head"] and not sup["clean"]
-    assert "u.txt" in sup["untracked"] and ".gitignore" in sup["untracked"]
-    assert sup["skipped"] == [{"path": "big.bin", "reason": "larger than 8 MiB"}]
-    assert _git_out("show", f"{sup['commit']}:a.txt", cwd=repo) == "one\ntwo\n"
-    assert _git_out("show", f"{sup['commit']}:u.txt", cwd=repo) == "new\n"
-    with pytest.raises(subprocess.CalledProcessError):
-        subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{sup['commit']}:big.bin"],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    assert _git_out("rev-parse", "refs/featx/runsets/RS1", cwd=repo).strip() == sup["commit"]
+    assert {r: _objects(r) for r in objects_before} == objects_before   # and nothing is written
+    assert not _git_out("for-each-ref", "refs/featx/", cwd=repo).strip()
+    sup = rec["super"]
+    assert sup["head"] == _git_out("rev-parse", "HEAD", cwd=repo).strip() and sup["dirty"]
+    assert set(sup["untracked"]) == {"u.txt", "tool.sh", ".gitignore", "src/new.scala"}
+    omitted = {o["path"]: o["reason"] for o in sup["omitted"]}
+    assert set(omitted) == {"build-vlt/", "big.bin"} and "50 files" in omitted["build-vlt/"]
+    assert sup["patch"] == "super.patch" and sup["files"] == 5 and sup["added"] >= 5
+    patch = (dest / "super.patch").read_bytes()
+    assert b"build-vlt" not in patch and b"a/ignored.txt" not in patch and b"+ignored\n" not in patch
+    subinfo = rec["submodules"]["deps/sub"]
+    assert subinfo["base"] and subinfo["patch"] == "deps__sub.patch" and subinfo["files"] == 1
 
-    subinfo = snap["submodules"]["deps/sub"]
-    assert subinfo["commit"] != subinfo["head"] and subinfo["base"]
-    assert _git_out("show", f"{subinfo['commit']}:s.txt", cwd=repo / "deps" / "sub") == "s changed\n"
-    assert _git_out("rev-parse", "refs/featx/runsets/RS1", cwd=repo / "deps" / "sub").strip() == subinfo["commit"]
+    # the saved patch rebuilds the exact tree in a throwaway object dir (executable bit included)
+    with coderec.Trees(repo) as trees:
+        tree = trees.tree(sup["head"], patch)
+        env = trees.env
+        assert _git_out("show", f"{tree}:u.txt", cwd=repo, env=env) == "new\n"
+        assert _git_out("show", f"{tree}:a.txt", cwd=repo, env=env) == "one\ntwo\n"
+        assert "100755 blob" in _git_out("ls-tree", tree, "tool.sh", cwd=repo, env=env)
+    assert {r: _objects(r) for r in objects_before} == objects_before
 
-    # a clean tree points the ref at HEAD instead of creating an empty commit
-    (repo / "big.bin").unlink()
-    _git("add", "-A", cwd=repo)
-    _git("commit", "-q", "-m", "commit all", cwd=repo)
-    (repo / "deps" / "sub" / "s.txt").write_text("s\n")     # leave the submodule clean as well
-    clean = snapshots.snapshot(repo, "featx/runsets/RS2")
-    assert clean["clean"] and clean["commit"] == clean["head"]
-    assert _git_out("rev-parse", "refs/featx/runsets/RS2", cwd=repo).strip() == clean["head"]
+    # a clean checkout records just the HEAD and leaves no patch
+    for p in ("a.txt",):
+        _git("checkout", "--", p, cwd=repo)
+    _git("checkout", "--", "s.txt", cwd=repo / "deps" / "sub")
+    for p in ("u.txt", "tool.sh", "big.bin", ".gitignore", "ignored.txt"):
+        (repo / p).unlink()
+    import shutil
+    shutil.rmtree(build)
+    shutil.rmtree(repo / "src")
+    clean = coderec.record(repo, dest, super_base="main")
+    assert not clean["super"]["dirty"] and clean["super"]["patch"] is None
+    assert not dest.exists() or not any(dest.iterdir())
 
 
 def _node_worktree(root, tmp_path):
@@ -86,12 +112,12 @@ def _node_worktree(root, tmp_path):
     return repo, wt
 
 
-def _save_snapshot(wt, rs, base="main"):
-    snap = snapshots.worktree_snapshot(wt, f"featx/runsets/{rs.id}", super_base=base)
+def _save_record(wt, rs, base="main"):
     entry, rs = Tree().find_runset(f"c/{rs.name}")
-    rs.provenance = {"snapshot": snap}
+    rec = coderec.record(wt, entry.dir / rs.name / "code", super_base=base)
+    rs.provenance = {"code": rec}
     Tree().save_runset(entry, rs)
-    return snap
+    return rec
 
 
 def test_code_api_against_base_prev_worktree_and_runset(root, tmp_path):
@@ -100,55 +126,67 @@ def test_code_api_against_base_prev_worktree_and_runset(root, tmp_path):
     rs1, _ = tree.new_runset(tree.get("c"))
     (wt / "a.txt").write_text("one\ntwo\n")
     (wt / "u1.txt").write_text("u1\n")
-    snap1 = _save_snapshot(wt, rs1)
+    rec1 = _save_record(wt, rs1)
     ref1 = f"c/{rs1.name}"
+    objects_before = _objects(repo)
 
     code = service.runset_code(ref1, "base")
     assert code["legacy"] is False and code["source_runset"] is None
     r = code["repos"][""]
-    assert {f["path"] for f in r["files"]} == {"a.txt", "u1.txt"}
-    assert code["snapshot"]["super"]["commit"] == snap1["super"]["commit"]
-    assert code["total"]["files"] == 2
+    files = {f["path"]: f for f in r["files"]}
+    assert set(files) == {"a.txt", "u1.txt"} and all(f["uncommitted"] for f in files.values())
+    assert code["record"][""]["head"] == rec1["super"]["head"] and code["record"][""]["files"] == 2
+    assert code["total"]["files"] == 2 and r["ahead"] == 0
+    assert "+two" in service.runset_code_diff(ref1, "base", "", "a.txt")["diff"]
+    assert "+u1" in service.runset_code_diff(ref1, "base", "", "u1.txt")["diff"]
 
     # against the worktree as it is now (including a brand new untracked file)
     (wt / "a.txt").write_text("one\ntwo\nthree\n")
     (wt / "u2.txt").write_text("u2\n")
     now = service.runset_code(ref1, "worktree")
     files = {f["path"]: f for f in now["repos"][""]["files"]}
-    assert files["a.txt"]["added"] == 1
-    assert now["repos"][""]["untracked"] == ["u2.txt"]
+    assert set(files) == {"a.txt", "u2.txt"} and files["a.txt"]["added"] == 1
     diff = service.runset_code_diff(ref1, "worktree", "", "a.txt")
     assert "+three" in diff["diff"]
     assert "+u2" in service.runset_code_diff(ref1, "worktree", "", "u2.txt")["diff"]
     with pytest.raises(TreeError):
         service.runset_code_diff(ref1, "worktree", "", "missing.txt")
 
-    # a second runset, compared with the first as `prev` and by explicit ref
-    _git("commit", "-q", "-am", "two", cwd=wt)
+    # a second runset, compared with the first as `prev` and by explicit ref; the first one's
+    # uncommitted edits are now committed, which is not a difference in content
+    assert _objects(repo) == objects_before      # views never write to the repo
+    _git("add", "-A", cwd=wt)
+    _git("commit", "-q", "-m", "two", cwd=wt)
+    objects_before = _objects(repo)
     rs2, _ = tree.new_runset(Tree().get("c"))
     (wt / "a.txt").write_text("one\ntwo\nthree\nfour\n")
-    _save_snapshot(wt, rs2)
+    _save_record(wt, rs2)
     ref2 = f"c/{rs2.name}"
     prev = service.runset_code(ref2, "prev")
     assert prev["compared_runset"] == ref1 and prev["against"] == "prev"
-    # u2.txt exists in this snapshot but not in the previous one, so it is part of the difference
-    assert {f["path"] for f in prev["repos"][""]["files"]} == {"a.txt", "u2.txt"}
+    files = {f["path"]: f for f in prev["repos"][""]["files"]}
+    assert set(files) == {"a.txt", "u2.txt"}
+    assert files["a.txt"]["added"] == 2 and files["a.txt"]["uncommitted"] and not files["u2.txt"]["uncommitted"]
+    assert prev["repos"][""]["ahead"] == 1 and prev["repos"][""]["commits"][0]["subject"] == "two"
     other = service.runset_code(ref2, ref1)
     assert other["against"] == "runset" and other["compared_runset"] == ref1
-    assert {f["path"]: f["added"] for f in other["repos"][""]["files"]}["a.txt"] == 2
     assert service.runset_code(ref1, "base")["compared_runset"] is None
     with pytest.raises(TreeError):
         service.runset_code(ref2, "c/20990101-9")
+    assert _objects(repo) == objects_before      # views never write to the repo
 
-    # legacy runset: provenance.head plus the saved tracked patches
+    # a saved patch that was lost: committed code only, reported per repo
+    entry, rs2b = Tree().find_runset(ref2)
+    (entry.dir / rs2b.name / "code" / "super.patch").unlink()
+    lost = service.runset_code(ref2, "base")["repos"][""]
+    assert "missing" in lost["patch_error"] and {f["path"] for f in lost["files"]} == {"a.txt", "u1.txt", "u2.txt"}
+
+    # a runset that saved src-patches but recorded no HEAD shows them raw
     rs3, rdir = tree.new_runset(Tree().get("c"))
-    rs3.provenance = {"super": {"head": "abc123"}}
     (rdir / "src-patches").mkdir()
     (rdir / "src-patches" / "super.patch").write_text("diff --git a/a.txt b/a.txt\n")
-    Tree().save_runset(Tree().get("c"), rs3)
     legacy = service.runset_code(f"c/{rs3.name}", "base")
-    assert legacy["legacy"] is True and legacy["head"] == "abc123"
-    assert legacy["patches"]["super.patch"].startswith("diff --git")
+    assert legacy["legacy"] is True and legacy["patches"]["super.patch"].startswith("diff --git")
 
 
 def test_code_from_the_runset_that_built_the_bin(root, tmp_path):
@@ -156,23 +194,30 @@ def test_code_from_the_runset_that_built_the_bin(root, tmp_path):
     tree = Tree()
     rs1, _ = tree.new_runset(tree.get("c"))
     (wt / "a.txt").write_text("one\ntwo\n")
-    snap = _save_snapshot(wt, rs1)
-    # a run-only runset that used the binary the first one built: no snapshot of its own
+    rec = _save_record(wt, rs1)
+    # a run-only runset that used the binary the first one built (--bin marks it imported)
     rs2, rdir = tree.new_runset(Tree().get("c"))
     bindir = rdir / "fake-bin"
     bindir.mkdir()
     (bindir / "emu").write_text("x")
     store.write_json(bindir / "manifest.json", {"key": "k1", "node": "c", "runset": rs1.name})
-    rs2.bin = {"key": "k1", "emu": str(bindir / "emu"), "sha256": "", "cached": True}
+    rs2.bin = {"key": "k1", "emu": str(bindir / "emu"), "sha256": "", "cached": True, "imported": True}
     Tree().save_runset(Tree().get("c"), rs2)
     out = service.runset_code(f"c/{rs2.name}", "base")
     assert out["source_runset"] == f"c/{rs1.name}"
-    assert out["snapshot"]["super"]["commit"] == snap["super"]["commit"]
+    assert out["record"][""]["head"] == rec["super"]["head"]
     assert {f["path"] for f in out["repos"][""]["files"]} == {"a.txt"}
+    # an imported ext- binary (no builder in its manifest) has no code view
+    rs3, rdir3 = tree.new_runset(Tree().get("c"))
+    (rdir3 / "ext").mkdir()
+    (rdir3 / "ext" / "emu").write_text("x")
+    rs3.bin = {"key": "ext-1", "emu": str(rdir3 / "ext" / "emu"), "imported": True}
+    Tree().save_runset(Tree().get("c"), rs3)
+    assert service.runset_code(f"c/{rs3.name}")["no_code"] is True
 
 
 def _attach_worktree(ref: str, tmp_path) -> Path:
-    """Give an existing node a real git worktree (build snapshots need one)."""
+    """Give an existing node a real git worktree (code records need one)."""
     repo, wt = tmp_path / "wtrepo", tmp_path / "node-wt"
     _git("init", "-q", "-b", "main", str(repo))
     (repo / "src.txt").write_text("v1\n")
@@ -198,17 +243,18 @@ def test_build_relaunch_and_launch_rekey_with_drift(root, fake_emu, tmp_path):
         s._materialize(s._tree(), task)
     key0 = task.outputs["bincache_key"]
     entry, rs = Tree().find_runset(res["runset"])
-    snap0 = rs.provenance["snapshot"]["super"]["commit"]
-    assert snap0
+    rec0 = rs.provenance["code"]["super"]
+    assert rec0["head"] and not rec0["dirty"]
 
-    # the tree moves between materialize and launch: re-snapshot and re-key, drift=after submit
+    # the tree moves between materialize and launch: re-record and re-key, drift=after submit
     (wd / "src.txt").write_text("v2\n")
     with s.lock:
         s._prepare_job(s._tree(), task, task.jobs[0])
     assert task.outputs["bincache_key"] != key0
     _, rs = Tree().find_runset(res["runset"])
     assert rs.provenance["drift"] == "after submit"
-    assert rs.provenance["snapshot"]["super"]["commit"] != snap0
+    assert rs.provenance["code"]["super"]["patch"] == "super.patch"
+    assert b"+v2" in (entry.dir / rs.name / "code" / "super.patch").read_bytes()
 
 
 def test_a_build_whose_tree_changes_during_compile_is_not_cached(root, fake_emu, tmp_path):
@@ -231,21 +277,9 @@ def test_a_build_whose_tree_changes_during_compile_is_not_cached(root, fake_emu,
     assert (entry.dir / rs.name / "bin" / "emu").exists()
 
 
-def test_rm_drop_worktrees_drops_the_runset_refs(root, tmp_path):
-    repo, wt = _node_worktree(root, tmp_path)
-    tree = Tree()
-    rs, _ = tree.new_runset(tree.get("c"))
-    _save_snapshot(wt, rs)
-    assert _git_out("rev-parse", f"refs/featx/runsets/{rs.id}", cwd=repo).strip()
-    report = service.node_rm("c", force=True, drop_worktrees=True)
-    assert rs.id in report.get("refs", [])
-    with pytest.raises(subprocess.CalledProcessError):
-        subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", f"refs/featx/runsets/{rs.id}"],
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
 def test_legacy_runsets_diff_by_their_recorded_heads(root, tmp_path):
-    """Pre-snapshot runsets compare by the HEADs they recorded at submit (committed code only)."""
+    """Runsets from before code records compare by the HEADs they recorded at submit plus their
+    src-patches (tracked changes at submit)."""
     repo, wt = _node_worktree(root, tmp_path)
     tree = Tree()
 
@@ -274,7 +308,7 @@ def test_legacy_runsets_diff_by_their_recorded_heads(root, tmp_path):
     ref1, ref2 = f"c/{rs1.name}", f"c/{rs2.name}"
 
     base = service.runset_code(ref2, "base")
-    assert base["legacy"] is True and base["source_runset"] is None and base["head"] == head2
+    assert base["legacy"] is True and base["source_runset"] is None and base["record"][""]["head"] == head2
     assert {f["path"] for f in base["repos"][""]["files"]} == {"a.txt", "b.txt"}
     prev = service.runset_code(ref2, "prev")
     assert prev["compared_runset"] == ref1 and prev["compared_legacy"] is True
@@ -288,8 +322,18 @@ def test_legacy_runsets_diff_by_their_recorded_heads(root, tmp_path):
     rs3, _ = legacy(_git_out("rev-parse", "HEAD", cwd=wt).strip(),
                     {"key": "k2", "emu": str(bindir / "emu"), "cached": True})
     run_only = service.runset_code(f"c/{rs3.name}", ref1)
-    assert run_only["source_runset"] == ref2 and run_only["head"] == head2
+    assert run_only["source_runset"] == ref2 and run_only["record"][""]["head"] == head2
     assert {f["path"] for f in run_only["repos"][""]["files"]} == {"a.txt", "b.txt"}
+
+    # src-patches (taken by `git diff HEAD --binary` at submit) are applied on the recorded HEAD
+    (wt / "a.txt").write_text("one\ntwo\nthree\nfour\n")
+    rs5, rdir5 = legacy(_git_out("rev-parse", "HEAD", cwd=wt).strip())
+    (rdir5 / "src-patches" / "super.patch").write_text(_git_out("diff", "HEAD", "--binary", cwd=wt))
+    dirty = service.runset_code(f"c/{rs5.name}", "base")
+    files = {f["path"]: f for f in dirty["repos"][""]["files"]}
+    assert files["a.txt"]["added"] == 3 and files["a.txt"]["uncommitted"] and not files["b.txt"]["uncommitted"]
+    assert dirty["record"][""]["files"] == 1 and dirty["record"][""]["added"] == 1
+    _git("checkout", "--", "a.txt", cwd=wt)
 
     # a recorded HEAD that no longer exists is reported per repo instead of an empty diff
     rs4, _ = legacy("0" * 40)
@@ -320,3 +364,21 @@ def test_legacy_shared_submodule_diffs_against_the_commit_the_base_records(root,
     assert {f["path"] for f in sub["files"]} == {"s.txt"}
     # a submodule the base does not have yet was added on the node's branch
     assert "not in the node base" in code["repos"]["deps/new"]["error"]
+    # ... and when it is checked out, the base view shows its uncommitted changes on its HEAD
+    newsub = tmp_path / "newsub"
+    _git("init", "-q", "-b", "main", str(newsub), cwd=tmp_path)
+    (newsub / "n.txt").write_text("n\n")
+    _git("add", "-A", cwd=newsub)
+    _git("commit", "-q", "-m", "n", cwd=newsub)
+    (newsub / "n.txt").write_text("n\nlocal\n")
+    e = Tree().get("c")
+    e.node.git.submodule_worktrees = {"deps/new": SubWorktree(repo=str(newsub), base="", branch="main", path=str(newsub))}
+    store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+    rs = Tree().find_runset(f"c/{rs.name}")[1]
+    sup = {"head": _git_out("rev-parse", "HEAD", cwd=repo).strip(), "dirty": False, "patch": None}
+    new_rec = coderec.record(newsub, e.dir / rs.name / "code")["super"]     # saved as super.patch
+    rs.provenance = {"code": {"super": sup, "submodules": {"deps/new": new_rec}}}
+    Tree().save_runset(e, rs)
+    new = service.runset_code(f"c/{rs.name}", "base")["repos"]["deps/new"]
+    assert not new.get("error") and "only its uncommitted changes" in new["note"]
+    assert [(f["path"], f["added"], f["uncommitted"]) for f in new["files"]] == [("n.txt", 1, True)]

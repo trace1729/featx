@@ -60,7 +60,7 @@ def test_node_context_gives_differing_values_and_code_summary(root, fake_emu):
     values = [r["differing_values"] for r in ctx["runsets"]]
     assert values == [{"run.W": 1}, {"run.W": 2000000}]
     code = ctx["runsets"][0]["code"]
-    assert code["snapshot"] is None and code["from"] is None and code["bin_emu"] == str(fake_emu[0])
+    assert code["uncommitted"] is None and code["from"] is None and code["bin_emu"] == str(fake_emu[0])
 
 
 def test_code_summary_of_legacy_and_bin_runsets(tmp_path):
@@ -69,11 +69,22 @@ def test_code_summary_of_legacy_and_bin_runsets(tmp_path):
     legacy = SimpleNamespace(name="20261027-1", recipes={"build": {"tool": "gsim"}}, bin={"key": "k"},
                              provenance={"super": {"head": "7a1cd62e2bbd", "dirty": True}})
     c = context.code_summary(entry, legacy)
-    assert c["legacy"] and c["head"] == "7a1cd62e2bbd" and c["dirty"] and c["snapshot"] is None
-    snap = SimpleNamespace(name="20261102-1", recipes={"build": {}}, bin={},
-                           provenance={"snapshot": {"super": {"commit": "abc123"}}, "super": {"head": "h"}})
-    c = context.code_summary(entry, snap)
-    assert c["snapshot"] == "abc123" and not c["legacy"] and c["head"] is None
+    assert c["legacy"] and c["head"] == "7a1cd62e2bbd" and c["dirty"] and c["uncommitted"] is None
+    # legacy src-patches are counted from their text
+    (tmp_path / "20261027-1" / "src-patches").mkdir(parents=True)
+    (tmp_path / "20261027-1" / "src-patches" / "deps__sub.patch").write_text(
+        "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n-a\n+b\n+c\n")
+    c = context.code_summary(entry, legacy)
+    assert c["uncommitted"] == {"repos": ["deps/sub"], "files": 1, "added": 2, "deleted": 1}
+    # a code record: its HEAD plus the stats of the saved patches of the dirty repos
+    rec = SimpleNamespace(name="20261102-1", recipes={"build": {}}, bin={},
+                          provenance={"code": {"super": {"head": "abc123", "dirty": True, "files": 2, "added": 5,
+                                                         "deleted": 1, "omitted": [{"path": "build/"}]},
+                                               "submodules": {"s": {"head": "d", "dirty": False}}},
+                                      "super": {"head": "h"}})
+    c = context.code_summary(entry, rec)
+    assert c["head"] == "abc123" and not c["legacy"] and c["omitted"] == 1
+    assert c["uncommitted"] == {"repos": [""], "files": 2, "added": 5, "deleted": 1}
     # a run-only runset names the runset that built its binary (bincache manifest)
     (tmp_path / "bc").mkdir()
     store.write_json(tmp_path / "bc" / "manifest.json", {"node": "a/b", "runset": "20261027-1"})

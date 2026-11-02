@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import YAML from "yaml";
 import { api } from "../api";
@@ -8,7 +8,7 @@ import { ChangesView } from "../components/Changes";
 import { Markdown } from "../components/FileViewer";
 import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { Changes, CheckpointSet, CodeView, ConfigView, NodeContext, RunsetSummary } from "../types";
+import type { Changes, CheckpointSet, ConfigView, NodeContext, RunsetSummary } from "../types";
 import { NO_PRESETS, checkpointGroups, coveredByTokens, deepMerge, paramTokens, sharedTokens, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
 import { useI18n } from "../i18n";
@@ -35,41 +35,37 @@ function keyMetrics(rs: RunsetSummary): [string, unknown][] {
   return out;
 }
 
-/** The headline parameters as one short line per stage. Values every shown runset shares are
- * muted; recipe keys that differ but have no headline token are counted ("+N"), with this
- * runset's values in the tooltip. */
-function ParamsCell({ rs, shared, extra }: { rs: RunsetSummary; shared: Set<string>; extra: string[] }) {
+const MAX_PARAM_TOKENS = 4;
+
+/** Only what differs between the shown runsets, on one line (stage letter, then the tokens);
+ * the full headline parameters and the other differing recipe keys are in the tooltip. A node
+ * with a single runset has nothing to compare: the cell is "—" with the tooltip. */
+function ParamsCell({ rs, shared, extra, single }: { rs: RunsetSummary; shared: Set<string>; extra: string[]; single: boolean }) {
   const { t } = useI18n();
   const tokens = paramTokens(rs.params, rs.code);
-  const lines = KINDS.filter((stage) => tokens[stage].length);
   const values = rs.differing_values ?? {};
-  const mine = extra.filter((k) => k in values);
-  if (!lines.length && !mine.length) return <span className="muted">—</span>;
+  const mine = single ? [] : extra.filter((k) => k in values);
+  const full = KINDS.filter((stage) => tokens[stage].length).map((stage) => `${stage}: ${tokens[stage].map((x) => x.text).join(" · ")}`);
+  if (mine.length) full.push("", ...mine.map((k) => `${k} = ${fmtValue(values[k])}`));
+  const diff = single ? [] : KINDS.flatMap((stage) => tokens[stage].filter((x) => !shared.has(`${stage}.${x.key}`)).map((x) => ({ stage, ...x })));
+  const shown = diff.slice(0, MAX_PARAM_TOKENS);
+  const more = diff.length - shown.length + mine.length;
+  const title = full.join("\n") || undefined;
+  if (!shown.length && !more) return <span className="muted small" title={title}>{single ? "—" : t("same")}</span>;
   return (
-    <div className="params-cell small mono">
-      {lines.map((stage) => (
-        <div key={stage} className="params-line">
-          <span className="params-stage">{stage[0]}</span>
-          {tokens[stage].map((tok, i) => (
-            <span key={tok.key} className={shared.has(`${stage}.${tok.key}`) ? "muted" : "params-diff"} title={tok.text.length > 24 ? tok.text : undefined}>
-              {i > 0 && <span className="muted"> · </span>}
-              {tok.text.length > 24 ? `${tok.text.slice(0, 22)}…` : tok.text}
-            </span>
-          ))}
-        </div>
+    <span className="params-cell small mono" title={title}>
+      {shown.map((x, i) => (
+        <Fragment key={`${x.stage}.${x.key}`}>
+          {i > 0 && <span className="muted"> · </span>}
+          {(i === 0 || shown[i - 1].stage !== x.stage) && <span className="params-stage">{x.stage[0]}</span>}
+          <span className="params-diff">{x.text.length > 18 ? `${x.text.slice(0, 16)}…` : x.text}</span>
+        </Fragment>
       ))}
-      {mine.length > 0 && (
-        <div className="muted" title={mine.map((k) => `${k} = ${fmtValue(values[k])}`).join("\n")}>
-          +{mine.length} {t("other differing keys")}
-        </div>
-      )}
-    </div>
+      {more > 0 && <span className="muted"> +{more}</span>}
+    </span>
   );
 }
 
-/** Snapshot id from the summary (cheap); files and +/− vs base from the code API (cached). A
- * pre-snapshot runset shows the HEAD it recorded at submit, a run-only one the runset that built
- * its binary. */
 /** The latest task of each stage; tasks a later submit into the same runset superseded are only counted. */
 function TasksCell({ tasks }: { tasks: RunsetSummary["tasks"] }) {
   const { t } = useI18n();
@@ -92,42 +88,35 @@ function TasksCell({ tasks }: { tasks: RunsetSummary["tasks"] }) {
   );
 }
 
-function CodeCell({ rs, enabled }: { rs: RunsetSummary; enabled: boolean }) {
+/** The HEAD the build compiled and, labelled, the uncommitted changes it saved (from the
+ * summary, no code query); a run-only runset links the runset that built its binary. */
+function CodeCell({ rs }: { rs: RunsetSummary }) {
+  const { t } = useI18n();
   const code = rs.code;
-  const snap = code?.snapshot ?? undefined;
-  const q = useQuery({
-    queryKey: ["code-totals", rs.ref],
-    queryFn: () => api.get<CodeView>("/runsets/code", { ref: rs.ref, against: "base" }),
-    enabled: enabled && !!snap,
-    staleTime: 300000,
-    retry: false,
-  });
-  if (!snap) {
-    if (code?.from)
-      return (
-        <span className="small muted" style={{ whiteSpace: "nowrap" }} title={`binary built by ${code.from}`}>
-          ← <Link to={`/runset/${code.from}?tab=code`}>{code.from.split("/").pop()}</Link>
-        </span>
-      );
-    if (code?.legacy && code.head)
-      return (
-        <span className="mono small muted" title={`legacy runset: HEAD ${code.head}${code.dirty ? " + uncommitted changes (src-patches)" : ""}`}>
-          {code.head.slice(0, 8)}
-          {code.dirty ? "*" : ""}
-        </span>
-      );
-    return <span className="muted small">—</span>;
-  }
-  const t = q.data?.total;
+  // a build of its own recorded the code; otherwise a run-only runset's code is its binary's
+  if (code?.from && !(code.head && !code.legacy))
+    return (
+      <span className="small muted" style={{ whiteSpace: "nowrap" }} title={`binary built by ${code.from}`}>
+        ← <Link to={`/runset/${code.from}?tab=code`}>{code.from.split("/").pop()}</Link>
+      </span>
+    );
+  if (!code?.head) return <span className="muted small">—</span>;
+  const u = code.uncommitted;
+  const title = [
+    `HEAD ${code.head}${code.branch ? ` (${code.branch})` : ""}`,
+    u ? `uncommitted: ${u.files} files +${u.added} −${u.deleted} in ${u.repos.map((r) => r || "superproject").join(", ")}` : code.dirty ? "uncommitted changes (not saved)" : "no uncommitted changes",
+    code.omitted ? `${code.omitted} untracked entries not saved` : "",
+    code.legacy ? "legacy runset: recorded at submit" : "",
+  ].filter(Boolean).join("\n");
   return (
-    <span className="mono small" title={`snapshot ${snap}`}>
-      {snap.slice(0, 8)}{" "}
-      {t ? (
-        <span className="muted">
-          {t.files} files <span className="diff-add">+{t.added}</span> <span className="diff-del">−{t.deleted}</span>
-        </span>
-      ) : q.isLoading ? (
-        "…"
+    <span className="mono small" style={{ whiteSpace: "nowrap" }} title={title}>
+      <span className={code.legacy ? "muted" : undefined}>{code.head.slice(0, 8)}</span>
+      {u ? (
+        <Link to={`/runset/${rs.ref}?tab=code`} className="badge warn" style={{ marginLeft: 4 }}>
+          +{u.files} {t("uncommitted")} <span className="diff-add">+{u.added}</span> <span className="diff-del">−{u.deleted}</span>
+        </Link>
+      ) : code.dirty ? (
+        <span className="muted">*</span>
       ) : null}
     </span>
   );
@@ -174,13 +163,13 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
             </tr>
           </thead>
           <tbody>
-            {ctx.runsets.map((rs, i) => (
+            {ctx.runsets.map((rs) => (
               <tr key={rs.ref} className={selected.includes(rs.ref) ? "selected" : ""}>
                 <td>
                   <input type="checkbox" checked={selected.includes(rs.ref)} onChange={() => toggle(rs.ref)} aria-label={`select ${rs.ref}`} />
                 </td>
                 <td className="mono">
-                  <Link to={`/runset/${rs.ref}`}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
+                  <Link to={`/runset/${rs.ref}`} style={{ whiteSpace: "nowrap" }}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
                   {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
                   {rs.derived_from && (
                     <div className="muted small" title={rs.derived_from}>
@@ -190,12 +179,12 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
                   )}
                 </td>
                 <td className="muted">{fmtTime(rs.created)}</td>
-                <td>{rs.purpose}</td>
+                <td style={{ minWidth: 280 }}>{rs.purpose}</td>
                 <td>
-                  <ParamsCell rs={rs} shared={shared} extra={extra} />
+                  <ParamsCell rs={rs} shared={shared} extra={extra} single={ctx.runsets.length < 2} />
                 </td>
                 <td>
-                  <CodeCell rs={rs} enabled={i < 20} />
+                  <CodeCell rs={rs} />
                 </td>
                 <td>
                   <TasksCell tasks={rs.tasks} />

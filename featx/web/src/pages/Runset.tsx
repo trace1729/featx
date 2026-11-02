@@ -8,7 +8,7 @@ import { FileBrowser, FileView, Markdown } from "../components/FileViewer";
 import { LogTail } from "../components/LogTail";
 import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { CodeView, JobView, LegacyProvenance, LegacyRepoState, RunsetSummary, TaskView } from "../types";
+import type { CodeView, JobView, RecordRepo, RunsetSummary, TaskView } from "../types";
 import { countsText, fmtCount, fmtTime, fmtValue, overrideKeys, splitRunset } from "../util";
 import { PriorityControl } from "./Tasks";
 import { useI18n } from "../i18n";
@@ -25,22 +25,27 @@ function jobPct(job: JobView, target?: number): number | null {
 
 const JOB_STATES = ["running", "queued", "succeeded", "failed", "cancelled"];
 
+/** State chips with counts above the jobs table ("all" clears the filter); kept in ?jobs=. */
 function JobFilter({ jobs, selected, onChange }: { jobs: JobView[]; selected: string[]; onChange: (next: string[]) => void }) {
+  const { t } = useI18n();
   const counts: Record<string, number> = {};
   for (const j of jobs) counts[j.state] = (counts[j.state] ?? 0) + 1;
-  const states = JOB_STATES.filter((s) => counts[s]);
-  for (const s of Object.keys(counts)) if (!states.includes(s)) states.push(s);
-  if (states.length < 2) return null;
+  const states = [...JOB_STATES];
+  for (const s of [...Object.keys(counts), ...selected]) if (!states.includes(s)) states.push(s);
   return (
-    <div className="chips" style={{ marginBottom: 6 }}>
+    <div className="chips" style={{ marginBottom: 6 }} role="group" aria-label={t("filter jobs by state")}>
+      <button className={`chip ${selected.length ? "" : "active"}`} aria-pressed={!selected.length} onClick={() => onChange([])}>
+        {t("all")} {jobs.length}
+      </button>
       {states.map((s) => (
         <button
           key={s}
           className={`chip ${selected.includes(s) ? "active" : ""}`}
           aria-pressed={selected.includes(s)}
+          disabled={!counts[s] && !selected.includes(s)}
           onClick={() => onChange(selected.includes(s) ? selected.filter((x) => x !== s) : [...selected, s])}
         >
-          <StateBadge state={s} /> {counts[s]}
+          <StateBadge state={s} /> {counts[s] ?? 0}
         </button>
       ))}
     </div>
@@ -300,46 +305,79 @@ function StageParams({ rs, stage, hasBuild }: { rs: RunsetSummary; stage: string
   );
 }
 
-/** The per-repo commits a legacy runset recorded at submit, with whether each tree was clean. */
-function LegacyRepos({ prov }: { prov: LegacyProvenance }) {
+/** What the code record holds per repo: the HEAD the build compiled and the uncommitted changes
+ * saved with it (untracked files saved / left out). Clean repos are listed on one line. */
+function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; legacy: boolean }) {
   const { t } = useI18n();
-  const sup: LegacyRepoState = prov.super ?? { head: prov.head, dirty: prov.dirty };
-  const rows: [string, LegacyRepoState][] = [[".", sup], ...Object.entries(prov.submodules ?? {})];
+  const rows = Object.entries(record);
+  const shown = rows.filter(([name, r]) => !name || r.dirty || (r.omitted ?? []).length || r.unsaved_untracked);
+  const clean = rows.filter((row) => !shown.includes(row));
   return (
-    <table className="small" data-testid="legacy-repos">
-      <thead>
-        <tr>
-          <th>repo</th>
-          <th>branch</th>
-          <th>HEAD</th>
-          <th>{t("state")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(([name, r]) => (
-          <tr key={name}>
-            <td className="mono">
-              {name}
-              {r.shared ? <span className="muted"> ({t("shared")})</span> : null}
-            </td>
-            <td className="mono muted">{r.branch ?? ""}</td>
-            <td className="mono" title={r.head}>{(r.head ?? "").slice(0, 12)}</td>
-            <td>
-              {r.dirty ? (
-                <span className="badge failed">
-                  {r.diff_lines ? `${r.diff_lines} ${t("diff lines")}` : t("dirty")}
-                  {r.untracked_files ? ` · ${r.untracked_files} ${t("untracked (not saved)")}` : ""}
-                </span>
-              ) : (
-                <span className="muted">{t("clean")}</span>
-              )}
-            </td>
+    <div className="card" data-testid="code-record">
+      <b className="small">{legacy ? t("recorded at submit") : t("code record")}</b>
+      <table className="small record-table">
+        <thead>
+          <tr>
+            <th>repo</th>
+            <th>branch</th>
+            <th>HEAD</th>
+            <th>{t("uncommitted")}</th>
+            <th>{t("untracked")}</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {shown.map(([name, r]) => {
+            const omitted = r.omitted ?? [];
+            return (
+              <tr key={name || "."}>
+                <td className="mono">
+                  {name || t("superproject")}
+                  {r.shared ? <span className="muted"> ({t("shared")})</span> : null}
+                </td>
+                <td className="mono muted">{r.branch ?? ""}</td>
+                <td className="mono" title={r.head ?? undefined}>{(r.head ?? "").slice(0, 12)}</td>
+                <td>
+                  {r.patch ? (
+                    <span className="badge warn">
+                      {r.files ?? 0} files <span className="diff-add">+{r.added ?? 0}</span> <span className="diff-del">−{r.deleted ?? 0}</span>
+                    </span>
+                  ) : r.dirty ? (
+                    <span className="badge failed">{t("dirty, not saved")}</span>
+                  ) : (
+                    <span className="muted">{t("clean")}</span>
+                  )}
+                </td>
+                <td className="small">
+                  {r.untracked ? <span>{r.untracked} {t("saved")}</span> : null}
+                  {omitted.length > 0 && (
+                    <span className="muted" title={omitted.map((o) => `${o.path}${o.files ? ` (${o.files}+ files)` : ""}: ${o.reason}`).join("\n")}>
+                      {r.untracked ? " · " : ""}
+                      {omitted.length} {t("not saved")}: <span className="mono">{omitted.slice(0, 2).map((o) => o.path).join(", ")}{omitted.length > 2 ? ", …" : ""}</span>
+                    </span>
+                  )}
+                  {r.unsaved_untracked ? <span className="muted">{r.unsaved_untracked} {t("untracked (not saved)")}</span> : null}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {clean.length > 0 && (
+        <div className="muted small">
+          {t("clean")} ({clean.length}): <span className="mono">{clean.map(([name, r]) => `${name}@${(r.head ?? "").slice(0, 8)}`).join(", ")}</span>
+        </div>
+      )}
+    </div>
   );
 }
+
+/** What a diff mode shows, as one hint line under the selector. */
+const AGAINST_HINT: Record<string, string> = {
+  base: "merge-base with the node base branch → this runset's code: what this runset adds",
+  prev: "previous runset → this runset: what changed since it",
+  runset: "the chosen runset → this runset",
+  worktree: "this runset → the worktree now: what changed since this runset ran",
+};
 
 function CodeTab({ rs }: { rs: RunsetSummary }) {
   const { t } = useI18n();
@@ -368,12 +406,12 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
       <div className="row" style={{ marginBottom: 8 }}>
         <span className="muted small">{t("against")}</span>
         <select value={against} onChange={(e) => setAgainst(e.target.value)} aria-label="against">
-          <option value="base">{t("node base")}</option>
-          <option value="prev">{t("previous runset")}</option>
-          <option value="worktree">{t("worktree now")}</option>
+          <option value="base">{t("node base")}: {t("what this runset adds")}</option>
+          <option value="prev">{t("previous runset")}: {t("what changed since it")}</option>
+          <option value="worktree">{t("worktree now")}: {t("changes since this runset")}</option>
           {choices.map((r) => (
             <option key={r.ref} value={r.ref}>
-              {r.ref.slice(node.length + 1)}
+              {r.ref.slice(node.length + 1)} → {t("this runset")}
             </option>
           ))}
           {!known && <option value={against}>{against}</option>}
@@ -384,22 +422,11 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
             {t("code from runset")} <Link to={`/runset/${q.data.source_runset}?tab=code`}>{q.data.source_runset}</Link>
           </span>
         )}
-        <span className="spacer" />
-        {q.data?.snapshot?.super?.commit && <span className="mono small">snapshot {q.data.snapshot.super.commit.slice(0, 12)}</span>}
       </div>
-      {q.data?.snapshot?.submodules && Object.keys(q.data.snapshot.submodules).length > 0 && (
-        <div className="muted small mono">
-          {Object.entries(q.data.snapshot.submodules).map(([name, s]) => (
-            <span key={name} style={{ marginRight: 10 }}>
-              {name}: {String(s.commit ?? "").slice(0, 8)}
-              {s.shared ? ` (${t("shared")})` : ""}
-            </span>
-          ))}
-        </div>
-      )}
+      {q.data && !q.data.no_code && q.data.against && <p className="muted small" data-testid="against-hint">{t(AGAINST_HINT[q.data.against] ?? "")}</p>}
       {q.data?.drift && (
         <div className="notice">
-          {t("snapshot drift")}: {q.data.drift} — {t("the binary may not match this snapshot")}
+          {t("code drift")}: {q.data.drift} — {t("the record is the code at build launch; the binary may not match it")}
         </div>
       )}
       {q.isLoading ? (
@@ -414,12 +441,13 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
         <>
           {q.data.legacy && (
             <p className="notice small" data-testid="legacy-note">
-              {t("legacy runset")}: {t("compared by the commits recorded at submit (before code snapshots). Tracked changes at submit are the src-patches below; untracked files were not saved.")}
+              {t("legacy runset")}: {t("from before code records: the HEADs recorded at submit plus the tracked changes saved in src-patches; untracked files were not saved.")}
             </p>
           )}
           {!q.data.legacy && q.data.compared_legacy && (
-            <p className="notice small">{t("the compared runset is a legacy runset: only its recorded commits are compared.")}</p>
+            <p className="notice small">{t("the compared runset is a legacy runset: only its HEADs and src-patches are compared.")}</p>
           )}
+          {q.data.record && Object.keys(q.data.record).length > 0 && <RecordTable record={q.data.record} legacy={q.data.legacy} />}
           {Object.keys(q.data.repos ?? {}).length > 0 && (
             <ChangesView
               changes={q.data}
@@ -429,18 +457,16 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
               fetchDiff={(sub, path) => api.get("/runsets/code/diff", { ref: rs.ref, against, sub, path })}
             />
           )}
-          {q.data.legacy && (
-            <details className="card" open={!Object.keys(q.data.repos ?? {}).length}>
-              <summary className="small">{t("recorded at submit")}</summary>
-              <LegacyRepos prov={q.data.provenance ?? {}} />
-              {Object.entries(q.data.patches ?? {}).map(([name, text]) => (
+          {q.data.patches && (
+            <div data-testid="raw-patches">
+              {Object.entries(q.data.patches).map(([name, text]) => (
                 <div key={name} className="card">
                   <h3 className="mono">{name}</h3>
                   <DiffView text={text} />
                 </div>
               ))}
-              {!Object.keys(q.data.patches ?? {}).length && <div className="muted small">{t("no saved patches")}</div>}
-            </details>
+              {!Object.keys(q.data.patches).length && <div className="muted small">{t("no saved patches")}</div>}
+            </div>
           )}
         </>
       ) : null}
@@ -501,10 +527,11 @@ export function RunsetPage() {
     tasks.find((t) => t.kind === "run") ??
     tasks[0];
   const jobs = pick?.jobs ?? [];
+  const shownJobs = jobStates.length ? jobs.filter((j) => jobStates.includes(j.state)) : jobs;
   const job =
-    sp.get("job") && jobs.some((j) => j.name === sp.get("job"))
+    sp.get("job") && shownJobs.some((j) => j.name === sp.get("job"))
       ? sp.get("job")
-      : (jobs.find((j) => j.state === "running") ?? jobs.find((j) => j.state === "failed") ?? jobs[0])?.name ?? null;
+      : (shownJobs.find((j) => j.state === "running") ?? shownJobs.find((j) => j.state === "failed") ?? shownJobs[0])?.name ?? null;
   return (
     <div>
       <div className="crumbs">

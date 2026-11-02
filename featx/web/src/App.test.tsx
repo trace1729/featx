@@ -326,6 +326,10 @@ describe("App", () => {
     const table = await screen.findByTestId("jobs-scroll");
     const inTable = (name: string) => within(table).getByText(name);
     expect(inTable("a_1_0.5")).toBeTruthy();
+    // every state has a chip with its count; states without jobs are disabled
+    const filter = screen.getByRole("group", { name: "filter jobs by state" });
+    expect(within(filter).getByRole("button", { name: /all 3/ }).getAttribute("aria-pressed")).toBe("true");
+    expect((within(filter).getByRole("button", { name: /running 0/ }) as HTMLButtonElement).disabled).toBe(true);
     const chip = [...screen.getAllByRole("button")].find((b) => b.getAttribute("aria-pressed") !== null && /succeeded/.test(b.textContent ?? ""))!;
     fireEvent.click(chip);
     expect(chip.getAttribute("aria-pressed")).toBe("true");
@@ -370,7 +374,10 @@ describe("App", () => {
     extra["/runsets"] = [{ ...(FIXTURES["/result"] as object), ref: "wpe/overlay/20261012-2", archived: false }];
     extra["/runsets/code"] = {
       ref: "wpe/overlay/20261013-1", against: "base", legacy: false, no_code: false, drift: null, source_runset: null,
-      compared_runset: null, snapshot: { super: { commit: "abcdef1234567890" } },
+      compared_runset: null,
+      record: { "": { head: "abcdef1234567890", branch: "wpe", dirty: true, shared: false, files: 2, added: 9, deleted: 1,
+        patch: "super.patch", untracked: 1, omitted: [{ path: "build-vlt/", files: 51, reason: "directory of more than 50 files" }], unsaved_untracked: 0 },
+        difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: false, shared: true, files: 0, added: 0, deleted: 0, patch: null, untracked: 0, omitted: [], unsaved_untracked: 0 } },
       repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
         commits: [{ sha: "d00d1e", author: "me", when: "1 hour ago", subject: "try a wider window" }],
         files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] } },
@@ -378,8 +385,14 @@ describe("App", () => {
     };
     extra["/runsets/code/diff"] = { sub: "", path: "src/core.scala", diff: "+new", truncated: false };
     renderAt("/runset/wpe/overlay/20261013-1?tab=code");
-    expect(await screen.findByText(/snapshot abcdef123456/)).toBeTruthy();
     expect(await screen.findByText("try a wider window")).toBeTruthy();
+    // the record: HEAD + the saved uncommitted changes; the clean submodule on one line
+    const record = screen.getByTestId("code-record");
+    expect(record.textContent).toContain("abcdef123456");
+    expect(record.textContent).toContain("2 files +9 −1");
+    expect(record.textContent).toContain("1 not saved: build-vlt/");
+    expect(record.textContent).toContain("clean (1): difftest@99f77ff4");
+    expect(screen.getByTestId("against-hint").textContent).toContain("what this runset adds");
     fireEvent.change(screen.getByLabelText("against"), { target: { value: "worktree" } });
     await waitFor(() => {
       const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
@@ -391,11 +404,11 @@ describe("App", () => {
     setToken("t0k");
     extra["/runsets"] = [];
     extra["/runsets/code"] = {
-      ref: "wpe/overlay/20261013-1", against: "base", legacy: true, no_code: false, drift: null, snapshot: null,
-      source_runset: "wpe/overlay/20261012-2", compared_runset: null, head: "7a1cd62e2bbd",
-      provenance: { super: { head: "7a1cd62e2bbddc80", branch: "wpe", dirty: false },
-        submodules: { difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: true, diff_lines: 4 } } },
-      patches: {},
+      ref: "wpe/overlay/20261013-1", against: "base", legacy: true, no_code: false, drift: null,
+      source_runset: "wpe/overlay/20261012-2", compared_runset: null,
+      record: { "": { head: "7a1cd62e2bbddc80", branch: "wpe", dirty: false, patch: null, untracked: 0, omitted: [], unsaved_untracked: 0 },
+        difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: true, patch: "difftest.patch", files: 1, added: 3, deleted: 1,
+          untracked: 0, omitted: [], unsaved_untracked: 2 } },
       repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
         commits: [{ sha: "7a1cd62", author: "me", when: "1 day ago", subject: "squash the migration" }],
         files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] },
@@ -410,9 +423,11 @@ describe("App", () => {
     expect(screen.getByTestId("legacy-note")).toBeTruthy();
     expect(screen.getByLabelText("against")).toBeTruthy();
     expect(screen.getByText(/code from runset/)).toBeTruthy();
-    const repos = screen.getByTestId("legacy-repos");
+    const repos = screen.getByTestId("code-record");
+    expect(repos.textContent).toContain("recorded at submit");
     expect(repos.textContent).toContain("7a1cd62e2bbd");
-    expect(repos.textContent).toContain("4 diff lines");
+    expect(repos.textContent).toContain("1 files +3 −1");
+    expect(repos.textContent).toContain("2 untracked (not saved)");
   });
 
   it("shows only the latest task per stage in the node runsets table", async () => {
@@ -467,6 +482,8 @@ describe("App", () => {
     const summaries = ["20261013-1", "20261013-2"].map((name) => ({
       ...(FIXTURES["/result"] as object), ref: `wpe/${name}`, name,
       params: { run: { workload: "spec06", W: name === "20261013-1" ? 1000000 : 2000000 } },
+      code: name === "20261013-2" ? { head: "0123456789abcdef", branch: "wpe", dirty: true, legacy: false, omitted: 0,
+        uncommitted: { repos: [""], files: 2, added: 9, deleted: 1 } } : { head: "fedcba9876543210", dirty: false, legacy: false, uncommitted: null },
       differing_values: { "run.W": name === "20261013-1" ? 1000000 : 2000000, "run.dump_db": name === "20261013-1" },
     }));
     extra["/nodes/context"] = withNode({}, { runsets: summaries, runset_count: 2, params_differing: ["run.W", "run.dump_db"], archived_count: 0 });
@@ -474,11 +491,17 @@ describe("App", () => {
       repos: {}, total: { files: 0, added: 0, deleted: 0, ahead: 0 } };
     renderAt("/node/wpe");
     await screen.findByText("20261013-1");
-    // compact headline line: the shared workload is muted, the differing W is emphasized, and the
-    // differing key without a headline token is only counted (its value in the tooltip)
-    expect((await screen.findByText("W=1M")).className).toBe("params-diff");
-    expect(screen.getAllByText("spec06")[0].className).toBe("muted");
-    expect(screen.getAllByText(/\+1 other differing keys/)[0].getAttribute("title")).toBe("run.dump_db = true");
+    // only the differing W is shown; the shared workload and the differing key without a headline
+    // token are in the tooltip (the latter counted as "+1")
+    const w = await screen.findByText("W=1M");
+    expect(w.className).toBe("params-diff");
+    expect(screen.queryByText("spec06")).toBeNull();
+    const cell = w.closest(".params-cell")!;
+    expect(cell.textContent).toBe("rW=1M +1");
+    expect(cell.getAttribute("title")).toBe("run: spec06 · W=1M\n\nrun.dump_db = true");
+    // the code column: HEAD plus a label for the uncommitted changes the build saved
+    expect(screen.getByText("01234567")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /\+2 uncommitted/ }).getAttribute("href")).toBe("/runset/wpe/20261013-2?tab=code");
     expect(screen.queryByText(/build\.artifact/)).toBeNull();
     fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));
     fireEvent.click(screen.getByLabelText("select wpe/20261013-2"));

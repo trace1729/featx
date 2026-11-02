@@ -139,8 +139,9 @@ td.diff-add { color: var(--ok); } td.diff-del { color: var(--bad); }
 .evidence-row { gap: 6px; padding: 1px 0; }
 .evidence-row .danger-link { color: var(--bad); font-size: 14px; }
 .cap-input { width: 6em; }
-.params-cell { max-width: 380px; line-height: 1.5; }
-.params-stage { display: inline-block; width: 1.4em; color: var(--muted); text-transform: uppercase; font-size: 0.85em; }
+.params-cell { white-space: nowrap; line-height: 1.5; }
+.params-stage { margin-right: 3px; color: var(--muted); font-weight: normal; text-transform: uppercase; font-size: 0.85em; }
+.record-table td { white-space: nowrap; }
 .params-diff { font-weight: 600; }
 .stage-params { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
 .stage-params .kv { font-size: 0.92em; }

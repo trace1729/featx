@@ -295,9 +295,10 @@ def runsets_list(node: str, include_archived: bool = False) -> list:
 
 @tool
 def runset_code(runset: str, against: str = "base") -> dict:
-    """The code a runset ran (its build snapshot): per repo changed files and commits, diffed
-    against `base` (node base), `prev` (previous snapshot), `worktree` (as it is now) or another
-    runset ref. Includes the snapshot commit ids, drift and the code source runset (with --bin)."""
+    """The code a runset ran (the HEADs its build recorded + the saved uncommitted patches): per
+    repo changed files and commits, diffed against `base` (what it adds over the node base),
+    `prev` (previous runset with code), `worktree` (what the live worktree changed since) or
+    another runset ref. Includes the record, drift and the code source runset (with --bin)."""
     return service.runset_code(runset, against)
 
 
