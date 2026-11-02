@@ -151,6 +151,26 @@ def test_code_api_against_base_prev_worktree_and_runset(root, tmp_path):
     assert legacy["patches"]["super.patch"].startswith("diff --git")
 
 
+def test_code_from_the_runset_that_built_the_bin(root, tmp_path):
+    repo, wt = _node_worktree(root, tmp_path)
+    tree = Tree()
+    rs1, _ = tree.new_runset(tree.get("c"))
+    (wt / "a.txt").write_text("one\ntwo\n")
+    snap = _save_snapshot(wt, rs1)
+    # a run-only runset that used the binary the first one built: no snapshot of its own
+    rs2, rdir = tree.new_runset(Tree().get("c"))
+    bindir = rdir / "fake-bin"
+    bindir.mkdir()
+    (bindir / "emu").write_text("x")
+    store.write_json(bindir / "manifest.json", {"key": "k1", "node": "c", "runset": rs1.name})
+    rs2.bin = {"key": "k1", "emu": str(bindir / "emu"), "sha256": "", "cached": True}
+    Tree().save_runset(Tree().get("c"), rs2)
+    out = service.runset_code(f"c/{rs2.name}", "base")
+    assert out["source_runset"] == f"c/{rs1.name}"
+    assert out["snapshot"]["super"]["commit"] == snap["super"]["commit"]
+    assert {f["path"] for f in out["repos"][""]["files"]} == {"a.txt"}
+
+
 def _attach_worktree(ref: str, tmp_path) -> Path:
     """Give an existing node a real git worktree (build snapshots need one)."""
     repo, wt = tmp_path / "wtrepo", tmp_path / "node-wt"

@@ -632,7 +632,7 @@ function evidenceLink(ev: string) {
   return ev.includes("/") && !ev.includes(" ") ? <Link to={`/runset/${ev}`}>{ev}</Link> : ev;
 }
 
-function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy: boolean; save: (list: string[]) => Promise<unknown>; add: (ev: string) => Promise<unknown> }) {
+function EvidenceList({ evidence, archived, busy, save, add }: { evidence: string[]; archived: Set<string>; busy: boolean; save: (list: string[]) => Promise<unknown>; add: (ev: string) => Promise<unknown> }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -672,7 +672,7 @@ function EvidenceList({ evidence, busy, save, add }: { evidence: string[]; busy:
         ) : (
           <div key={`ev:${i}`} className="row evidence-row">
             <span className="mono small" style={{ flex: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {evidenceLink(ev)}
+              {evidenceLink(ev)} {archived.has(ev) && <Badge kind="warn">{t("archived")}</Badge>}
             </span>
             <button
               className="link small"
@@ -877,7 +877,13 @@ function Header({ ctx }: { ctx: NodeContext }) {
           </select>
         </div>
         <label>{t("evidence")}</label>
-        <EvidenceList evidence={n.evidence} busy={act.busy} save={(list) => update({ evidence: list })} add={(ev) => update({ add_evidence: [ev] })} />
+        <EvidenceList
+          evidence={n.evidence}
+          archived={new Set(ctx.archived_runsets ?? [])}
+          busy={act.busy}
+          save={(list) => update({ evidence: list })}
+          add={(ev) => update({ add_evidence: [ev] })}
+        />
         <label>{t("comment")}</label>
         <div className="row" style={{ alignItems: "flex-start" }}>
           <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder={t("your thoughts on this node: ideas, doubts, what to try next")} onChange={(e) => setComment(e.target.value)} />

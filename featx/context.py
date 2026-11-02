@@ -65,7 +65,7 @@ def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: b
         "runsets": [runset_summary(entry, rs, tasks) for rs in runsets[-max_runsets:]],
         "runset_count": len(runsets),
         "archived_count": len(archived),
-        "archived_runsets": [f"{entry.rel}/{rs.name}" for rs in archived[-max_runsets:]],
+        "archived_runsets": [f"{entry.rel}/{rs.name}" for rs in archived],
         "params_differing": params_mod.differing(runsets[-max_runsets:]),
     }
 
