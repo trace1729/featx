@@ -382,30 +382,36 @@ def _z_entries(raw: str, numstat: bool) -> list[tuple[list[str], list[str]]]:
     return out
 
 
-def _repo_changes(path: str, base: str) -> dict:
-    out = {"path": path, "base": base, "exists": Path(path).is_dir()}
+def _diff_shape(path: str, a: str, b: str | None = None, *, base: str = "",
+                merge_base: str | None = None, with_untracked: bool = False) -> dict:
+    """Changes of `b` (None = the working tree) against `a`: commits ahead, files changed and
+    totals. Shared by the live worktree view (a = merge-base, b = None) and the runset code
+    view (a = base/previous snapshot, b = the snapshot commit)."""
+    out: dict = {"path": path, "base": base, "exists": Path(path).is_dir()}
     if not out["exists"]:
         return out
-    mb = run_git(["-C", path, "merge-base", base, "HEAD"], check=False)
-    if not mb:
-        out["error"] = f"no merge-base between {base} and HEAD"
-        return out
-    out["merge_base"] = mb[:12]
-    counts = run_git(["-C", path, "rev-list", "--left-right", "--count", f"{base}...HEAD"],
+    if merge_base is not None:
+        out["merge_base"] = merge_base[:12]
+    rev = b or "HEAD"
+    # behind/ahead are relative to the tracked base branch when we know it (the live view and
+    # the code view against `base`), else to the diff's left side.
+    counts = run_git(["-C", path, "rev-list", "--left-right", "--count", f"{base or a}...{rev}"],
                      check=False).split()
     out["behind"], out["ahead"] = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (0, 0)
     log = run_git(["-C", path, "log", f"-{MAX_COMMITS}", "--format=%h%x09%an%x09%ar%x09%s",
-                   f"{mb}..HEAD"], check=False)
+                   f"{a}..{rev}"], check=False)
     out["commits"] = [dict(zip(("sha", "author", "when", "subject"), line.split("\t", 3)))
                       for line in log.splitlines() if line]
     skip = _submodule_paths(path)
-    # merge-base vs working tree: committed and uncommitted changes together
+    # git options go before the revisions (as the original live-view command did)
     args = ["-C", path, "diff", "-z", "-M", "--ignore-submodules=all"]
-    stats = {tuple(p)[-1]: f for f, p in _z_entries(run_git(args + ["--numstat", mb], check=False), True)}
-    uncommitted = {p[-1] for _, p in _z_entries(run_git(args + ["--name-status", "HEAD"], check=False),
-                                                False)}
+    revs = [a] + ([b] if b else [])
+    stats = {tuple(p)[-1]: f for f, p in _z_entries(run_git(args + ["--numstat"] + revs, check=False), True)}
+    uncommitted = set() if b is not None else {
+        p[-1] for _, p in _z_entries(run_git(["-C", path, "diff", "-z", "-M", "--ignore-submodules=all",
+                                             "--name-status", "HEAD"], check=False), False)}
     files = []
-    for (code,), paths in _z_entries(run_git(args + ["--name-status", mb], check=False), False):
+    for (code,), paths in _z_entries(run_git(args + ["--name-status"] + revs, check=False), False):
         if paths[-1] in skip:
             continue
         added, deleted = stats.get(paths[-1], ["0", "0"])
@@ -415,12 +421,27 @@ def _repo_changes(path: str, base: str) -> dict:
                       "uncommitted": paths[-1] in uncommitted})
     out["truncated"] = len(files) > MAX_FILES
     out["files"] = files[:MAX_FILES]
-    untracked = run_git(["-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
-    untracked = [p for p in untracked.split("\0") if p and p not in skip]
+    untracked: list[str] = []
+    if with_untracked:
+        raw = run_git(["-C", path, "ls-files", "--others", "--exclude-standard", "-z"], check=False)
+        untracked = [p for p in raw.split("\0") if p and p not in skip]
     out["untracked"] = untracked[:MAX_FILES]
+    out["untracked_total"] = len(untracked)
+    out["untracked_truncated"] = len(untracked) > MAX_FILES
     out["added"] = sum(f["added"] or 0 for f in files)
     out["deleted"] = sum(f["deleted"] or 0 for f in files)
     return out
+
+
+def _repo_changes(path: str, base: str) -> dict:
+    out = {"path": path, "base": base, "exists": Path(path).is_dir()}
+    if not out["exists"]:
+        return out
+    mb = run_git(["-C", path, "merge-base", base, "HEAD"], check=False)
+    if not mb:
+        out["error"] = f"no merge-base between {base} and HEAD"
+        return out
+    return _diff_shape(path, mb, base=base, merge_base=mb, with_untracked=True)
 
 
 def changes(node: Node) -> dict:

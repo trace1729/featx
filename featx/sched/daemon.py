@@ -163,8 +163,10 @@ def build_app(d: Daemon) -> "FastAPI":
                       worktree_create=body.get("worktree", False), base=body.get("base"))
 
     @app.get("/nodes/context")
-    def node_context(ref: str, max_runsets: int = 3):
-        return service.node_context(ref, max_runsets)
+    def node_context(ref: str, max_runsets: int = 3, include_archived: bool = False,
+                     archived_only: bool = False):
+        return service.node_context(ref, max_runsets, include_archived=include_archived,
+                                    archived_only=archived_only)
 
     @app.post("/nodes/update")
     def node_update(body: dict = Body(...)):
@@ -183,8 +185,21 @@ def build_app(d: Daemon) -> "FastAPI":
                       drop_branches=body.get("drop_branches", False))
 
     @app.get("/runsets")
-    def runsets(ref: str):
-        return service.runsets(ref)
+    def runsets(ref: str, include_archived: bool = False):
+        return service.runsets(ref, include_archived=include_archived)
+
+    @app.get("/runsets/code")
+    def runset_code(ref: str, against: str = "base"):
+        return service.runset_code(ref, against)
+
+    @app.get("/runsets/code/diff")
+    def runset_code_diff(ref: str, path: str, against: str = "base", sub: str = ""):
+        return service.runset_code_diff(ref, against, sub, path)
+
+    @app.post("/runsets/archive")
+    def runset_archive(body: dict = Body(...)):
+        return locked(service.runset_archive, body["ref"], archived=body.get("archived", True),
+                      note=body.get("note", ""))
 
     @app.get("/result")
     def result(ref: str):
@@ -365,9 +380,11 @@ def build_app(d: Daemon) -> "FastAPI":
     # -------------------------------------------- leaderboard / config / files
     @app.get("/leaderboard")
     def board(metric: str | None = None, order: str | None = None, cls: str | None = None,
-              node: str | None = None, best_per_node: bool = False, include_incomplete: bool = False):
+              node: str | None = None, best_per_node: bool = False, include_incomplete: bool = False,
+              include_archived: bool = False):
         return leaderboard.build(metric=metric, order=order, cls=cls, node=node,
-                                 best_per_node=best_per_node, include_incomplete=include_incomplete)
+                                 best_per_node=best_per_node, include_incomplete=include_incomplete,
+                                 include_archived=include_archived)
 
     @app.get("/config")
     def config_get():

@@ -96,3 +96,30 @@ def test_set_overrides_keep_null():
                         "build.cache=false"])
     assert o == {"run": {"W": 0, "coverage": None, "exec": {"diff": "/n", "gcpt_restorer": "/g"}},
                  "build": {"cache": False}}
+
+
+def test_archive_and_task_state_api(root):
+    from featx.model import Task
+    from featx.tree import Tree
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    h = {"X-Featx-Token": d.token}
+    tree = Tree()
+    entry = tree.add("api/n", parents=True)
+    rs, _ = tree.new_runset(entry)
+    ref = f"api/n/{rs.name}"
+    r = c.post("/runsets/archive", json={"ref": ref, "note": "duplicate"}, headers=h)
+    assert r.status_code == 200 and r.json()["archived"] and r.json()["archive_note"] == "duplicate"
+    assert c.get("/runsets", params={"ref": "api/n"}, headers=h).json() == []
+    shown = c.get("/runsets", params={"ref": "api/n", "include_archived": True}, headers=h).json()
+    assert [x["ref"] for x in shown] == [ref]
+    ctx = c.get("/nodes/context", params={"ref": "api/n"}, headers=h).json()
+    assert ctx["archived_count"] == 1 and ctx["runsets"] == []
+
+    t = Task(id="TASK1", kind="run", name="run", node_id=entry.node.id, runset_id=rs.id,
+             runset_name=rs.name)
+    d.sched.tasks[t.id] = t
+    assert [x["id"] for x in c.get("/tasks", params={"state": "queued"}, headers=h).json()] == ["TASK1"]
+    assert c.get("/tasks", params={"state": "failed"}, headers=h).json() == []
+    t.state, t.cancelled_by = "cancelled", "UPSTREAM"
+    assert [x["id"] for x in c.get("/tasks", params={"state": "blocked"}, headers=h).json()] == ["TASK1"]

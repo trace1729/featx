@@ -86,11 +86,11 @@ def tree_list(root: str | None = None) -> str:
 
 
 @tool
-def node_context(node: str, max_runsets: int = 3) -> dict:
+def node_context(node: str, max_runsets: int = 3, include_archived: bool = False) -> dict:
     """Everything needed to work on a node: its hypothesis/verdict and the ancestors' chain,
     children, effective and own recipes, scripts, worktree status, latest runset summaries
     (task states, post metrics, problem-log tail)."""
-    return service.node_context(node, max_runsets)
+    return service.node_context(node, max_runsets, include_archived=include_archived)
 
 
 @tool
@@ -288,9 +288,24 @@ def result_get(runset: str) -> dict:
 
 
 @tool
-def runsets_list(node: str) -> list:
-    """All runsets of a node with task states and post summaries."""
-    return service.runsets(node)
+def runsets_list(node: str, include_archived: bool = False) -> list:
+    """All (or all non-archived) runsets of a node with task states and post summaries."""
+    return service.runsets(node, include_archived=include_archived)
+
+
+@tool
+def runset_code(runset: str, against: str = "base") -> dict:
+    """The code a runset ran (its build snapshot): per repo changed files and commits, diffed
+    against `base` (node base), `prev` (previous snapshot), `worktree` (as it is now) or another
+    runset ref. Includes the snapshot commit ids, drift and the code source runset (with --bin)."""
+    return service.runset_code(runset, against)
+
+
+@tool
+def runset_archive(runset: str, undo: bool = False, note: str = "") -> dict:
+    """Hide a runset from the lists (undo=True shows it again); its data and binary are kept and
+    gc is unchanged. Refused while any of its tasks is active. `note` records why."""
+    return service.runset_archive(runset, archived=not undo, note=note)
 
 
 @tool
@@ -330,12 +345,13 @@ def hosts() -> list:
 
 @tool
 def leaderboard(metric: str | None = None, cls: str | None = None, node: str | None = None,
-                best_per_node: bool = False, include_incomplete: bool = False) -> dict:
+                best_per_node: bool = False, include_incomplete: bool = False,
+                include_archived: bool = False) -> dict:
     """Rank runsets by a post metric ("<step>.<summary key>", default IPC mean|err|). Only
     runsets in one comparability class (same reference, PERF block, W, I, point set) are ranked
     together; `classes` lists the others, `metrics` the available metric names."""
     return board.build(metric=metric, cls=cls, node=node, best_per_node=best_per_node,
-                       include_incomplete=include_incomplete)
+                       include_incomplete=include_incomplete, include_archived=include_archived)
 
 
 @tool

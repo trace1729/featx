@@ -35,10 +35,11 @@ script_app = typer.Typer(no_args_is_help=True, help="Per-node helper scripts.")
 config_app = typer.Typer(no_args_is_help=True, help=tr("featx.yaml (user layer over the package defaults)."))
 plugin_app = typer.Typer(no_args_is_help=True, help=tr("Post-processing plugins (manifests)."))
 ckpt_app = typer.Typer(no_args_is_help=True, help=tr("SimPoint checkpoint sets for exec runs (run.checkpoint)."))
+runset_app = typer.Typer(no_args_is_help=True, help=tr("Runset records (archive, parameters)."))
 for name, sub in (("node", node_app), ("recipe", recipe_app), ("worktree", wt_app), ("task", task_app),
                   ("daemon", daemon_app), ("log", log_app), ("baseline", base_app), ("bin", bin_app),
                   ("script", script_app), ("config", config_app), ("plugin", plugin_app),
-                  ("ckpt", ckpt_app)):
+                  ("ckpt", ckpt_app), ("runset", runset_app)):
     app.add_typer(sub, name=name)
 
 KINDS = ("build", "run", "post")
@@ -198,12 +199,22 @@ def node_rm(ref: str, force: bool = typer.Option(False, "-f", "--force"),
 
 @node_app.command("runsets")
 @guarded
-def node_runsets(ref: str):
-    """All runsets of a node with task states and post summaries."""
-    for rs in service.runsets(ref):
+def node_runsets(ref: str, all_: bool = typer.Option(False, "-a", "--all", help="include archived runsets")):
+    """All (or all non-archived) runsets of a node with task states and post summaries."""
+    for rs in service.runsets(ref, include_archived=all_):
         tasks = " ".join(f"{t['kind']}:{t['state']}" for t in rs["tasks"])
-        seal = "sealed" if rs["sealed"] else "open"
-        typer.echo(f"{rs['ref']:50s} {seal:7s} {tasks}  {rs['purpose']}")
+        seal = "archived" if rs["archived"] else ("sealed" if rs["sealed"] else "open")
+        typer.echo(f"{rs['ref']:50s} {seal:8s} {tasks}  {rs['purpose']}")
+
+
+@runset_app.command("archive")
+@guarded
+def runset_archive_cmd(ref: str, undo: bool = typer.Option(False, "--undo", help="show it again"),
+                       note: str = typer.Option("", "-m", "--note", help="why it is archived")):
+    """Hide a runset from the lists (data and binary are kept). Refused while tasks are active."""
+    r = service.runset_archive(ref, archived=not undo, note=note)
+    typer.echo(f"{r['ref']} {'archived' if r['archived'] else 'unarchived'}"
+               + (f"  {r['archive_note']}" if r["archive_note"] else ""))
 
 
 # ================================================================== recipes
@@ -546,6 +557,17 @@ def result(ref: str, as_json: bool = typer.Option(False, "--json")):
         typer.echo(f"  {t['kind']:5s} {t['state']:9s} {t['counts']}  {t.get('failure') or ''}")
     if r.get("bin"):
         typer.echo(f"  bin {r['bin'].get('emu')}")
+    for stage in ("build", "run", "post"):
+        items = (r.get("params") or {}).get(stage) or {}
+        if not items:
+            continue
+        typer.echo(f"  params/{stage}:")
+        for k, v in items.items():
+            typer.echo(f"    {k} = {v}")
+    if r.get("overrides"):
+        typer.echo("  overrides:")
+        for line in yaml.safe_dump(r["overrides"], sort_keys=False).rstrip().splitlines():
+            typer.echo(f"    {line}")
     for step, summ in r["post"].items():
         typer.echo(f"  post/{step}:")
         for k, v in list(summ.items())[:25]:
@@ -594,11 +616,12 @@ def leaderboard_cmd(metric: Optional[str] = typer.Option(None, "-m", "--metric",
                     order: Optional[str] = typer.Option(None, help="asc|desc (default by metric name)"),
                     best: bool = typer.Option(False, "--best", help="best runset per node only"),
                     all_: bool = typer.Option(False, "-a", "--all", help="include incomplete runsets"),
+                    archived: bool = typer.Option(False, "--archived", help="include archived runsets"),
                     as_json: bool = typer.Option(False, "--json")):
     """Rank runsets by a post metric inside one comparability class (same reference, PERF
     block, W, I and point set)."""
     r = leaderboard.build(metric=metric, order=order, cls=cls, node=node, best_per_node=best,
-                          include_incomplete=all_)
+                          include_incomplete=all_, include_archived=archived)
     if as_json:
         out(r)
         return

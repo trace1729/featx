@@ -78,6 +78,10 @@ class Runset(BaseModel):
     recipes: dict[str, Any] = Field(default_factory=dict)   # snapshots taken at submit
     tasks: list[str] = Field(default_factory=list)
     bin: dict[str, Any] | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)  # the raw submit --set overrides
+    archived: bool = False      # hidden from the default lists; data and bins are kept
+    archived_at: str = ""
+    archive_note: str = ""
 
 
 class Job(BaseModel):

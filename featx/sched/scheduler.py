@@ -17,7 +17,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .. import config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
+from .. import config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, snapshots, store, taskstore
 from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Task
 from ..tree import Tree, TreeError
 from . import classify, eta, executor
@@ -25,6 +25,7 @@ from .placement import Placement
 
 
 PROGRESS_EVERY = 30.0   # seconds between progress-log parses / bookkeeping saves per task
+_UNSET = object()
 
 
 class SchedError(Exception):
@@ -233,6 +234,9 @@ class Scheduler:
                 if created_rs:
                     shutil.rmtree(rdir, ignore_errors=True)
                 raise
+            if overrides:
+                # kind-level merge keeps a null (a deletion at submit) in the record for the UI
+                rs.overrides = {**rs.overrides, **overrides}
             emu_override = next((t.spec["emu"] for t in created if t.kind == "run"), None) if bin_ref else None
             for task in created:
                 task.priority = int(priority or 0)
@@ -406,6 +410,7 @@ class Scheduler:
         if task.kind == "build":
             entry = tree.get(task.node_id)
             key = task.outputs["bincache_key"] = self._build_key(task, rdir)
+            self._snapshot_build(tree, task)   # the code this key describes, kept as a git ref
             hit = provenance.bincache_lookup(key) if spec.get("cache", True) else None
             if hit:
                 task.outputs["emu"] = str(hit)
@@ -443,12 +448,57 @@ class Scheduler:
         task.state, task.started = "running", _now()
 
     @staticmethod
-    def _build_key(task: Task, rdir: Path) -> str:
+    def _worktree_state(workdir) -> dict:
+        return provenance.worktree_state(workdir) if workdir and (Path(workdir) / ".git").exists() else {}
+
+    @classmethod
+    def _build_key(cls, task: Task, rdir: Path) -> str:
         spec = task.spec
-        state = provenance.worktree_state(spec["workdir"]) if (Path(spec["workdir"]) / ".git").exists() else {}
+        state = cls._worktree_state(spec.get("workdir"))
+        task.outputs["build_state"] = state
         return provenance.bincache_key(state, presets.key_recipe(spec), rdir / "scripts")
 
-    def _finish_build(self, tree: Tree, task: Task, emu: Path, cached: bool) -> None:
+    def _snapshot_build(self, tree: Tree, task: Task, drift: str | None = None) -> dict | None:
+        """Record the build's source as refs/featx/runsets/<runset id> (super + every submodule)
+        and store it in the runset's provenance. A snapshot failure never fails the build."""
+        workdir = task.spec.get("workdir")
+        entry = tree.get(task.node_id)
+        git = entry.node.git
+        if not workdir or git is None or not (Path(workdir) / ".git").exists():
+            return None
+        try:
+            snap = snapshots.worktree_snapshot(workdir, f"{snapshots.REF_PREFIX}{task.runset_id}",
+                                               super_base=git.base,
+                                               sub_bases={n: s.base for n, s in git.submodule_worktrees.items()})
+        except (RuntimeError, OSError) as error:
+            snap = {"error": str(error)}
+        task.outputs["snapshot"] = snap
+        _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
+        rs.provenance = {**(rs.provenance or {}), "snapshot": snap}
+        if drift:
+            rs.provenance["drift"] = drift
+        tree.save_runset(entry, rs)
+        return snap
+
+    def _mark_drift(self, tree: Tree, task: Task, drift: str) -> None:
+        entry = tree.get(task.node_id)
+        _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
+        rs.provenance = {**(rs.provenance or {}), "drift": drift}
+        tree.save_runset(entry, rs)
+
+    def _build_changed_since_key(self, tree: Tree, task: Task) -> bool:
+        """Has the source moved past the state the bincache key describes?"""
+        state = self._worktree_state(task.spec.get("workdir"))
+        if not state:
+            return False
+        key = provenance.bincache_key(state, presets.key_recipe(task.spec),
+                                      self._runset_dir(tree, task) / "scripts")
+        if key == task.outputs.get("bincache_key"):
+            return False
+        task.outputs["build_state"] = state
+        return True
+
+    def _finish_build(self, tree: Tree, task: Task, emu: Path, cached: bool, key=_UNSET) -> None:
         entry = tree.get(task.node_id)
         rdir = entry.dir / task.runset_name
         (rdir / "bin").mkdir(parents=True, exist_ok=True)
@@ -458,8 +508,10 @@ class Scheduler:
         os.symlink(emu, link)
         _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
         manifest = store.read_json(Path(emu).parent / "manifest.json", {})
-        rs.bin = {"key": task.outputs.get("bincache_key"), "emu": str(emu), "sha256": manifest.get("sha256"),
-                  "cached": cached}
+        rs.bin = {"key": task.outputs.get("bincache_key") if key is _UNSET else key, "emu": str(emu),
+                  "sha256": manifest.get("sha256"), "cached": cached}
+        if key is None:
+            rs.bin["drift"] = "during build"
         tree.save_runset(entry, rs)
 
     # ================================================================ tick
@@ -787,6 +839,15 @@ class Scheduler:
     def _prepare_job(self, tree: Tree, task: Task, job: Job) -> Path | None:
         """New attempt: generate cmd.sh. Returns the job dir, or None if generation failed
         (the job is then failed as a design error)."""
+        if task.kind == "build" and job.name == "build" and task.outputs.get("bincache_key"):
+            state = self._worktree_state(task.spec.get("workdir"))
+            # The key was computed at materialize time; the source may have moved since. Re-snapshot
+            # and re-key so the binary is cached under the code it was actually built from.
+            if state and state != task.outputs.get("build_state"):
+                task.outputs["build_state"] = state
+                task.outputs["bincache_key"] = provenance.bincache_key(
+                    state, presets.key_recipe(task.spec), self._runset_dir(tree, task) / "scripts")
+                self._snapshot_build(tree, task, drift="after submit")
         jdir = self._job_dir(tree, task, job)
         job.attempt += 1
         job.started, job.finished, job.rc = None, None, None
@@ -883,12 +944,22 @@ class Scheduler:
                 return
             key = task.outputs.get("bincache_key") or store.new_id()
             entry = tree.get(task.node_id)
-            emu = provenance.bincache_store(key, art, {"key": key, "node": entry.rel, "runset": task.runset_name,
-                                                       "task": task.id, "workdir": task.spec.get("workdir"),
-                                                       "tool": task.spec.get("tool"), "mode": task.spec.get("mode")})
-            art.unlink()
-            task.outputs["emu"] = str(emu)
-            self._finish_build(tree, task, emu, cached=False)
+            if self._build_changed_since_key(tree, task):
+                # The tree changed while compiling: this binary matches no key, so caching it under
+                # the old one would pair a binary with the wrong source. Keep it with the runset.
+                self._mark_drift(tree, task, "during build")
+                task.outputs["emu"] = str(art)
+                task.outputs["cache_skipped"] = "source changed during the build"
+                self._finish_build(tree, task, art, cached=False, key=None)
+            else:
+                emu = provenance.bincache_store(key, art, {"key": key, "node": entry.rel,
+                                                           "runset": task.runset_name, "task": task.id,
+                                                           "workdir": task.spec.get("workdir"),
+                                                           "tool": task.spec.get("tool"),
+                                                           "mode": task.spec.get("mode")})
+                art.unlink()
+                task.outputs["emu"] = str(emu)
+                self._finish_build(tree, task, emu, cached=False)
         if rc == 0 and task.kind == "post":
             if not (jdir / "summary.json").is_file():
                 self._job_failed(tree, task, job, rc, "featx: post step wrote no summary.json")
@@ -1081,6 +1152,7 @@ class Scheduler:
                 # The fix being relaunched (worktree edit or script) changes what gets built:
                 # store the new binary under its own key, not the failed source's key.
                 task.outputs["bincache_key"] = self._build_key(task, rdir)
+                self._snapshot_build(tree, task, drift="after submit")
             for job in targets:
                 job.state, job.failure, job.rc, job.host = "queued", None, None, None
             if not task.jobs:

@@ -12,9 +12,9 @@ import shutil
 import time
 from pathlib import Path
 
-from . import baselines, config, context, problemlog, provenance, recipes, store, taskstore, worktree
+from . import baselines, config, context, params as params_mod, problemlog, provenance, recipes, snapshots, store, taskstore, worktree
 from .model import ACTIVE_TASK_STATES
-from .tree import Tree, TreeError, purge_trash, render_tree
+from .tree import Tree, TreeError, purge_trash, render_tree, run_git
 
 
 # ------------------------------------------------------------------ tree
@@ -25,10 +25,16 @@ def tree_rows(tree: Tree, status: dict[str, dict] | None = None) -> list[dict]:
 
     def walk(entry, depth):
         st = status.get(entry.node.id) or {}
+        all_runsets = tree.runsets(entry)
+        visible = [rs for rs in all_runsets if not rs.archived]
+        archived = {rs.name for rs in all_runsets if rs.archived}
+        latest = st.get("runset")
+        if latest in archived:
+            latest = visible[-1].name if visible else None
         rows.append({"id": entry.node.id, "path": entry.rel, "name": entry.node.name, "depth": depth,
                      "kind": entry.node.kind, "verdict": entry.node.verdict, "status": entry.node.status,
                      "hypothesis": entry.node.hypothesis, "worktree": bool(entry.node.git),
-                     "runsets": len(tree.runsets(entry)), "latest": st.get("runset"),
+                     "runsets": len(visible), "archived_count": len(archived), "latest": latest,
                      "tasks": st.get("tasks", {}), "active": st.get("active", []), "eta_s": st.get("eta_s")})
         for kid in tree.children(entry):
             walk(kid, depth + 1)
@@ -86,9 +92,11 @@ def node_add(rel: str, *, hypothesis: str = "", tags: list[str] | None = None, p
     return out
 
 
-def node_context(ref: str, max_runsets: int = 3) -> dict:
+def node_context(ref: str, max_runsets: int = 3, *, include_archived: bool = False,
+                 archived_only: bool = False) -> dict:
     tree = Tree()
-    return context.build(tree, tree.get(ref), max_runsets=max_runsets)
+    return context.build(tree, tree.get(ref), max_runsets=max_runsets,
+                         include_archived=include_archived, archived_only=archived_only)
 
 
 def node_update(ref: str, **fields) -> dict:
@@ -180,6 +188,205 @@ def worktree_changes(ref: str) -> dict:
     return worktree.changes(entry.node)
 
 
+def _snapshot_of(rs):
+    return (rs.provenance or {}).get("snapshot") or None
+
+
+def _bin_code_source(rs) -> str | None:
+    """The runset that built this runset's binary, from the bincache manifest."""
+    bin = rs.bin or {}
+    if not bin or bin.get("imported"):
+        return None
+    emu = bin.get("emu")
+    if not emu:
+        return None
+    man = store.read_json(Path(emu).parent / "manifest.json", {})
+    node, runset = man.get("node"), man.get("runset")
+    return f"{node}/{runset}" if node and runset else None
+
+
+def _code_source(tree: Tree, entry, rs):
+    """(entry, runset, snapshot) whose code produced this runset, or None (legacy / imported)."""
+    snap = _snapshot_of(rs)
+    if snap:
+        return entry, rs, snap
+    ref = _bin_code_source(rs)
+    if not ref:
+        return None
+    try:
+        e2, rs2 = tree.find_runset(ref)
+    except TreeError:
+        return None
+    snap2 = _snapshot_of(rs2)
+    return (e2, rs2, snap2) if snap2 else None
+
+
+def _prev_snapshot(tree: Tree, entry, rs):
+    earlier = [r for r in tree.runsets(entry) if r.name < rs.name and _snapshot_of(r)]
+    return earlier[-1] if earlier else None
+
+
+def _code_repo_specs(git, snap: dict, mode: str, other: dict | None) -> list[dict]:
+    """Per repo (super + every snapshotted submodule): path, base and the two sides of the diff."""
+    items = [("", git.worktree, git.base, snap.get("super") or {},
+              (other or {}).get("super") or {})]
+    for name, info in (snap.get("submodules") or {}).items():
+        sub = git.submodule_worktrees.get(name)
+        items.append((name, sub.path if sub else str(Path(git.worktree) / name),
+                      sub.base if sub else (info.get("base") or ""), info,
+                      ((other or {}).get("submodules") or {}).get(name) or {}))
+    specs = []
+    for name, path, base, info, prev in items:
+        commit = info.get("commit")
+        if not commit:
+            continue
+        spec = {"name": name, "path": path, "base": base, "info": info}
+        if mode == "worktree":
+            spec.update(a=commit, b=None, merge_base=None)
+        elif mode == "base":
+            mb = info.get("merge_base") or ""
+            spec.update(a=mb, b=commit, merge_base=mb)
+            if not mb:
+                spec["error"] = f"no merge-base between {base or '?'} and the snapshot"
+        else:
+            a = prev.get("commit")
+            spec.update(a=a, b=commit, merge_base=info.get("merge_base"))
+            if not a:
+                spec["error"] = "the compared runset has no snapshot for this repo"
+        specs.append(spec)
+    return specs
+
+
+def _code_totals(repos: dict) -> dict:
+    return {"files": sum(len(r.get("files", [])) + len(r.get("untracked", [])) for r in repos.values()),
+            "added": sum(r.get("added", 0) for r in repos.values()),
+            "deleted": sum(r.get("deleted", 0) for r in repos.values()),
+            "ahead": sum(r.get("ahead", 0) for r in repos.values())}
+
+
+def _no_code(entry, rs, reason: str) -> dict:
+    return {"ref": f"{entry.rel}/{rs.name}", "legacy": False, "no_code": True, "reason": reason,
+            "snapshot": None, "drift": None, "source_runset": None, "repos": {}, "total": {}}
+
+
+def _legacy_code(entry, rs) -> dict:
+    """A runset from before snapshots: the recorded HEAD plus its src-patches/*.patch."""
+    prov = rs.provenance or {}
+    patches = {}
+    pdir = entry.dir / rs.name / "src-patches"
+    if pdir.is_dir():
+        for path in sorted(pdir.iterdir()):
+            if path.is_file():
+                patches[path.name] = path.read_text(errors="replace")[:200000]
+    return {"ref": f"{entry.rel}/{rs.name}", "legacy": True, "no_code": False, "snapshot": None,
+            "drift": None, "source_runset": None, "head": (prov.get("super") or {}).get("head") or prov.get("head"),
+            "provenance": prov, "patches": patches, "repos": {}, "total": {}}
+
+
+def runset_code(ref: str, against: str = "base") -> dict:
+    """The code a runset ran: its build snapshot diffed against the node base, the previous
+    snapshot, the worktree as it is now, or another runset."""
+    tree = Tree()
+    entry, rs = tree.find_runset(ref)
+    bin = rs.bin or {}
+    if bin.get("imported") and not _snapshot_of(rs):
+        return _no_code(entry, rs, "imported binary: its source is not recorded")
+    source = _code_source(tree, entry, rs)
+    if source is None:
+        if bin.get("key"):
+            return _no_code(entry, rs, f"the runset that built {bin['key']} has no snapshot "
+                                       "(built before snapshots were recorded)")
+        return _legacy_code(entry, rs)
+    entry_s, rs_s, snap = source
+    git = entry_s.node.git
+    if git is None:
+        return _no_code(entry, rs, "the code runset has no worktree record")
+    code_ref = f"{entry_s.rel}/{rs_s.name}"
+    requested = against or "base"
+    mode, other, compared = requested, None, None
+    if requested == "prev":
+        prev = _prev_snapshot(tree, entry_s, rs_s)
+        if prev is None:
+            mode = "base"
+        else:
+            other, compared = _snapshot_of(prev), f"{entry_s.rel}/{prev.name}"
+    elif requested not in ("base", "worktree"):
+        try:
+            _, rs2 = tree.find_runset(requested)
+        except TreeError:
+            raise TreeError(f"--against {requested}: not base|prev|worktree or a runset ref") from None
+        other = _snapshot_of(rs2)
+        if other is None:
+            raise TreeError(f"runset {requested} has no code snapshot")
+        mode, compared = "runset", requested
+    repos = {}
+    for spec in _code_repo_specs(git, snap, mode, other):
+        if spec.get("error"):
+            repos[spec["name"]] = {"path": spec["path"], "base": spec["base"],
+                                   "exists": Path(spec["path"]).is_dir(), "error": spec["error"]}
+            continue
+        shape = worktree._diff_shape(spec["path"], spec["a"], spec["b"], base=spec["base"],
+                                     merge_base=spec["merge_base"], with_untracked=mode == "worktree")
+        if mode == "worktree":
+            # files the snapshot already committed are not differences just because git still
+            # calls them untracked in the live worktree
+            keep = [p for p in shape.get("untracked", [])
+                    if not snapshots.has_path(spec["path"], spec["info"].get("commit"), p)]
+            shape["untracked"] = keep
+            shape["untracked_total"] = len(keep)
+        repos[spec["name"]] = shape
+    return {"ref": f"{entry.rel}/{rs.name}", "against": mode, "requested_against": requested,
+            "compared_runset": compared, "legacy": False, "no_code": False,
+            "snapshot": snap, "drift": (rs_s.provenance or {}).get("drift"),
+            "source_runset": None if code_ref == f"{entry.rel}/{rs.name}" else code_ref,
+            "repos": repos, "total": _code_totals(repos)}
+
+
+def runset_code_diff(ref: str, against: str, sub: str, path: str) -> dict:
+    """One file's diff in the runset code view (same against= as runset_code)."""
+    tree = Tree()
+    entry, rs = tree.find_runset(ref)
+    source = _code_source(tree, entry, rs)
+    if source is None:
+        raise TreeError("this runset has no code snapshot")
+    entry_s, rs_s, snap = source
+    git = entry_s.node.git
+    requested = against or "base"
+    mode, other = requested, None
+    if requested == "prev":
+        prev = _prev_snapshot(tree, entry_s, rs_s)
+        mode = "base" if prev is None else "prev"
+        other = _snapshot_of(prev) if prev else None
+    elif requested not in ("base", "worktree"):
+        _, rs2 = tree.find_runset(requested)
+        other = _snapshot_of(rs2)
+        if other is None:
+            raise TreeError(f"runset {requested} has no code snapshot")
+        mode = "runset"
+    specs = {s["name"]: s for s in _code_repo_specs(git, snap, mode, other)}
+    if sub not in specs:
+        raise TreeError(f"no repo {sub!r} in this runset's snapshot")
+    spec = specs[sub]
+    shape = worktree._diff_shape(spec["path"], spec["a"], spec["b"], base=spec["base"],
+                                 with_untracked=mode == "worktree")
+    known = {f["path"]: f for f in shape.get("files", [])}
+    truncated = False
+    if path in (shape.get("untracked") or []):
+        fp = Path(spec["path"]) / path
+        text = fp.read_text(errors="replace") if fp.is_file() else ""
+        diff = "".join(f"+{line}\n" for line in text.splitlines())
+        diff = f"--- /dev/null\n+++ b/{path}\n" + diff
+    elif path in known:
+        f = known[path]
+        paths = [f["old_path"], path] if f["old_path"] else [path]
+        sides = [spec["a"]] + ([spec["b"]] if spec["b"] else [])
+        diff = run_git(["-C", spec["path"], "diff", "-M", *sides, "--", *paths], check=False)
+    else:
+        raise TreeError(f"{path} is not among the changed files of {sub or 'the repo'}")
+    truncated = len(diff) > worktree.MAX_DIFF_BYTES
+    return {"sub": sub, "path": path, "diff": diff[:worktree.MAX_DIFF_BYTES], "truncated": truncated}
+
+
 def worktree_diff(ref: str, sub: str, path: str) -> dict:
     entry = Tree().get(ref)
     if not entry.node.git:
@@ -214,6 +421,9 @@ def result_get(ref: str) -> dict:
     out = context.runset_summary(entry, rs, taskstore.load_all())
     out["bin"] = rs.bin
     out["provenance"] = rs.provenance
+    out["recipes"] = rs.recipes
+    out["overrides"] = rs.overrides
+    out["params"] = params_mod.stage_params(rs.recipes, rs.bin)
     pdir = entry.dir / rs.name / "post"
     reports = {}
     if pdir.is_dir():
@@ -226,11 +436,29 @@ def result_get(ref: str) -> dict:
     return out
 
 
-def runsets(ref: str) -> list[dict]:
+def runsets(ref: str, *, include_archived: bool = False) -> list[dict]:
     tree = Tree()
     entry = tree.get(ref)
     tasks = taskstore.load_all()
-    return [context.runset_summary(entry, rs, tasks) for rs in tree.runsets(entry)]
+    return [context.runset_summary(entry, rs, tasks) for rs in tree.runsets(entry)
+            if include_archived or not rs.archived]
+
+
+def runset_archive(ref: str, *, archived: bool = True, note: str = "") -> dict:
+    """Hide (or show again) a runset: its data and binary stay, gc is unchanged. Refused while
+    any of its tasks is still active."""
+    tree = Tree()
+    entry, rs = tree.find_runset(ref)
+    tasks = taskstore.load_all()
+    active = [t for t in rs.tasks if t in tasks and tasks[t].state in ACTIVE_TASK_STATES]
+    if archived and active:
+        raise TreeError(f"runset {entry.rel}/{rs.name} has active task(s): "
+                        f"{', '.join(active)}; cancel them or wait")
+    rs.archived = bool(archived)
+    rs.archived_at = store.now_iso() if archived else ""
+    rs.archive_note = note if archived else ""
+    tree.save_runset(entry, rs)
+    return context.runset_summary(entry, rs, tasks)
 
 
 # ------------------------------------------------------------- checkpoints

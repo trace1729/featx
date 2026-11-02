@@ -105,7 +105,8 @@ def default_order(metric: str) -> str:
 
 
 def build(*, metric: str | None = None, order: str | None = None, cls: str | None = None,
-          node: str | None = None, best_per_node: bool = False, include_incomplete: bool = False) -> dict:
+          node: str | None = None, best_per_node: bool = False, include_incomplete: bool = False,
+          include_archived: bool = False) -> dict:
     tree = Tree()
     tasks = taskstore.load_all()
     candidates = []          # (entry, rs, rec)
@@ -114,6 +115,8 @@ def build(*, metric: str | None = None, order: str | None = None, cls: str | Non
         if node and not (entry.rel == node or entry.rel.startswith(node.rstrip("/") + "/")):
             continue
         for rs in tree.runsets(entry):
+            if rs.archived and not include_archived:
+                continue
             rec = _runset_record(entry, rs)
             candidates.append((entry, rs, rec))
             for step, summary in rec["posts"].items():
