@@ -11,17 +11,21 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
   helper `scripts/`, and its runsets.
 - **Runset**: one experiment of a node, `<node>/<YYYYMMDD-n>/`. Every `featx submit` creates a new
   one, unless you pass `--runset` to reuse an unsealed runset. It contains:
-  - `experiment.yaml`: provenance (commit, diff hash, submodules), the resolved recipes, `bin`;
+  - `experiment.yaml`: provenance (commit, diff hash, submodules), the resolved recipes, `bin`,
+    the raw submit `overrides` and the `archived` flag;
   - `bin/emu`: the binary the run used (build output, or the `--bin` binary);
   - `build/`, `run/<point>/` (one dir per point: `simulator_out.txt`, `simulator_err.txt`, `env.txt`),
     `post/<step>/` (each step's `summary.json` and reports);
   - `scripts/`: the snapshot of the inherited helper scripts;
   - `problem-analysis.log`: the analysis entries (`featx log append`).
   A runset is sealed once all its tasks succeed. A rerun after a fix is a new derived runset
-  (`featx task resubmit`).
+  (`featx task resubmit`). A runset can be archived (hidden from the lists, data kept) and its
+  build can carry a git snapshot of the source it compiled — see the `runsets` topic.
 - **Task**: one kind (build, run or post) of a runset, made of jobs. A build is one job, a run
   has one job per point, a post has one job per step. The tasks of a submit are chained:
-  build → run → post.
+  build → run → post. A queued task whose dependency failed is cancelled (note
+  `dependency <kind> <id12> failed`, `cancelled_by` names the upstream) and revived when that
+  upstream task is relaunched.
 - **Node fields** (`featx node update`, MCP `node_update`, the UI header): `hypothesis`,
   `verdict` (open|supported|refuted|inconclusive), `verdict_note`, `status`
   (active|parked|done|abandoned), `evidence` (a list: `--evidence` adds, `--rm-evidence` removes;
@@ -32,6 +36,54 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
   submodule worktrees, `GET /worktrees/diff?ref=NODE&sub=&path=` one file's diff.
 - **Ref forms**: a node is its path (`wpe/overlay/smoke`) or its id. A runset is
   `<node path>/<YYYYMMDD-n>` or a runset id prefix (≥ 6 characters).
+
+## runsets — Parameters, archive and code snapshots
+
+**Parameters.** Each runset keeps the resolved recipe snapshots it submitted (`Runset.recipes`)
+and the raw `--set` overrides (`Runset.overrides`). `featx result REF` prints them as a
+build/run/post parameter block and `GET /result` returns `params`, `recipes` and `overrides`;
+`GET /nodes/context` also returns `params_differing`, the recipe keys on which the node's
+runsets disagree (runset directories, `${scripts}` paths and timestamps are ignored). The Runset
+page shows them as a card with the overridden keys marked, and the Node page uses the differing
+keys as its params column.
+
+**Archive.** Archived runsets are hidden by default from the node runsets list,
+`node_context`, `tree_list`'s latest runset and the leaderboard. Data and binaries are kept and
+`featx gc` does not change. It is refused while the runset has active tasks.
+
+```bash
+featx runset archive wpe/overlay/20261012-1 -m "duplicate of 20261012-2"
+featx runset archive wpe/overlay/20261012-1 --undo
+featx node runsets wpe/overlay --all          # include archived ones
+```
+
+REST: `POST /runsets/archive {ref, archived, note}`; MCP: `runset_archive`. `include_archived`
+shows them again in `GET /runsets`, `GET /nodes/context` and `GET /leaderboard`
+(`node_context.archived_count` is always reported).
+
+**Code snapshots.** A build snapshots its source when it is materialized: HEAD plus the tracked
+and untracked (not ignored) changes of the superproject and every submodule, as a commit under
+`refs/featx/runsets/<runset id>` (built with a temporary index, so your index and worktree are
+untouched; files over 8 MiB and beyond 2000 untracked files are skipped). A normal
+`git push` does not push these refs; `git push --mirror` would. `featx node rm --drop-worktrees`
+deletes them. `provenance.snapshot` in `experiment.yaml` records the commits, and
+`provenance.drift` says when it no longer matches the binary:
+
+- `after submit`: the tree moved before the build launched, so it was re-snapshotted and re-keyed;
+- `during build`: the tree moved while compiling, so the binary is *not* stored in the bincache
+  (it would sit under a key that describes other sources); the runset still uses it.
+
+```bash
+curl -H "X-Featx-Token: $TOKEN" "$URL/runsets/code?ref=wpe/overlay/20261012-1&against=base"
+```
+
+`GET /runsets/code?ref=R&against=base|prev|worktree|<runset ref>` returns the same shape as
+`/worktrees/changes` (`repos.*.files/commits/untracked`) plus `snapshot`, `drift`,
+`source_runset` and `total`; `GET /runsets/code/diff?ref&against&sub&path` returns one file's
+diff. `prev` is the closest earlier runset of the node with a snapshot. A runset built without a
+build (`--bin`) points at the runset whose bincache entry built that binary; an imported
+`ext-` binary has no code view. Older runsets show their recorded HEAD and `src-patches/*.patch`.
+MCP: `runset_code`.
 
 ## launch — Launching a run directly
 
@@ -316,7 +368,8 @@ watches the complete dependency chain: waiting for post alone also wakes when an
 upstream build fails or is cancelled.
 
 Results contain `finished` (terminal task views), `blocked` (queued tasks with
-failed/cancelled dependencies, with their IDs in `failed_dependencies`), `pending`
+failed/cancelled dependencies, and tasks auto-cancelled because a dependency failed —
+`cancelled_by` set — with the upstream IDs in `failed_dependencies`), `pending`
 (IDs still active at timeout), and `timed_out`. Blocked task views retain their
 actual scheduler state. Wait never changes tasks or acknowledges inbox events.
 A repaired pipeline can be waited on again after relaunch.
@@ -466,6 +519,24 @@ Outputs (in `${out}` = `<runset>/post/<step>/`):
 - `summary.json`: spec_per_ghz, specint_per_ghz, specfp_per_ghz, spec_at_freq, min_coverage, spec_per_ghz_available, groups_scored, missing_groups, finished, points, common_points, score.<group>, <label>.spec_per_ghz, <label>.score_err_pct
 <!-- plugins:end -->
 
+## reap — Orphan featx-exec processes
+
+A launch that was reported failed (an ssh timeout) or never started can still start later, and a
+kill sent to an unreachable host can be lost. featx watches those launches (`liveness.orphan_watch`,
+900 s), persists pending kills and watches to `$FEATX_ROOT/sched-pending.json`, retries kills to an
+unreachable host every tick for `liveness.kill_retry_hours` (24 h), and kills a late start when it
+writes its pid.
+
+```bash
+featx reap            # dry run: one ssh per host, lists this root's featx-exec processes
+featx reap --apply    # kill the confirmed orphans (the whole session, emu included)
+```
+
+A process is an orphan when its job is not active (finished, cancelled, unknown) or its attempt is
+stale. The daemon runs the same scan at start and every `liveness.reap_interval` (600 s), kills
+only confirmed orphans and emits one `orphan` event per kill. REST: `POST /reap {apply}`; MCP:
+`reap`.
+
 ## worktrees — Worktrees and branches
 
 - `featx worktree create NODE` creates `<wt_root>/<node path>` on branch `<node path>`. The
@@ -478,8 +549,9 @@ Outputs (in `${out}` = `<runset>/post/<step>/`):
   keeps the old branch name and reports it.
 - `featx worktree rename-branch NODE [--to NAME] [--dry-run]` renames a featx-created branch
   and its submodule branches, e.g. an old `featx/<path>` to `<path>`.
-- `featx node rm NODE -f --drop-worktrees` deletes worktrees and featx branches without their
-  own commits. Branches with commits are kept unless you also pass `--drop-branches`.
+- `featx node rm NODE -f --drop-worktrees` deletes worktrees, the node's
+  `refs/featx/runsets/*` code snapshots and featx branches without their own commits. Branches
+  with commits are kept unless you also pass `--drop-branches`.
 
 A build needs the node's **own** worktree (`${worktree}`). A run with `--bin` doesn't.
 

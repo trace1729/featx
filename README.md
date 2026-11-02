@@ -142,6 +142,11 @@ featx ui
 
 按照输出建立 SSH tunnel，然后在浏览器打开 `/ui/`。Web UI 可以查看树、任务、runset、实时日志、后处理报告和容量配置。
 
+- 节点页：runsets 表新增参数列（各 runset 之间不同的关键参数）和代码列（构建快照 id、相对基线的文件数与 +/−）；勾选两个 runset 可对比代码；可用“显示已归档”切换隐藏的 runset。
+- runset 页：参数卡片（build/run/post 三列，标出 `--set` 覆盖项，可展开完整 recipe）；代码页签（对比节点基线 / 上一个 runset / 当前 worktree / 另一个 runset，显示快照、漂移和“代码来自 runset”）；job 状态筛选；归档 / 取消归档按钮。
+- 任务页：按状态筛选（queued、running、blocked、succeeded、failed、cancelled）；被依赖失败自动取消的任务计入 blocked。
+- 未跟踪文件折叠为目录树（默认收起，显示“N 个文件在 K 个目录”）。
+
 
 
 ## 附录
@@ -220,6 +225,13 @@ featx log append frontend/bpu/cursor/<runset> \
 featx node set frontend/bpu/cursor \
   --verdict supported --evidence <runset>
 ```
+
+### runset 归档、代码快照与孤儿进程
+
+- 归档：`featx runset archive <runset> [-m 说明]`、`featx runset archive <runset> --undo`；有活动任务时拒绝。归档的 runset 默认从节点 runset 列表、`node_context`、`tree_list` 的最新 runset 和排行榜隐藏，数据和二进制保留，`gc` 不变。
+- 代码快照：每次 build 在 materialize 时把源码（HEAD + 已跟踪 / 未跟踪改动，含子模块）记录为 `refs/featx/runsets/<runset id>`，使用临时 index，不碰工作区和 index；普通 `git push` 不会推送这些 ref（`--mirror` 会），`featx node rm --drop-worktrees` 会删除。启动前源码已变则重新快照并重算 bincache key（`drift: after submit`）；编译期间又变则 `drift: during build`，且不写入 bincache。
+- 依赖失败：依赖失败的任务自动取消（note `dependency <kind> <id12> failed`，`cancelled_by` 记录上游），上游 relaunch 时恢复；`featx wait` 仍把它们报为 blocked。
+- 孤儿进程：`featx reap [--apply]` 扫描各主机上属于本数据根的 featx-exec 进程，默认只列出，`--apply` 杀掉确认的孤儿；daemon 启动时和每 `liveness.reap_interval`（600s）扫描一次。待执行的 kill 和孤儿监视持久化在 `$FEATX_ROOT/sched-pending.json`，主机不可达时每 tick 重试，最长 `liveness.kill_retry_hours`（24h）。
 
 ### 默认配置
 

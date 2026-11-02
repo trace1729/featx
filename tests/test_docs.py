@@ -10,8 +10,8 @@ from featx import baselines, cli, docs, provenance, service, store
 from featx.sched import daemon
 from featx.tree import Tree, TreeError
 
-TOPICS = ("concepts", "launch", "recipes", "build", "run", "points", "workloads", "post",
-          "variables", "references", "wait", "plugins", "worktrees", "baselines", "checkpoints")
+TOPICS = ("concepts", "runsets", "launch", "recipes", "build", "run", "points", "workloads", "post",
+          "variables", "references", "wait", "plugins", "reap", "worktrees", "baselines", "checkpoints")
 
 
 def test_reference_plugin_section_is_current():

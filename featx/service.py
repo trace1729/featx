@@ -221,6 +221,13 @@ def _code_source(tree: Tree, entry, rs):
     return (e2, rs2, snap2) if snap2 else None
 
 
+def _has_legacy_code(entry, rs) -> bool:
+    """A runset from before snapshots: it recorded a HEAD at submit and/or saved src-patches."""
+    prov = rs.provenance or {}
+    return bool((prov.get("super") or {}).get("head") or prov.get("head")
+                or (entry.dir / rs.name / "src-patches").is_dir())
+
+
 def _prev_snapshot(tree: Tree, entry, rs):
     earlier = [r for r in tree.runsets(entry) if r.name < rs.name and _snapshot_of(r)]
     return earlier[-1] if earlier else None
@@ -293,9 +300,20 @@ def runset_code(ref: str, against: str = "base") -> dict:
         return _no_code(entry, rs, "imported binary: its source is not recorded")
     source = _code_source(tree, entry, rs)
     if source is None:
-        if bin.get("key"):
-            return _no_code(entry, rs, f"the runset that built {bin['key']} has no snapshot "
-                                       "(built before snapshots were recorded)")
+        # the binary may come from a legacy (pre-snapshot) runset: show *its* recorded code
+        ref2 = _bin_code_source(rs)
+        if ref2:
+            try:
+                e2, rs2 = tree.find_runset(ref2)
+            except TreeError:
+                e2 = rs2 = None
+            if e2 is not None and _has_legacy_code(e2, rs2):
+                out = _legacy_code(e2, rs2)
+                out["ref"] = f"{entry.rel}/{rs.name}"
+                out["source_runset"] = f"{e2.rel}/{rs2.name}"
+                return out
+        if not _has_legacy_code(entry, rs):
+            return _no_code(entry, rs, "no build snapshot and no legacy source recorded")
         return _legacy_code(entry, rs)
     entry_s, rs_s, snap = source
     git = entry_s.node.git

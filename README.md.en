@@ -217,13 +217,24 @@ Pages:
   (own-layer editor and explain view), scripts, notes (Markdown, editable), runsets, submit form.
   A "code changed" badge appears when the node worktree differs from its base; the worktree tab
   lists the commits ahead, the changed/untracked files per repo (main + submodule worktrees) and
-  each file's diff against the merge-base.
+  each file's diff against the merge-base. The runsets table has a parameters column (the keys the
+  runsets differ on), a code column (snapshot id, files and +/− vs base), checkbox selection of two
+  runsets with **compare** (opens the newer one's code tab against the older), and a
+  "show archived (N)" toggle. Untracked files are folded: "untracked: N files in K dirs", then a
+  directory tree with counts (single-child chains collapsed).
 - **Submit form**: kinds, binary, points, quick presets (build tool/mode/options, workload,
   coverage, `spec-score` post step), priority, overrides. The choices are remembered per node in
   the browser (kinds, presets and priority also seed other nodes); "reset form" clears them.
 - **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
-  problem log, cancel/relaunch/resubmit/unblock.
-- **Tasks**: priority column with ▲/▼, Capacity panel (run/build cores in use vs cap, editable).
+  problem log, cancel/relaunch/resubmit/unblock. A **parameters** card shows the build/run/post
+  headline values from the recipe snapshots, marks the `--set` overrides and can show the full
+  recipe YAML. A **code** tab shows the build snapshot against the node base, the previous
+  snapshot, the worktree now or another runset, with the snapshot ids, a drift warning, a
+  "code from runset X" link and the legacy HEAD + `src-patches` view. Job state filter chips keep
+  their selection in `?jobs=`. Archive/unarchive hides the runset (see below).
+- **Tasks**: state filter chips with counts (queued, running, blocked, succeeded, failed,
+  cancelled; `blocked` includes tasks cancelled by a dependency failure — remembered as
+  `tasks:states`), priority column with ▲/▼, Capacity panel (run/build cores in use vs cap, editable).
 - **Events** (filter + ack), **Storage** (usage, gc dry run, then apply), **Settings**
   (`featx.yaml` editor, baselines, bin import), **Docs** (`docs/reference.md` by topic).
 - In the left tree, drag a node onto another to move it. The dry-run plan is shown before you confirm.
@@ -261,6 +272,54 @@ Every failed job is classified by `featx/defaults/classify.yaml` (`$FEATX_ROOT/c
   - `task relaunch` is refused until `problem-analysis.log` has an entry newer than the failure.
   - Relaunches are limited by `retry.max_design_relaunches`. After that, a human must run
     `featx task unblock`.
+
+### Dependency failures and orphan cleanup
+
+A queued task whose dependency failed becomes `cancelled` with the note
+`dependency <kind> <id12> failed` (`Task.cancelled_by` names the upstream) instead of sitting in
+the queue forever and pinning binaries against gc. The cascade is transitive on its own. A
+`featx task relaunch` of the upstream task revives the dependents it had auto-cancelled (never
+ones a human cancelled), and `featx wait` keeps reporting them under `blocked`, with the upstream
+ids in `failed_dependencies`.
+
+`featx reap [--apply]` scans every host over one ssh for this data root's `featx-exec
+<job dir> <attempt>` processes whose job is no longer active or whose attempt is stale. It is a
+dry run unless `--apply`. The daemon runs the same scan at start and every
+`liveness.reap_interval` (600 s), kills only confirmed orphans and emits one `orphan` event per
+kill. Pending kills and orphan watches are persisted to `$FEATX_ROOT/sched-pending.json`, retried
+every tick while the host is unreachable (for `liveness.kill_retry_hours`, 24 h) and survive a
+daemon restart. A launch reported failed (ssh timeout) or never started is watched for
+`liveness.orphan_watch` (900 s) and killed if it starts late. Jobs of a design-blocked task are
+polled but no longer launched.
+
+REST: `POST /reap {apply}`; MCP: `reap`.
+
+### Code snapshots
+
+Each build records the source it compiled: HEAD plus the tracked and untracked (not ignored)
+changes of the superproject and every submodule, as a commit under
+`refs/featx/runsets/<runset id>`. It is built with a temporary index, so your index and worktree
+are untouched (untracked files over 8 MiB and beyond 2000 are listed as skipped). A normal `git
+push` does not push these refs (`git push --mirror` would); `featx node rm --drop-worktrees`
+deletes them. `provenance.snapshot` in `experiment.yaml` records the commits;
+`provenance.drift` says when the snapshot no longer matches:
+
+- `after submit`: the tree changed before the build launched — it is re-snapshotted and re-keyed;
+- `during build`: the tree changed while compiling — the binary is **not** stored in the bincache
+  (it would sit under a key that describes other sources); the runset still uses it.
+
+The code tab and `GET /runsets/code?ref=R&against=base|prev|worktree|<runset ref>` show it
+(`/runsets/code/diff?ref&against&sub&path` for one file). A runset built with `--bin` shows the
+code of the runset that built the binary; an imported `ext-` binary has no code view; runsets
+from before snapshots show their recorded HEAD and `src-patches/*.patch`.
+
+### Archive
+
+`featx runset archive REF [-m NOTE] [--undo]`, `POST /runsets/archive`, MCP `runset_archive`.
+Archived runsets are hidden by default from the node runsets list, `node_context`,
+`tree_list`'s latest runset and the leaderboard (`include_archived` shows them again); the data
+and binary are kept and `featx gc` is unchanged. Archiving is refused while the runset has active
+tasks.
 
 ## Post-processing plugins
 
@@ -306,8 +365,9 @@ hits the cache. Built-in plugin helpers are `${plugin.scripts}`.
 | Tree | `tree_list`, `node_context`, `node_create`, `node_update`, `node_move` |
 | Recipes & scripts | `recipe_get`, `recipe_set`, `plugins_list`, `docs`, `script_write`, `script_read`, `worktree_create` |
 | Tasks | `task_submit`, `task_status`, `task_log`, `task_relaunch`, `task_resubmit`, `task_cancel`, `task_priority` |
+| Orphans | `reap` |
 | Events | `events_wait` (blocking ≤ 30 min), `events_ack` |
-| Results | `problem_log_append`, `result_get`, `runsets_list`, `baselines`, `storage_report`, `hosts` |
+| Results | `problem_log_append`, `result_get`, `runsets_list`, `runset_archive`, `runset_code`, `baselines`, `storage_report`, `hosts` |
 
 Expected errors (unknown node, refused relaunch, daemon down) come back to the model as tool
 errors with their message.
@@ -320,9 +380,10 @@ errors with their message.
 touches anything referenced by an `experiment.yaml` or an active task. Pass `--apply` to delete.
 
 `featx node rm <node> -f` moves the subtree into `tree/.trash`. Add `--drop-worktrees` to also
-delete its worktrees (uncommitted diffs saved under `.trash/worktree-patches`), the featx branches
-that carry no commits beyond their base, old forwarding symlinks and empty dirs. Branches with their
-own commits are kept and reported unless you also pass `--drop-branches`.
+delete its worktrees (uncommitted diffs saved under `.trash/worktree-patches`), its
+`refs/featx/runsets/*` code snapshots, the featx branches that carry no commits beyond their base,
+old forwarding symlinks and empty dirs. Branches with their own commits are kept and reported
+unless you also pass `--drop-branches`.
 
 ## Tests
 
