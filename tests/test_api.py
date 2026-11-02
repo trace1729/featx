@@ -84,6 +84,8 @@ def test_perf_keys_script(tmp_path):
     s = json.loads((out / "summary.json").read_text())
     assert s["common_points"] == 1
     assert abs(s["new.mean_err_pct"] - 10.0) < 1e-6
+    assert abs(s["new.rms_err_pct"] - 10.0) < 1e-6 and abs(s["new.ipc_mae"] - 0.05) < 1e-9
+    assert abs(s["new.ipc_rmse"] - 0.05) < 1e-9
     assert abs(s["ref.ipc_geomean"] - 0.5) < 1e-9
     assert "missing" in (out / "report.md").read_text()
 

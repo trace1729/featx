@@ -119,3 +119,35 @@ def test_spec_score_assertion_and_missing_insts(tmp_path):
     p = run("spec_score.py", "--runs", f"self={tmp_path / 'r'}", "--points", pts,
             "--insts", tmp_path / "insts.json", "-o", tmp_path / "out")
     assert p.returncode != 0 and "no insts for gcc" in p.stderr
+
+
+def test_collect_allows_missing_train_counters(tmp_path):
+    import runpy
+
+    collector = runpy.run_path(str(SCRIPTS / "analysis" / "collect_gsim_spec_perf.py"))
+    root = tmp_path / "run"
+    point_dir = root / "astar_biglakes_1_0.500000"
+    point(point_dir, 2000, 1000)
+    names = [name for name in collector["REQUIRED_COUNTERS"]
+             if name not in ("clock_cycle", "commitInstr")]
+    names += collector["TOPDOWN_DIRECT"]
+    names += [alias for aliases in collector["TOPDOWN_ALIASES"].values() for alias in aliases]
+    with open(point_dir / "simulator_err.txt", "a") as handle:
+        for timestamp in (100, 200):
+            for name in names:
+                handle.write(f"[PERF ][time=   {timestamp}] topDown: {name},      1\n")
+    config = tmp_path / "points.json"
+    config.write_text(json.dumps({"astar_biglakes": {"insts": "1000", "points": {"1": "0.5"}}}))
+    out = tmp_path / "out"
+    p = run("analysis/collect_gsim_spec_perf.py", "-r", root, "--config", config,
+            "--suite", "spec06", "-N", "2", "-o", out)
+    assert p.returncode == 0, p.stderr
+    row = next(csv.DictReader(open(out / "points.csv")))
+    assert row["status"] == "limit_reached"
+    assert row["ipc"] == "0.5"
+    assert row["topdown_valid"] == "1"
+    assert row["wpt_fraction"] == ""
+    assert row["train_lifecycle_balance"] == ""
+    summary = json.loads((out / "suite.json").read_text())
+    assert summary["completed_points"] == 1
+    assert summary["completed_point_total_clock_cycle"] == 2000

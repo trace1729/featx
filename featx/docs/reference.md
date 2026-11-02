@@ -428,7 +428,7 @@ Outputs (in `${out}` = `<runset>/post/<step>/`):
 
 ### perf-keys
 
-Formal-window (2nd PERF block) key counters per point for this runset and any number of references (baselines / other runsets), IPC error vs the first reference (generalizes the 1007/1009 summarize.py + compare-panel.py). Writes points.csv, report.md, summary.json (per run: n, mean|err|, mean err, IPC geomean).
+Formal-window (2nd PERF block) key counters per point for this runset and any number of references (baselines / other runsets), IPC error vs the first reference (generalizes the 1007/1009 summarize.py + compare-panel.py). Writes points.csv, report.md, summary.json (per run: n, mean|err|, mean err, rms err, IPC MAE/RMSE, IPC geomean).
 
 | param | default | meaning |
 |---|---|---|
@@ -442,7 +442,7 @@ Outputs (in `${out}` = `<runset>/post/<step>/`):
 
 - `points.csv`: per point and run, the key counters
 - `report.md`: per-run error table
-- `summary.json`: reference, block, points, common_points, <label>.finished, <label>.ipc_geomean, <label>.mean_abs_err_pct, <label>.mean_err_pct, <label>.max_abs_err_pct
+- `summary.json`: reference, block, points, common_points, <label>.finished, <label>.ipc_geomean, <label>.mean_abs_err_pct, <label>.mean_err_pct, <label>.max_abs_err_pct, <label>.rms_err_pct, <label>.ipc_mae, <label>.ipc_rmse (absolute IPC difference vs the reference)
 
 ### spec-score
 

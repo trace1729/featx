@@ -30,6 +30,11 @@ CORE_COUNTERS = (
     "bpu_train_unclassified_reuse",
 )
 
+# Current RTL configurations may omit the training counters. Keep their derived
+# fields empty without discarding IPC, branch, and TopDown measurements.
+TRAIN_COUNTERS = CORE_COUNTERS[5:]
+REQUIRED_COUNTERS = CORE_COUNTERS[:5]
+
 BRANCH_TYPES = (
     "conditional",
     "direct",
@@ -301,14 +306,18 @@ def collect_point(suite, root, benchmark, point, weight_text, mode, include_inco
         row["perf_block"] = block_index
         for name in CORE_COUNTERS:
             row[name] = counter(block, name)
-        missing_core = [name for name in CORE_COUNTERS if row[name] is None]
-        if missing_core:
-            row["status"] = "missing_counters:" + ";".join(missing_core)
+        missing_required = [name for name in REQUIRED_COUNTERS if row[name] is None]
+        if missing_required:
+            row["status"] = "missing_counters:" + ";".join(missing_required)
             return row
 
         cycles = row["clock_cycle"]
         instructions = row["commitInstr"]
-        train_total = row["bpu_train_wpt"] + row["bpu_train_rpt"]
+        train_total = (
+            row["bpu_train_wpt"] + row["bpu_train_rpt"]
+            if row["bpu_train_wpt"] is not None and row["bpu_train_rpt"] is not None
+            else None
+        )
         row["ipc"] = ratio(instructions, cycles)
         # TraceRTL suppresses wrong-path execution, so resolve/redirect counts
         # are not directly comparable with execution-driven runs.  Use the
@@ -322,17 +331,27 @@ def collect_point(suite, root, benchmark, point, weight_text, mode, include_inco
         )
         row["wpt_fraction"] = ratio(row["bpu_train_wpt"], train_total)
         row["rpt_fraction"] = ratio(row["bpu_train_rpt"], train_total)
-        row["wpt_mpki"] = ratio(row["bpu_train_wpt"] * 1000, instructions)
-        row["rpt_mpki"] = ratio(row["bpu_train_rpt"] * 1000, instructions)
-        row["train_branches_per_ki"] = ratio(row["bpu_train_branches"] * 1000, instructions)
-        row["train_lifecycle_balance"] = (
-            row["bpu_train_branches"]
-            - row["bpu_train_rpt"]
-            - row["bpu_train_wpt"]
-            - row["bpu_train_pending"]
-            - row["bpu_train_duplicate_positions"]
-            - row["bpu_train_unclassified_reuse"]
+        row["wpt_mpki"] = (
+            ratio(row["bpu_train_wpt"] * 1000, instructions)
+            if row["bpu_train_wpt"] is not None else None
         )
+        row["rpt_mpki"] = (
+            ratio(row["bpu_train_rpt"] * 1000, instructions)
+            if row["bpu_train_rpt"] is not None else None
+        )
+        row["train_branches_per_ki"] = (
+            ratio(row["bpu_train_branches"] * 1000, instructions)
+            if row["bpu_train_branches"] is not None else None
+        )
+        if all(row[name] is not None for name in TRAIN_COUNTERS):
+            row["train_lifecycle_balance"] = (
+                row["bpu_train_branches"]
+                - row["bpu_train_rpt"]
+                - row["bpu_train_wpt"]
+                - row["bpu_train_pending"]
+                - row["bpu_train_duplicate_positions"]
+                - row["bpu_train_unclassified_reuse"]
+            )
         for branch_type in BRANCH_TYPES:
             total_name = f"commit_branch_type_{branch_type}"
             mispred_name = f"commit_branch_mispredicts_type_{branch_type}"
@@ -455,10 +474,16 @@ def main():
         "clock_cycle", "commitInstr", "commit_branch_mispredicts", "resolve_branch_mispredicts", "bpu_train_packets",
         "bpu_train_branches", "bpu_train_mispredict_branches", "bpu_train_rpt", "bpu_train_wpt",
     ):
-        suite_summary[f"completed_point_total_{name}"] = sum(row[name] for row in completed_points)
+        values = [row[name] for row in completed_points if row[name] is not None]
+        suite_summary[f"completed_point_total_{name}"] = (
+            sum(values) if values or not completed_points else None
+        )
+    rpt_total = suite_summary["completed_point_total_bpu_train_rpt"]
+    wpt_total = suite_summary["completed_point_total_bpu_train_wpt"]
     classified_total = (
-        suite_summary["completed_point_total_bpu_train_rpt"]
-        + suite_summary["completed_point_total_bpu_train_wpt"]
+        rpt_total + wpt_total
+        if rpt_total is not None and wpt_total is not None
+        else None
     )
     suite_summary["completed_point_wpt_fraction"] = ratio(
         suite_summary["completed_point_total_bpu_train_wpt"], classified_total

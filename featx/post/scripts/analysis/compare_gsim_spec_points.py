@@ -130,11 +130,15 @@ def load_topdown_definitions(path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    counter_names = tuple(name for name in module.targets if name != "total_cycles")
     view_maps = {
         view: getattr(module, attribute)
         for view, attribute in TOPDOWN_VIEW_MAPS.items()
     }
+    used_names = set().union(*(set(mapping) for mapping in view_maps.values()))
+    used_names.update(("NoStall", "FlushedInsts", "commitInstr"))
+    counter_names = tuple(
+        name for name in module.targets if name != "total_cycles" and name in used_names
+    )
     return counter_names, view_maps
 
 

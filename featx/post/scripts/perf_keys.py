@@ -108,6 +108,11 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def rms(xs):
+    m = mean([x * x for x in xs if x is not None])
+    return None if m is None else math.sqrt(m)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", nargs="+", required=True, help="label=root ...")
@@ -173,6 +178,11 @@ def main():
             summary[f"{label}.mean_abs_err_pct"] = mean([abs(errs[label][p]) for p in common])
             summary[f"{label}.mean_err_pct"] = mean([errs[label][p] for p in common])
             summary[f"{label}.max_abs_err_pct"] = max((abs(errs[label][p]) for p in common), default=None)
+            summary[f"{label}.rms_err_pct"] = rms([errs[label][p] for p in common])
+            ref = ipcs.get(labels[0], {})
+            diffs = [got[p] - ref[p] for p in common if p in got and p in ref]
+            summary[f"{label}.ipc_mae"] = mean([abs(d) for d in diffs])
+            summary[f"{label}.ipc_rmse"] = rms(diffs)
     with open(os.path.join(args.out, "summary.json"), "w") as handle:
         json.dump(summary, handle, indent=2)
 
@@ -188,7 +198,9 @@ def main():
     md += ["", f"Common points (every run finished): {len(common)}", ""]
     for label in others if common else []:
         md.append(f"- {label}: mean|err| {summary.get(f'{label}.mean_abs_err_pct') or 0:.2f}%  "
-                  f"mean err {summary.get(f'{label}.mean_err_pct') or 0:+.2f}%")
+                  f"rms err {summary.get(f'{label}.rms_err_pct') or 0:.2f}%  "
+                  f"mean err {summary.get(f'{label}.mean_err_pct') or 0:+.2f}%  "
+                  f"IPC MAE {summary.get(f'{label}.ipc_mae') or 0:.4f}  IPC RMSE {summary.get(f'{label}.ipc_rmse') or 0:.4f}")
     if others and not common:
         md.append("- no point finished in every run: no error statistics")
     with open(os.path.join(args.out, "report.md"), "w") as handle:
