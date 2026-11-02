@@ -49,6 +49,12 @@ const FIXTURES: Record<string, unknown> = {
   "/tasks/T1/log": { path: "/r/log", exists: true, tail: "done" },
 };
 
+// jsdom has no layout: CodeMirror (the YAML viewer) measures text ranges once it is mounted
+if (!Range.prototype.getClientRects) {
+  Range.prototype.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+}
+
 // per-test replacements of FIXTURES entries
 let extra: Record<string, unknown> = {};
 
@@ -336,14 +342,27 @@ describe("App", () => {
       params: { build: { tool: "gsim", mode: "trace" }, run: { W: 1000000, I: 2000000, points: 1090 }, post: { "pk.plugin": "perf-keys" } },
       overrides: { run: { W: 1000000 } },
       recipes: { build: { tool: "gsim" }, run: { W: 1000000 }, post: { steps: {} } },
+      tasks: [
+        { id: "TB", kind: "build", name: "build", state: "succeeded", counts: { succeeded: 1 }, failure: null },
+        { id: "T1", kind: "run", name: "run", state: "succeeded", counts: { succeeded: 1090 }, failure: null },
+      ],
     };
+    extra["/tasks/TB"] = { ...(FIXTURES["/tasks/T1"] as Record<string, unknown>), id: "TB", kind: "build", jobs: [] };
     renderAt("/runset/wpe/overlay/20261013-1");
+    // the run stage is selected: only its parameters are shown, under the stage card
     expect(await screen.findByText("1,000,000")).toBeTruthy();
+    expect(screen.getByTestId("stage-params").textContent).toContain("run parameters");
+    expect(screen.queryByText("gsim")).toBeNull();
     expect(screen.getByText("overrides: 1")).toBeTruthy();
     const overrideBadge = [...document.querySelectorAll(".badge")].find((b) => b.textContent === "set");
     expect(overrideBadge).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "full recipe (YAML)" }));
-    expect(await screen.findByRole("button", { name: "hide full recipe" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "hide full recipe" }));
+    // the build chip switches the card to the build parameters
+    fireEvent.click(screen.getByRole("button", { name: /^build/ }));
+    expect(await screen.findByText("gsim")).toBeTruthy();
+    expect(screen.getByTestId("stage-params").textContent).toContain("build parameters");
+    expect(screen.queryByText("1,000,000")).toBeNull();
   });
 
   it("shows the runset code tab and can compare against the worktree", async () => {
@@ -366,6 +385,49 @@ describe("App", () => {
       const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
       expect(urls.some((u) => u.startsWith("/runsets/code?") && u.includes("against=worktree"))).toBe(true);
     });
+  });
+
+  it("diffs a legacy runset by its recorded commits and lists them per repo", async () => {
+    setToken("t0k");
+    extra["/runsets"] = [];
+    extra["/runsets/code"] = {
+      ref: "wpe/overlay/20261013-1", against: "base", legacy: true, no_code: false, drift: null, snapshot: null,
+      source_runset: "wpe/overlay/20261012-2", compared_runset: null, head: "7a1cd62e2bbd",
+      provenance: { super: { head: "7a1cd62e2bbddc80", branch: "wpe", dirty: false },
+        submodules: { difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: true, diff_lines: 4 } } },
+      patches: {},
+      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
+        commits: [{ sha: "7a1cd62", author: "me", when: "1 day ago", subject: "squash the migration" }],
+        files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] },
+        difftest: { path: "/wt/wpe/difftest", base: "", exists: true, ahead: 0, behind: 0, commits: [], files: [], untracked: [] } },
+      total: { files: 1, added: 3, deleted: 1, ahead: 1 },
+    };
+    renderAt("/runset/wpe/overlay/20261013-1?tab=code");
+    expect(await screen.findByText("squash the migration")).toBeTruthy();
+    // an unchanged submodule is one entry of the "unchanged" line, not a card of its own
+    expect(screen.getByTestId("unchanged-repos").textContent).toContain("difftest");
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).not.toContain("difftest ");
+    expect(screen.getByTestId("legacy-note")).toBeTruthy();
+    expect(screen.getByLabelText("against")).toBeTruthy();
+    expect(screen.getByText(/code from runset/)).toBeTruthy();
+    const repos = screen.getByTestId("legacy-repos");
+    expect(repos.textContent).toContain("7a1cd62e2bbd");
+    expect(repos.textContent).toContain("4 diff lines");
+  });
+
+  it("shows only the latest task per stage in the node runsets table", async () => {
+    setToken("t0k");
+    const task = (id: string, kind: string, state: string) => ({ id, kind, name: kind, state, priority: 0, counts: {}, failure: null });
+    const summary = {
+      ...(FIXTURES["/result"] as object), ref: "wpe/20261030-1", name: "20261030-1", derived_from: "wpe/20261029-4",
+      tasks: [task("B1", "build", "failed"), task("R1", "run", "cancelled"), task("B2", "build", "succeeded"), task("R2", "run", "succeeded")],
+    };
+    extra["/nodes/context"] = withNode({}, { runsets: [summary], runset_count: 1, params_differing: [], archived_count: 0 });
+    renderAt("/node/wpe");
+    const more = await screen.findByText(/\+2 earlier tasks/);
+    expect(more.getAttribute("title")).toBe("build B1: failed\nrun R1: cancelled");
+    expect(screen.queryByText("failed")).toBeNull();
+    expect(screen.getByText("from 20261029-4")).toBeTruthy();
   });
 
   it("archives a runset from its page", async () => {
@@ -403,14 +465,21 @@ describe("App", () => {
 
     // two selected runsets open the code tab comparing the newer one against the older
     const summaries = ["20261013-1", "20261013-2"].map((name) => ({
-      ...(FIXTURES["/result"] as object), ref: `wpe/${name}`, name, params: { run: { W: name === "20261013-1" ? 1 : 2 } },
+      ...(FIXTURES["/result"] as object), ref: `wpe/${name}`, name,
+      params: { run: { workload: "spec06", W: name === "20261013-1" ? 1000000 : 2000000 } },
+      differing_values: { "run.W": name === "20261013-1" ? 1000000 : 2000000, "run.dump_db": name === "20261013-1" },
     }));
-    extra["/nodes/context"] = withNode({}, { runsets: summaries, runset_count: 2, params_differing: ["run.W"], archived_count: 0 });
+    extra["/nodes/context"] = withNode({}, { runsets: summaries, runset_count: 2, params_differing: ["run.W", "run.dump_db"], archived_count: 0 });
     extra["/runsets/code"] = { ref: "wpe/20261013-2", against: "wpe/20261013-1", legacy: false, no_code: false,
       repos: {}, total: { files: 0, added: 0, deleted: 0, ahead: 0 } };
     renderAt("/node/wpe");
     await screen.findByText("20261013-1");
-    expect(await screen.findByText(/run.W=1/)).toBeTruthy();
+    // compact headline line: the shared workload is muted, the differing W is emphasized, and the
+    // differing key without a headline token is only counted (its value in the tooltip)
+    expect((await screen.findByText("W=1M")).className).toBe("params-diff");
+    expect(screen.getAllByText("spec06")[0].className).toBe("muted");
+    expect(screen.getAllByText(/\+1 other differing keys/)[0].getAttribute("title")).toBe("run.dump_db = true");
+    expect(screen.queryByText(/build\.artifact/)).toBeNull();
     fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));
     fireEvent.click(screen.getByLabelText("select wpe/20261013-2"));
     fireEvent.click(screen.getByRole("button", { name: "compare" }));

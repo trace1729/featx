@@ -45,6 +45,11 @@ def atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+# libyaml's loader parses the same safe subset ~10x faster; the tree, leaderboard and node context
+# read every experiment.yaml of the root per request.
+SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def write_yaml(path: Path, data) -> None:
     atomic_write_text(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
@@ -54,7 +59,7 @@ def read_yaml(path: Path, default=None):
         text = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return default
-    data = yaml.safe_load(text)
+    data = yaml.load(text, Loader=SAFE_LOADER)
     return default if data is None else data
 
 

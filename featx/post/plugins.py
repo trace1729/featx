@@ -76,7 +76,7 @@ def available() -> dict[str, dict]:
     for d in reversed(manifest_dirs()):
         if d.is_dir():
             for p in sorted(d.glob("*.yaml")):
-                data = yaml.safe_load(p.read_text()) or {}
+                data = yaml.load(p.read_text(), Loader=store.SAFE_LOADER) or {}
                 data["_path"] = str(p)
                 out[data.get("name", p.stem)] = data
     return out

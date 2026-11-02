@@ -64,6 +64,11 @@ export interface RunsetSummary {
   /** headline build/run/post parameters: {build: {tool: ...}, run: {...}, post: {...}} */
   params?: Record<string, Record<string, unknown>>;
   recipes?: Record<string, Record<string, unknown>>;
+  /** cheap code info for tables: the build snapshot, else the recorded HEAD (legacy) or the
+   * runset that built a --bin binary */
+  code?: { snapshot?: string | null; head?: string | null; dirty?: boolean | null; legacy?: boolean; from?: string | null; imported?: boolean; bin_key?: string | null; bin_emu?: string | null };
+  /** (node context only) this runset's value of every key in params_differing */
+  differing_values?: Record<string, unknown>;
 }
 
 export interface GitInfo {
@@ -366,6 +371,7 @@ export interface CodeView extends Changes {
   against: string;
   requested_against?: string;
   compared_runset?: string | null;
+  compared_legacy?: boolean;
   legacy: boolean;
   no_code?: boolean;
   reason?: string;
@@ -374,4 +380,22 @@ export interface CodeView extends Changes {
   drift?: string | null;
   source_runset?: string | null;
   patches?: Record<string, string>;
+  provenance?: LegacyProvenance;
+}
+
+/** One repo of a pre-snapshot runset's provenance (recorded at submit). */
+export interface LegacyRepoState {
+  head?: string;
+  branch?: string;
+  dirty?: boolean;
+  diff_lines?: number;
+  untracked_files?: number;
+  shared?: boolean;
+}
+
+export interface LegacyProvenance {
+  super?: LegacyRepoState;
+  head?: string;
+  dirty?: boolean;
+  submodules?: Record<string, LegacyRepoState>;
 }

@@ -57,16 +57,31 @@ def canonical(key: str, value: Any) -> Any:
     return value
 
 
+# Keys resolved from others at submit (the build type from tool+pipeline, a run's commands, trace
+# paths and checkpoint catalogue entry from its workload/checkpoint, the point list shown as a
+# count): a difference there is already shown by the key it derives from.
+DERIVED_PREFIXES = ("build.type", "run.commands.", "run.checkpoint_set.", "run.trace_file", "run.trace_root",
+                    "run.points")
+
+
 def differing(runsets) -> list[str]:
-    """The flattened recipe keys whose (volatile-normalized) values differ across runsets."""
-    flats = [flatten(rs.recipes if hasattr(rs, "recipes") else rs) for rs in runsets]
+    """The flattened recipe keys whose (volatile-normalized) values differ across runsets.
+
+    A key is compared only among the runsets that ran its stage: a run-only (--bin) runset has no
+    build recipe, which is not a difference in every build key. Derived keys are skipped."""
+    recs = [rs.recipes if hasattr(rs, "recipes") else rs for rs in runsets]
+    flats = [flatten(r or {}) for r in recs]
     if len(flats) < 2:
         return []
-    keys = set().union(*(f.keys() for f in flats)) if flats else set()
+    keys = set().union(*(f.keys() for f in flats))
     out = []
     for key in sorted(keys):
-        values = [canonical(key, f.get(key)) for f in flats]
-        if len({repr(v) for v in values}) > 1:
+        if key.startswith(DERIVED_PREFIXES):
+            continue
+        stage = key.split(".", 1)[0]
+        values = [canonical(key, f.get(key)) for f, r in zip(flats, recs)
+                  if isinstance((r or {}).get(stage), dict) and (r or {}).get(stage)]
+        if len(values) > 1 and len({repr(v) for v in values}) > 1:
             out.append(key)
     return out
 
@@ -97,8 +112,6 @@ def stage_params(recipes: dict, bin: dict | None = None) -> dict[str, Any]:
                 b["bincache_key"] = bin["key"]
             if bin.get("cached") is not None:
                 b["cache_hit"] = bool(bin.get("cached"))
-            if bin.get("source_runset"):
-                b["code_from"] = bin["source_runset"]
 
     run = recipes.get("run") or {}
     if isinstance(run, dict) and run:
@@ -116,8 +129,12 @@ def stage_params(recipes: dict, bin: dict | None = None) -> dict[str, Any]:
         for key in ("W", "I"):
             if run.get(key) is not None:
                 r[key] = run[key]
-        names = _safe(lambda: ptmod.resolve(run), []) or []
-        r["points"] = len(names)
+        # None when the point set can't be resolved here (e.g. a workload missing from this config):
+        # a count of 0 would read as "ran nothing".
+        names = _safe(lambda: ptmod.resolve(run))
+        if names is not None:
+            r["points"] = len(names)
+        names = names or []
         benches = sorted({_safe(lambda n=n: ptmod.parse(n)["bench"]) for n in names} - {None})
         if benches:
             r["benchmarks"] = benches

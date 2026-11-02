@@ -39,6 +39,49 @@ def test_stage_params_and_differing_keys(root, fake_emu):
     assert not [k for k in differing if "runset" in k or "bincache" in k or k.endswith(".emu")]
 
 
+def test_differing_skips_absent_stages_and_derived_keys():
+    """A run-only runset has no build recipe: that is not a difference in every build key (the
+    production node tracertl/migrate-kmhv3-kimi/squash listed 47 keys, build.artifact first)."""
+    built = {"build": {"tool": "gsim", "artifact": "build/emu", "cores": 64, "type": "tracertl-gsim"},
+             "run": {"W": 0, "commands": {"exec": "/a/20261027-1/bin/emu"}, "trace_root": "/t/a"}}
+    built2 = {"build": {"tool": "verilator", "artifact": "build/emu", "cores": 64, "type": "tracertl-verilator"},
+              "run": {"W": 0, "commands": {"exec": "/b/emu"}, "trace_root": "/t/b"}}
+    run_only = {"run": {"W": 20000000, "commands": {"exec": "/c/emu"}, "trace_root": "/t/c", "dump_db": True}}
+    assert params.differing([built, built2, run_only]) == ["build.tool", "run.W", "run.dump_db"]
+    # one runset with a stage is no difference either
+    assert params.differing([built, run_only, {"run": {"W": 20000000}}]) == ["run.W", "run.dump_db"]
+
+
+def test_node_context_gives_differing_values_and_code_summary(root, fake_emu):
+    s, first, second, rs1, rs2 = _two_runsets(fake_emu)
+    tree = Tree()
+    ctx = context.build(tree, tree.get("t/sched/x"), max_runsets=10)
+    assert ctx["params_differing"] == ["run.W"]
+    values = [r["differing_values"] for r in ctx["runsets"]]
+    assert values == [{"run.W": 1}, {"run.W": 2000000}]
+    code = ctx["runsets"][0]["code"]
+    assert code["snapshot"] is None and code["from"] is None and code["bin_emu"] == str(fake_emu[0])
+
+
+def test_code_summary_of_legacy_and_bin_runsets(tmp_path):
+    from types import SimpleNamespace
+    entry = SimpleNamespace(rel="a/b", dir=tmp_path)
+    legacy = SimpleNamespace(name="20261027-1", recipes={"build": {"tool": "gsim"}}, bin={"key": "k"},
+                             provenance={"super": {"head": "7a1cd62e2bbd", "dirty": True}})
+    c = context.code_summary(entry, legacy)
+    assert c["legacy"] and c["head"] == "7a1cd62e2bbd" and c["dirty"] and c["snapshot"] is None
+    snap = SimpleNamespace(name="20261102-1", recipes={"build": {}}, bin={},
+                           provenance={"snapshot": {"super": {"commit": "abc123"}}, "super": {"head": "h"}})
+    c = context.code_summary(entry, snap)
+    assert c["snapshot"] == "abc123" and not c["legacy"] and c["head"] is None
+    # a run-only runset names the runset that built its binary (bincache manifest)
+    (tmp_path / "bc").mkdir()
+    store.write_json(tmp_path / "bc" / "manifest.json", {"node": "a/b", "runset": "20261027-1"})
+    runonly = SimpleNamespace(name="20261027-5", recipes={"run": {"W": 1}}, provenance={},
+                              bin={"key": "bc", "emu": str(tmp_path / "bc" / "emu")})
+    assert context.code_summary(entry, runonly)["from"] == "a/b/20261027-1"
+
+
 def test_stage_params_reads_legacy_and_broken_snapshots():
     legacy = {"build": {"type": "gsim-two-step", "mode": "trace"},
               "run": {"mode": "trace", "points": ["ok_1_0.5"]},
@@ -48,8 +91,9 @@ def test_stage_params_reads_legacy_and_broken_snapshots():
     assert p["post"]["pk.plugin"] == "perf-keys"
     assert p["post"]["pk.baselines"] == ["exec-reference"]
     # a run snapshot that cannot be resolved must not raise (read-only check over production data)
-    assert params.stage_params({"run": {"mode": "exec", "suite": {"config": "/nope.json"},
-                                        "points_file": "/nope.txt"}})["run"]["points"] == 0
+    # ... and leaves the point count out rather than claim 0 points
+    assert "points" not in params.stage_params({"run": {"mode": "exec", "suite": {"config": "/nope.json"},
+                                                        "points_file": "/nope.txt"}})["run"]
 
 
 def test_result_get_exposes_recipes_overrides_and_params(root, fake_emu):

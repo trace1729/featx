@@ -242,3 +242,81 @@ def test_rm_drop_worktrees_drops_the_runset_refs(root, tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", f"refs/featx/runsets/{rs.id}"],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def test_legacy_runsets_diff_by_their_recorded_heads(root, tmp_path):
+    """Pre-snapshot runsets compare by the HEADs they recorded at submit (committed code only)."""
+    repo, wt = _node_worktree(root, tmp_path)
+    tree = Tree()
+
+    def legacy(head, bin=None):
+        rs, rdir = tree.new_runset(Tree().get("c"))
+        rs.provenance = {"super": {"head": head, "branch": "c", "dirty": False}}
+        (rdir / "src-patches").mkdir()
+        if bin:
+            rs.bin = bin
+        Tree().save_runset(Tree().get("c"), rs)
+        return rs, rdir
+
+    head1 = _git_out("rev-parse", "HEAD", cwd=wt).strip()
+    rs1, rdir1 = legacy(head1)
+    (wt / "a.txt").write_text("one\ntwo\n")
+    (wt / "b.txt").write_text("b\n")
+    _git("add", ".", cwd=wt)
+    _git("commit", "-q", "-m", "two", cwd=wt)
+    head2 = _git_out("rev-parse", "HEAD", cwd=wt).strip()
+    # the build runset's binary records itself as its builder: it is not "code from" itself
+    bindir = tmp_path / "bin2"
+    bindir.mkdir()
+    (bindir / "emu").write_text("x")
+    rs2, _ = legacy(head2, {"key": "k2", "emu": str(bindir / "emu"), "cached": False})
+    store.write_json(bindir / "manifest.json", {"key": "k2", "node": "c", "runset": rs2.name})
+    ref1, ref2 = f"c/{rs1.name}", f"c/{rs2.name}"
+
+    base = service.runset_code(ref2, "base")
+    assert base["legacy"] is True and base["source_runset"] is None and base["head"] == head2
+    assert {f["path"] for f in base["repos"][""]["files"]} == {"a.txt", "b.txt"}
+    prev = service.runset_code(ref2, "prev")
+    assert prev["compared_runset"] == ref1 and prev["compared_legacy"] is True
+    assert {f["path"] for f in prev["repos"][""]["files"]} == {"a.txt", "b.txt"}
+    assert "+two" in service.runset_code_diff(ref2, ref1, "", "a.txt")["diff"]
+    assert service.runset_code(ref1, ref2)["repos"][""]["files"][0]["status"] in "AMD"
+
+    # a run-only runset (recorded HEAD = a later commit) shows the code its binary was built from
+    (wt / "a.txt").write_text("one\ntwo\nthree\n")
+    _git("commit", "-q", "-am", "three", cwd=wt)
+    rs3, _ = legacy(_git_out("rev-parse", "HEAD", cwd=wt).strip(),
+                    {"key": "k2", "emu": str(bindir / "emu"), "cached": True})
+    run_only = service.runset_code(f"c/{rs3.name}", ref1)
+    assert run_only["source_runset"] == ref2 and run_only["head"] == head2
+    assert {f["path"] for f in run_only["repos"][""]["files"]} == {"a.txt", "b.txt"}
+
+    # a recorded HEAD that no longer exists is reported per repo instead of an empty diff
+    rs4, _ = legacy("0" * 40)
+    gone = service.runset_code(f"c/{rs4.name}", ref1)
+    assert "no longer in this repo" in gone["repos"][""]["error"]
+
+
+def test_legacy_shared_submodule_diffs_against_the_commit_the_base_records(root, tmp_path):
+    """A shared submodule has no worktree of its own: its base is the gitlink in the node base."""
+    repo = _repo_with_submodule(tmp_path)
+    _git("checkout", "-q", "-b", "c", cwd=repo)
+    e = Tree().add("c")
+    e.node.git = GitInfo(repo=str(repo), base="main", branch="c", worktree=str(repo))
+    store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+    subdir = repo / "deps" / "sub"
+    (subdir / "s.txt").write_text("s\nmore\n")
+    _git("commit", "-q", "-am", "sub change", cwd=subdir)
+    tree = Tree()
+    rs, _ = tree.new_runset(tree.get("c"))
+    rs.provenance = {"super": {"head": _git_out("rev-parse", "HEAD", cwd=repo).strip()},
+                     "submodules": {"deps/sub": {"head": _git_out("rev-parse", "HEAD", cwd=subdir).strip(),
+                                                 "shared": True},
+                                    "deps/new": {"head": "1" * 40, "shared": True}}}
+    Tree().save_runset(Tree().get("c"), rs)
+    code = service.runset_code(f"c/{rs.name}", "base")
+    sub = code["repos"]["deps/sub"]
+    assert not sub.get("error") and sub["ahead"] == 1
+    assert {f["path"] for f in sub["files"]} == {"s.txt"}
+    # a submodule the base does not have yet was added on the node's branch
+    assert "not in the node base" in code["repos"]["deps/new"]["error"]

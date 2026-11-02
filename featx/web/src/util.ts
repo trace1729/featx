@@ -360,3 +360,85 @@ export function overrideKeys(overrides: Record<string, unknown> | undefined): Se
   walk("", overrides ?? {});
   return out;
 }
+
+/** One value of the compact parameters line: `key` identifies it across runsets (for muting
+ * values every runset shares), `text` is what the cell shows. */
+export interface ParamToken {
+  key: string;
+  text: string;
+}
+
+const PARAM_STAGES = ["build", "run", "post"] as const;
+export type ParamStage = (typeof PARAM_STAGES)[number];
+
+function short(v: unknown): string {
+  if (typeof v === "number") return Number.isInteger(v) ? fmtCount(v) : String(v);
+  if (Array.isArray(v)) return v.map(short).join(",");
+  if (typeof v === "object" && v !== null) return JSON.stringify(v);
+  return String(v);
+}
+
+/** The headline parameters (`RunsetSummary.params`) as a few short tokens per stage:
+ * build `gsim · trace · tracertl · chiseldb`, run `spec06 · exec · W=20M · I=40M · 143 pt`,
+ * post `pk · score(spec-score)`. A run-only runset's build line names its binary instead. */
+export function paramTokens(
+  params: Record<string, Record<string, unknown>> | undefined,
+  code?: { from?: string | null; bin_key?: string | null; bin_emu?: string | null; imported?: boolean } | null,
+): Record<ParamStage, ParamToken[]> {
+  const out: Record<ParamStage, ParamToken[]> = { build: [], run: [], post: [] };
+  const b = params?.build ?? {};
+  if (Object.keys(b).length) {
+    for (const k of ["tool", "mode", "pipeline"]) if (b[k] !== undefined) out.build.push({ key: k, text: short(b[k]) });
+    for (const [k, v] of Object.entries(b)) {
+      if (!k.startsWith("options.")) continue;
+      const name = k.slice("options.".length);
+      out.build.push({ key: k, text: v === true ? name : v === false ? `no-${name}` : `${name}=${short(v)}` });
+    }
+  } else if (code?.from) {
+    out.build.push({ key: "bin", text: `bin ← ${code.from.split("/").pop()}` });
+  } else if (code?.bin_key) {
+    out.build.push({ key: "bin", text: `${code.imported ? "imported " : ""}bin ${String(code.bin_key).slice(0, 8)}` });
+  } else if (code?.bin_emu) {
+    out.build.push({ key: "bin", text: `bin …/${code.bin_emu.split("/").slice(-2).join("/")}` });
+  }
+  const r = params?.run ?? {};
+  if (Object.keys(r).length) {
+    const wl = r.workload ?? (typeof r.suite === "string" ? r.suite.split("/").pop() : undefined);
+    if (wl !== undefined) out.run.push({ key: "workload", text: short(wl) });
+    if (r.mode !== undefined) out.run.push({ key: "mode", text: short(r.mode) });
+    if (r.checkpoint !== undefined && r.checkpoint !== r.workload) out.run.push({ key: "checkpoint", text: `ckpt ${short(r.checkpoint)}` });
+    for (const k of ["W", "I"]) if (r[k] !== undefined) out.run.push({ key: k, text: `${k}=${short(r[k])}` });
+    if (r.points !== undefined) out.run.push({ key: "points", text: `${short(r.points)} pt` });
+    if (r.coverage !== undefined) out.run.push({ key: "coverage", text: `cov ${short(r.coverage)}` });
+    const env = r.env && typeof r.env === "object" ? Object.entries(r.env as Record<string, unknown>) : [];
+    for (const [k, v] of env) out.run.push({ key: `env.${k}`, text: `${k}=${short(v)}` });
+  }
+  const p = params?.post ?? {};
+  for (const [k, v] of Object.entries(p)) {
+    if (!k.endsWith(".plugin")) continue;
+    const step = k.slice(0, -".plugin".length);
+    out.post.push({ key: k, text: v === step ? step : `${step}(${short(v)})` });
+  }
+  return out;
+}
+
+/** Token keys (per stage) whose text is the same in every runset that has the stage: the cell
+ * mutes them so what differs between the node's runsets stands out. */
+export function sharedTokens(all: Record<ParamStage, ParamToken[]>[]): Set<string> {
+  const shared = new Set<string>();
+  for (const stage of PARAM_STAGES) {
+    const rows = all.map((t) => t[stage]).filter((t) => t.length);
+    if (rows.length < 2) continue;
+    const keys = new Set(rows.flatMap((t) => t.map((x) => x.key)));
+    for (const key of keys) {
+      const texts = rows.map((t) => t.find((x) => x.key === key)?.text ?? null);
+      if (texts.every((x) => x === texts[0])) shared.add(`${stage}.${key}`);
+    }
+  }
+  return shared;
+}
+
+/** Differing recipe keys the headline tokens already show (`build.tool` for the tool token...). */
+export function coveredByTokens(key: string): boolean {
+  return /^(build\.(tool|mode|pipeline|options\.)|run\.(workload|suite|mode|checkpoint|W|I|coverage|benchmarks|points|env\.)|post\.steps\.[^.]+\.plugin$)/.test(key);
+}

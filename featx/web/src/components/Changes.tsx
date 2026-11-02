@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
+import { useI18n } from "../i18n";
 import { Badge, ErrorBox, Loading } from "./ui";
 import { foldUntracked, untrackedDirCount, type UntrackedNode } from "../util";
 import type { Changes, CodeRepo } from "../types";
@@ -108,9 +109,16 @@ function UntrackedSection({ paths, sub, total, truncated, scope, fetchDiff }: { 
   );
 }
 
-export function RepoChangesView({ r, sub, scope, fetchDiff }: { r: CodeRepo; sub: string; scope: string; fetchDiff: DiffFetcher }) {
+/** A repo with nothing to show: no changed or untracked files and no commits of its own. */
+function unchanged(r: CodeRepo): boolean {
+  return !!r.exists && !r.error && !(r.files ?? []).length && !(r.untracked_total ?? (r.untracked ?? []).length) && !r.ahead && !r.truncated;
+}
+
+export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktree", vs }: {
+  r: CodeRepo; sub: string; scope: string; fetchDiff: DiffFetcher; rootLabel?: string; vs?: string;
+}) {
   const [open, setOpen] = useState<string | null>(null);
-  const title = sub || "worktree";
+  const title = sub || rootLabel;
   if (!r.exists) return <div className="notice">{title}: {r.path} is missing on disk</div>;
   if (r.error) return <div className="notice">{title}: {r.error}</div>;
   const files = r.files ?? [];
@@ -120,7 +128,11 @@ export function RepoChangesView({ r, sub, scope, fetchDiff }: { r: CodeRepo; sub
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>
-        {title} <span className="muted small mono">vs {r.base} (merge-base {r.merge_base})</span>
+        {title}{" "}
+        <span className="muted small mono">
+          {vs ? `vs ${vs}` : r.base ? `vs ${r.base}` : ""}
+          {r.merge_base ? ` (merge-base ${r.merge_base})` : ""}
+        </span>
       </h3>
       <div className="muted small">
         {r.ahead ?? 0} commit(s) ahead, {r.behind ?? 0} behind · {files.length} file(s) changed, +{r.added ?? 0} −{r.deleted ?? 0}
@@ -181,14 +193,26 @@ export function RepoChangesView({ r, sub, scope, fetchDiff }: { r: CodeRepo; sub
   );
 }
 
-export function ChangesView({ changes, scope, fetchDiff }: { changes?: Changes; scope: string; fetchDiff: DiffFetcher }) {
+export function ChangesView({ changes, scope, fetchDiff, rootLabel = "worktree", vs }: {
+  changes?: Changes; scope: string; fetchDiff: DiffFetcher; rootLabel?: string; vs?: string;
+}) {
+  const { t } = useI18n();
   const repos = Object.entries(changes?.repos ?? {});
   if (!repos.length) return <div className="muted">no changes</div>;
+  // unchanged repos (a node usually carries a dozen submodules) are listed on one line
+  const same = repos.filter(([, r]) => unchanged(r));
+  const shown = repos.filter(([, r]) => !unchanged(r));
   return (
     <div>
-      {repos.map(([sub, r]) => (
-        <RepoChangesView key={sub || "."} sub={sub} r={r} scope={scope} fetchDiff={fetchDiff} />
+      {!shown.length && <div className="muted" data-testid="no-differences">{t("no differences")}</div>}
+      {shown.map(([sub, r]) => (
+        <RepoChangesView key={sub || "."} sub={sub} r={r} scope={scope} fetchDiff={fetchDiff} rootLabel={rootLabel} vs={vs} />
       ))}
+      {same.length > 0 && (
+        <div className="muted small" data-testid="unchanged-repos">
+          {t("unchanged")} ({same.length}): <span className="mono">{same.map(([sub]) => sub || rootLabel).join(", ")}</span>
+        </div>
+      )}
     </div>
   );
 }

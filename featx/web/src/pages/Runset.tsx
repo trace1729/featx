@@ -8,7 +8,7 @@ import { FileBrowser, FileView, Markdown } from "../components/FileViewer";
 import { LogTail } from "../components/LogTail";
 import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
-import type { CodeView, JobView, RunsetSummary, TaskView } from "../types";
+import type { CodeView, JobView, LegacyProvenance, LegacyRepoState, RunsetSummary, TaskView } from "../types";
 import { countsText, fmtCount, fmtTime, fmtValue, overrideKeys, splitRunset } from "../util";
 import { PriorityControl } from "./Tasks";
 import { useI18n } from "../i18n";
@@ -246,62 +246,98 @@ function ProblemLogTab({ rs, task }: { rs: RunsetSummary; task?: TaskView }) {
   );
 }
 
-const STAGES = ["build", "run", "post"] as const;
+function paramText(v: unknown): string {
+  if (Array.isArray(v)) return v.map(paramText).join(", ");
+  if (typeof v === "object" && v !== null) return Object.entries(v).map(([k, x]) => `${k}=${paramText(x)}`).join(" ");
+  return fmtValue(v);
+}
 
-function ParamsCard({ rs }: { rs: RunsetSummary }) {
+/** The selected stage's headline parameters (the --set overrides marked) and, on demand, that
+ * stage's full resolved recipe. A run without a build of its own names the binary it ran. */
+function StageParams({ rs, stage, hasBuild }: { rs: RunsetSummary; stage: string; hasBuild: boolean }) {
   const { t } = useI18n();
   const [full, setFull] = useState(false);
-  const overrides = new Set([...overrideKeys(rs.overrides)].map((k) => k.replace(/^post\.steps\./, "post.")));
-  const params = rs.params ?? {};
+  const overrides = [...overrideKeys(rs.overrides)].map((k) => k.replace(/^post\.steps\./, "post.")).filter((k) => k.startsWith(`${stage}.`));
+  const items: [string, unknown][] = Object.entries(rs.params?.[stage] ?? {});
+  if (stage === "run" && !hasBuild && rs.code) {
+    if (rs.code.from) items.unshift(["binary from", rs.code.from]);
+    else if (rs.code.bin_key || rs.code.bin_emu) items.unshift([rs.code.imported ? "imported binary" : "binary", rs.code.bin_key || rs.code.bin_emu]);
+  }
+  const recipe = rs.recipes?.[stage];
   return (
-    <div className="card">
+    <div className="stage-params" data-testid="stage-params">
       <div className="row">
-        <b>{t("parameters")}</b>
-        {overrides.size > 0 && (
-          <Badge kind="warn" title={[...overrides].join(", ")}>
-            {t("overrides")}: {overrides.size}
+        <b className="small">
+          {stage} {t("parameters")}
+        </b>
+        {overrides.length > 0 && (
+          <Badge kind="warn" title={overrides.join(", ")}>
+            {t("overrides")}: {overrides.length}
           </Badge>
         )}
         <span className="spacer" />
-        <button className="link small" onClick={() => setFull(!full)}>
-          {full ? t("hide full recipe") : t("full recipe (YAML)")}
-        </button>
+        {recipe && (
+          <button className="link small" onClick={() => setFull(!full)}>
+            {full ? t("hide full recipe") : t("full recipe (YAML)")}
+          </button>
+        )}
       </div>
       {full ? (
-        <YamlEditor value={YAML.stringify(rs.recipes ?? {})} readOnly height="420px" />
+        <YamlEditor value={YAML.stringify(recipe ?? {})} readOnly height="360px" />
+      ) : items.length === 0 ? (
+        <div className="muted small">—</div>
       ) : (
-        <div className="grid3">
-          {STAGES.map((stage) => {
-            const items = params[stage] ?? {};
-            return (
-              <div key={stage}>
-                <h3 style={{ marginTop: 4 }}>{stage}</h3>
-                {Object.keys(items).length === 0 ? (
-                  <div className="muted small">—</div>
-                ) : (
-                  <table className="small">
-                    <tbody>
-                      {Object.entries(items).map(([key, value]) => {
-                        const dotted = `${stage}.${key}`;
-                        const set = overrides.has(dotted);
-                        return (
-                          <tr key={key}>
-                            <td className="mono">
-                              {key} {set && <Badge kind="warn">{t("set")}</Badge>}
-                            </td>
-                            <td className="mono">{fmtValue(value)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            );
-          })}
+        <div className="param-grid small">
+          {items.map(([key, value]) => (
+            <div key={key} className={key.length + paramText(value).length > 34 ? "wide" : undefined}>
+              <span className="muted">{key}</span> <span className="mono">{paramText(value)}</span>{" "}
+              {overrides.includes(`${stage}.${key}`) && <Badge kind="warn">{t("set")}</Badge>}
+            </div>
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** The per-repo commits a legacy runset recorded at submit, with whether each tree was clean. */
+function LegacyRepos({ prov }: { prov: LegacyProvenance }) {
+  const { t } = useI18n();
+  const sup: LegacyRepoState = prov.super ?? { head: prov.head, dirty: prov.dirty };
+  const rows: [string, LegacyRepoState][] = [[".", sup], ...Object.entries(prov.submodules ?? {})];
+  return (
+    <table className="small" data-testid="legacy-repos">
+      <thead>
+        <tr>
+          <th>repo</th>
+          <th>branch</th>
+          <th>HEAD</th>
+          <th>{t("state")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([name, r]) => (
+          <tr key={name}>
+            <td className="mono">
+              {name}
+              {r.shared ? <span className="muted"> ({t("shared")})</span> : null}
+            </td>
+            <td className="mono muted">{r.branch ?? ""}</td>
+            <td className="mono" title={r.head}>{(r.head ?? "").slice(0, 12)}</td>
+            <td>
+              {r.dirty ? (
+                <span className="badge failed">
+                  {r.diff_lines ? `${r.diff_lines} ${t("diff lines")}` : t("dirty")}
+                  {r.untracked_files ? ` · ${r.untracked_files} ${t("untracked (not saved)")}` : ""}
+                </span>
+              ) : (
+                <span className="muted">{t("clean")}</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -374,25 +410,39 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
         <div className="notice">
           {t("no code recorded")}: {q.data.reason}
         </div>
-      ) : q.data?.legacy ? (
-        <div>
-          <p className="muted small">
-            {t("legacy runset")}: HEAD <span className="mono">{q.data.head}</span> + src-patches (tracked changes at submit).
-          </p>
-          {Object.entries(q.data.patches ?? {}).map(([name, text]) => (
-            <div key={name} className="card">
-              <h3 className="mono">{name}</h3>
-              <DiffView text={text} />
-            </div>
-          ))}
-          {!Object.keys(q.data.patches ?? {}).length && <div className="muted">no saved patches</div>}
-        </div>
       ) : q.data ? (
-        <ChangesView
-          changes={q.data}
-          scope={`code:${rs.ref}:${against}`}
-          fetchDiff={(sub, path) => api.get("/runsets/code/diff", { ref: rs.ref, against, sub, path })}
-        />
+        <>
+          {q.data.legacy && (
+            <p className="notice small" data-testid="legacy-note">
+              {t("legacy runset")}: {t("compared by the commits recorded at submit (before code snapshots). Tracked changes at submit are the src-patches below; untracked files were not saved.")}
+            </p>
+          )}
+          {!q.data.legacy && q.data.compared_legacy && (
+            <p className="notice small">{t("the compared runset is a legacy runset: only its recorded commits are compared.")}</p>
+          )}
+          {Object.keys(q.data.repos ?? {}).length > 0 && (
+            <ChangesView
+              changes={q.data}
+              scope={`code:${rs.ref}:${against}`}
+              rootLabel={t("superproject")}
+              vs={q.data.compared_runset ? q.data.compared_runset.split("/").pop() : q.data.against === "worktree" ? t("worktree now") : undefined}
+              fetchDiff={(sub, path) => api.get("/runsets/code/diff", { ref: rs.ref, against, sub, path })}
+            />
+          )}
+          {q.data.legacy && (
+            <details className="card" open={!Object.keys(q.data.repos ?? {}).length}>
+              <summary className="small">{t("recorded at submit")}</summary>
+              <LegacyRepos prov={q.data.provenance ?? {}} />
+              {Object.entries(q.data.patches ?? {}).map(([name, text]) => (
+                <div key={name} className="card">
+                  <h3 className="mono">{name}</h3>
+                  <DiffView text={text} />
+                </div>
+              ))}
+              {!Object.keys(q.data.patches ?? {}).length && <div className="muted small">{t("no saved patches")}</div>}
+            </details>
+          )}
+        </>
       ) : null}
     </div>
   );
@@ -476,7 +526,6 @@ export function RunsetPage() {
           derived from <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
         </p>
       )}
-      <ParamsCard rs={rs} />
       <div className="row" style={{ margin: "10px 0" }}>
         {tasks.map((t, i) => (
           <span key={t.id} className="row" style={{ gap: 4 }}>
@@ -501,6 +550,7 @@ export function RunsetPage() {
           </div>
           {pick.failure != null && <pre className="error mono small">{typeof pick.failure === "string" ? pick.failure : JSON.stringify(pick.failure, null, 2)}</pre>}
           <TaskActions task={pick} rsRef={ref} />
+          <StageParams key={pick.kind} rs={rs} stage={pick.kind} hasBuild={tasks.some((x) => x.kind === "build")} />
         </div>
       )}
       <Tabs tabs={TABS} value={tab} onChange={(t) => setParam("tab", t)} />

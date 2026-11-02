@@ -9,7 +9,7 @@ import { Markdown } from "../components/FileViewer";
 import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
 import type { Changes, CheckpointSet, CodeView, ConfigView, NodeContext, RunsetSummary } from "../types";
-import { NO_PRESETS, checkpointGroups, deepMerge, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
+import { NO_PRESETS, checkpointGroups, coveredByTokens, deepMerge, paramTokens, sharedTokens, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
 import { useI18n } from "../i18n";
 
@@ -35,37 +35,66 @@ function keyMetrics(rs: RunsetSummary): [string, unknown][] {
   return out;
 }
 
-function valueAt(obj: Record<string, unknown> | undefined, key: string): unknown {
-  let cur: unknown = obj ?? {};
-  for (const part of key.split(".")) {
-    if (typeof cur !== "object" || cur === null) return undefined;
-    cur = (cur as Record<string, unknown>)[part];
-  }
-  return cur;
-}
-
-/** The recipe keys on which this node's runsets disagree, with this runset's value when it is a
- * headline parameter (the rest is just the key name: a command difference has no headline). */
-function ParamsCell({ rs, differing }: { rs: RunsetSummary; differing: string[] }) {
+/** The headline parameters as one short line per stage. Values every shown runset shares are
+ * muted; recipe keys that differ but have no headline token are counted ("+N"), with this
+ * runset's values in the tooltip. */
+function ParamsCell({ rs, shared, extra }: { rs: RunsetSummary; shared: Set<string>; extra: string[] }) {
   const { t } = useI18n();
-  const shown = differing.slice(0, 5).map((key) => {
-    const v = valueAt(rs.params, key);
-    return v === undefined ? key : `${key}=${fmtValue(v)}`;
-  });
-  if (!shown.length) return <span className="muted">—</span>;
+  const tokens = paramTokens(rs.params, rs.code);
+  const lines = KINDS.filter((stage) => tokens[stage].length);
+  const values = rs.differing_values ?? {};
+  const mine = extra.filter((k) => k in values);
+  if (!lines.length && !mine.length) return <span className="muted">—</span>;
   return (
-    <div className="small mono" title={differing.join("\n")}>
-      {shown.map((line) => (
-        <div key={line}>{line}</div>
+    <div className="params-cell small mono">
+      {lines.map((stage) => (
+        <div key={stage} className="params-line">
+          <span className="params-stage">{stage[0]}</span>
+          {tokens[stage].map((tok, i) => (
+            <span key={tok.key} className={shared.has(`${stage}.${tok.key}`) ? "muted" : "params-diff"} title={tok.text.length > 24 ? tok.text : undefined}>
+              {i > 0 && <span className="muted"> · </span>}
+              {tok.text.length > 24 ? `${tok.text.slice(0, 22)}…` : tok.text}
+            </span>
+          ))}
+        </div>
       ))}
-      {differing.length > shown.length && <div className="muted">+{differing.length - shown.length} {t("more")}</div>}
+      {mine.length > 0 && (
+        <div className="muted" title={mine.map((k) => `${k} = ${fmtValue(values[k])}`).join("\n")}>
+          +{mine.length} {t("other differing keys")}
+        </div>
+      )}
     </div>
   );
 }
 
-/** Snapshot id from the summary (cheap); files and +/− vs base from the code API (cached). */
+/** Snapshot id from the summary (cheap); files and +/− vs base from the code API (cached). A
+ * pre-snapshot runset shows the HEAD it recorded at submit, a run-only one the runset that built
+ * its binary. */
+/** The latest task of each stage; tasks a later submit into the same runset superseded are only counted. */
+function TasksCell({ tasks }: { tasks: RunsetSummary["tasks"] }) {
+  const { t } = useI18n();
+  const latest = new Map<string, RunsetSummary["tasks"][number]>();
+  for (const task of tasks) latest.set(task.kind, task);
+  const earlier = tasks.filter((task) => latest.get(task.kind) !== task);
+  return (
+    <>
+      {[...latest.values()].map((task) => (
+        <span key={task.id} style={{ marginRight: 6, whiteSpace: "nowrap", display: "inline-block" }}>
+          {task.kind}: <StateBadge state={task.state} />
+        </span>
+      ))}
+      {earlier.length > 0 && (
+        <div className="muted small" title={earlier.map((task) => `${task.kind} ${task.id.slice(0, 12)}: ${task.state}`).join("\n")}>
+          +{earlier.length} {t("earlier tasks")}
+        </div>
+      )}
+    </>
+  );
+}
+
 function CodeCell({ rs, enabled }: { rs: RunsetSummary; enabled: boolean }) {
-  const snap = (rs.provenance as { snapshot?: { super?: { commit?: string } } } | undefined)?.snapshot?.super?.commit;
+  const code = rs.code;
+  const snap = code?.snapshot ?? undefined;
   const q = useQuery({
     queryKey: ["code-totals", rs.ref],
     queryFn: () => api.get<CodeView>("/runsets/code", { ref: rs.ref, against: "base" }),
@@ -73,7 +102,22 @@ function CodeCell({ rs, enabled }: { rs: RunsetSummary; enabled: boolean }) {
     staleTime: 300000,
     retry: false,
   });
-  if (!snap) return <span className="muted small">{rs.provenance ? "legacy" : "—"}</span>;
+  if (!snap) {
+    if (code?.from)
+      return (
+        <span className="small muted" style={{ whiteSpace: "nowrap" }} title={`binary built by ${code.from}`}>
+          ← <Link to={`/runset/${code.from}?tab=code`}>{code.from.split("/").pop()}</Link>
+        </span>
+      );
+    if (code?.legacy && code.head)
+      return (
+        <span className="mono small muted" title={`legacy runset: HEAD ${code.head}${code.dirty ? " + uncommitted changes (src-patches)" : ""}`}>
+          {code.head.slice(0, 8)}
+          {code.dirty ? "*" : ""}
+        </span>
+      );
+    return <span className="muted small">—</span>;
+  }
   const t = q.data?.total;
   return (
     <span className="mono small" title={`snapshot ${snap}`}>
@@ -93,7 +137,8 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
   const { t } = useI18n();
   const nav = useNavigate();
   const [selected, setSelected] = useState<string[]>([]);
-  const differing = ctx.params_differing ?? [];
+  const shared = sharedTokens(ctx.runsets.map((rs) => paramTokens(rs.params, rs.code)));
+  const extra = (ctx.params_differing ?? []).filter((k) => !coveredByTokens(k));
   const rank = (ref: string) => ctx.runsets.findIndex((r) => r.ref === ref);
   const toggle = (ref: string) => setSelected((old) => (old.includes(ref) ? old.filter((x) => x !== ref) : [...old, ref]));
   const compare = () => {
@@ -137,22 +182,23 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
                 <td className="mono">
                   <Link to={`/runset/${rs.ref}`}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
                   {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
-                  {rs.derived_from && <div className="muted small">from {rs.derived_from}</div>}
+                  {rs.derived_from && (
+                    <div className="muted small" title={rs.derived_from}>
+                      from{" "}
+                      {rs.derived_from.startsWith(`${ctx.node.path}/`) ? rs.derived_from.slice(ctx.node.path.length + 1) : rs.derived_from}
+                    </div>
+                  )}
                 </td>
                 <td className="muted">{fmtTime(rs.created)}</td>
                 <td>{rs.purpose}</td>
                 <td>
-                  <ParamsCell rs={rs} differing={differing} />
+                  <ParamsCell rs={rs} shared={shared} extra={extra} />
                 </td>
                 <td>
                   <CodeCell rs={rs} enabled={i < 20} />
                 </td>
                 <td>
-                  {rs.tasks.map((t) => (
-                    <span key={t.id} style={{ marginRight: 4 }}>
-                      {t.kind}: <StateBadge state={t.state} />
-                    </span>
-                  ))}
+                  <TasksCell tasks={rs.tasks} />
                 </td>
                 <td className="small">
                   {keyMetrics(rs).map(([k, v]) => (
