@@ -201,12 +201,15 @@ def task_priority(task: str, priority: int, runset: bool = True) -> dict:
 
 
 @tool
-def task_status(task: str | None = None, node: str | None = None, active_only: bool = True) -> Any:
+def task_status(task: str | None = None, node: str | None = None, active_only: bool = True,
+                states: list[str] | None = None) -> Any:
     """One task (with per-job states, attempts, hosts, progress, ETA) or the task list filtered by
-    node prefix."""
+    node prefix and state. States: queued|running|succeeded|failed|cancelled, plus `blocked`
+    (design-blocked or cancelled by a dependency failure)."""
     if task:
         return _c().get(f"/tasks/{task}")
-    return _c().get("/tasks", active=active_only, node=node, limit=100)
+    return _c().get("/tasks", active=active_only, node=node,
+                    state=",".join(states) if states else None, limit=100)
 
 
 @tool
@@ -310,6 +313,13 @@ def checkpoints(spec: str | None = None, name: str | None = None, bench: str | N
 def storage_report() -> dict:
     """Disk usage per node, bincache entries with references, trash, compare cache."""
     return service.storage_report()
+
+
+@tool
+def reap() -> dict:
+    """Dry-run scan (one ssh per host) for this root's featx-exec processes whose job is no longer
+    active or whose attempt is stale; the daemon kills confirmed orphans on its own schedule."""
+    return _c().post("/reap", {"apply": False})
 
 
 @tool

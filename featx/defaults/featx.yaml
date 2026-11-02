@@ -62,6 +62,9 @@ liveness:
   heartbeat_interval: 30
   dead_after: 180          # heartbeat unchanged this long (daemon clock) + no exit_code = dead
   launch_grace: 120        # a job that never wrote fx/start within this window = launch failure
+  orphan_watch: 900        # a launch reported failed may still start within this window: kill it
+  kill_retry_hours: 24     # retry a kill to an unreachable host for this long
+  reap_interval: 600       # daemon scan for featx-exec processes whose job is gone (0 = off)
 
 retry:
   max_infra_attempts: 3

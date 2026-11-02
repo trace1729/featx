@@ -340,9 +340,12 @@ def submit(node: str, kinds: List[str] = typer.Argument(None, help="build run po
 @guarded
 def ps(all_: bool = typer.Option(False, "-a", "--all", help="include finished tasks"),
        node: Optional[str] = typer.Option(None, help="node path prefix"),
+       state: Optional[str] = typer.Option(None, "--state", help="comma list: queued,running,blocked,"
+                                     "succeeded,failed,cancelled (blocked = design-blocked or a "
+                                     "dependency failure cancelled it)"),
        limit: int = 40, as_json: bool = typer.Option(False, "--json")):
     """Tasks with stage, job counts, progress and ETA."""
-    rows = client().get("/tasks", active=not all_, node=node, limit=limit)
+    rows = client().get("/tasks", active=not all_, node=node, state=state, limit=limit)
     if as_json:
         out(rows)
         return
@@ -383,6 +386,27 @@ def logs(tid: str, job: Optional[str] = typer.Option(None, "-j", "--job"),
         typer.echo(res["tail"])
         return
     os.execvp("tail", ["tail", "-n", str(lines), "-F", res["path"]])
+
+
+@app.command()
+@guarded
+def reap(apply: bool = typer.Option(False, "--apply", help="kill the confirmed orphans"),
+         as_json: bool = typer.Option(False, "--json")):
+    """Find featx-exec processes of this root whose job is no longer active (dry run unless
+    --apply). The daemon also scans for them at start and every liveness.reap_interval."""
+    r = client().post("/reap", {"apply": apply})
+    if as_json:
+        out(r)
+        return
+    for p in r.get("processes", []):
+        if p.get("error"):
+            typer.echo(f"{p['host']:20s} unreachable")
+            continue
+        state = "orphan" + (f" ({p['reason']})" if p.get("reason") else " active")
+        typer.echo(f"{p['host']:20s} {p['pid']:>8d} {p['job_dir']}  attempt={p['attempt']}  {state}"
+                   + (" KILLED" if p.get("killed") else ""))
+    typer.echo(f"{r['scanned']} process(es) on {len(r.get('hosts', []))} host(s): "
+               f"{r['orphans']} orphan(s)" + (f", {r['killed']} killed" if apply else " (dry run)"))
 
 
 @app.command()

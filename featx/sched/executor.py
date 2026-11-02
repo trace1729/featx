@@ -129,3 +129,30 @@ def alive_on_host(host: str, pid: str | int) -> bool | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.strip() == "alive"
+
+
+def list_exec(host: str) -> list[dict] | None:
+    """This user's `featx-exec <job_dir> <attempt>` processes on host; None = unreachable.
+    `ps -ww` keeps long job paths from being cut at the terminal width."""
+    inner = "ps -ww -u $(id -u) -o pid=,args= 2>/dev/null | grep '[f]eatx-exec' || true"
+    proc = _run_on(host, inner, 30)
+    if proc is None:
+        return None
+    out = []
+    for line in proc.stdout.splitlines():
+        toks = line.split()
+        if len(toks) < 4:
+            continue
+        try:
+            pid = int(toks[0])
+        except ValueError:
+            continue
+        for i, tok in enumerate(toks):
+            if tok == "featx-exec" or tok.endswith("/featx-exec"):
+                if i + 2 < len(toks):
+                    try:
+                        out.append({"pid": pid, "job_dir": toks[i + 1], "attempt": int(toks[i + 2])})
+                    except ValueError:
+                        pass
+                break
+    return out

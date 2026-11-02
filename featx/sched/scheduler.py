@@ -51,15 +51,20 @@ class Scheduler:
         self.last_tick = 0.0
         self._progress_at: dict[tuple[str, str], float] = {}
         self._saved_at: dict[str, float] = {}
-        # (host, job dir, attempt, deadline): launches that completed after their job was cancelled
-        self._orphans: list[tuple[str, Path, int, float]] = []
+        # {host, job_dir, attempt, deadline}: launches that may still start after their job was
+        # cancelled, failed, or never started — kill them once they show a pid.
+        self._orphans: list[dict] = []
         # ssh work is queued under the lock and done without it (a 125-point cancel or a host
         # full of stale heartbeats meant minutes of serial sshs that froze the API and the UI)
-        self._kills: list[tuple[str, int, str]] = []                     # (host, pid, signal)
+        self._kills: list[dict] = []       # {id, host, pid, signal, queued}
+        self._kill_seq = 0
+        self._pending_path = config.root() / "sched-pending.json"
         self._suspects: dict[tuple[str, str, int], tuple[str, int]] = {}  # job key -> (host, pid)
         self._alive: dict[tuple[str, str, int], bool | None] = {}         # job key -> probe result
         self._ssh_lock = threading.Lock()
+        self._reap_at = 0.0
         self._readopt()
+        self._load_pending()
 
     def _readopt(self) -> None:
         """Daemon (re)start: jobs kept running without us; restart the liveness clocks so
@@ -98,8 +103,45 @@ class Scheduler:
     def max_build_cores(self) -> int:
         return int(config.settings()["placement"].get("max_build_cores") or 0)
 
+    def _load_pending(self) -> None:
+        """Kills and orphan watches survived a daemon restart: a kill for an unreachable host or
+        a launch that starts after it was reported failed must not be forgotten."""
+        data = store.read_json(self._pending_path, {})
+        for k in data.get("kills") or []:
+            try:
+                kid = int(k["id"])
+                self._kills.append({"id": kid, "host": str(k["host"]), "pid": int(k["pid"]),
+                                    "signal": str(k.get("signal") or "TERM"),
+                                    "queued": float(k.get("queued") or 0)})
+                self._kill_seq = max(self._kill_seq, kid)
+            except (KeyError, TypeError, ValueError):
+                continue
+        for o in data.get("orphans") or []:
+            try:
+                self._orphans.append({"host": str(o["host"]), "job_dir": Path(o["job_dir"]),
+                                      "attempt": int(o["attempt"]), "deadline": float(o["deadline"])})
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    def _save_pending(self) -> None:
+        store.write_json(self._pending_path, {
+            "kills": self._kills,
+            "orphans": [{"host": o["host"], "job_dir": str(o["job_dir"]), "attempt": o["attempt"],
+                         "deadline": o["deadline"]} for o in self._orphans]})
+
     def _queue_kill(self, host: str, pid: str | int, signal: str = "TERM") -> None:
-        self._kills.append((host, int(pid), signal))
+        self._kill_seq += 1
+        self._kills.append({"id": self._kill_seq, "host": host, "pid": int(pid), "signal": signal,
+                            "queued": _now()})
+        self._save_pending()
+
+    def _register_orphan(self, host: str, jdir: Path, attempt: int) -> None:
+        """Watch a launch that was reported failed (or never started): if it starts after all,
+        kill it once it writes a pid."""
+        watch = float(config.settings()["liveness"]["orphan_watch"])
+        self._orphans.append({"host": host, "job_dir": Path(jdir), "attempt": int(attempt),
+                              "deadline": _now() + watch})
+        self._save_pending()
 
     def _do_ssh_work(self, blocking: bool = True) -> None:
         """Run the queued kills and liveness probes, one ssh per host, hosts in parallel.
@@ -109,13 +151,17 @@ class Scheduler:
             return
         try:
             with self.lock:
-                kills, self._kills = self._kills, []
+                kills = list(self._kills)
+                newest = max((k["id"] for k in kills), default=0)
                 suspects, self._suspects = self._suspects, {}
             if not kills and not suspects:
                 return
             work: dict[tuple[str, str], list[int]] = {}
-            for host, pid, sig in kills:
-                work.setdefault(("kill:" + sig, host), []).append(pid)
+            kill_ids: dict[tuple[str, str], list[int]] = {}
+            for k in kills:
+                key = ("kill:" + k["signal"], k["host"])
+                work.setdefault(key, []).append(k["pid"])
+                kill_ids.setdefault(key, []).append(k["id"])
             for host, pid in suspects.values():
                 work.setdefault(("alive", host), []).append(pid)
 
@@ -128,12 +174,20 @@ class Scheduler:
             with ThreadPoolExecutor(max_workers=16) as pool:
                 results = list(pool.map(one, work.items()))
             alive: dict[tuple[str, int], bool | None] = {}
+            unreachable: set[int] = set()
             for ((what, host), _), (_, res) in zip(work.items(), results):
                 if what == "alive":
                     alive.update({(host, pid): v for pid, v in res.items()})
+                elif not res:
+                    # The host did not take the kill (unreachable): keep it for the next tick.
+                    unreachable.update(kill_ids.get((what, host), []))
             with self.lock:
                 for key, (host, pid) in suspects.items():
                     self._alive[key] = alive.get((host, pid))
+                cutoff = _now() - float(config.settings()["liveness"]["kill_retry_hours"]) * 3600
+                self._kills = [k for k in self._kills
+                               if k["id"] > newest or (k["id"] in unreachable and k["queued"] >= cutoff)]
+                self._save_pending()
         finally:
             self._ssh_lock.release()
 
@@ -413,14 +467,25 @@ class Scheduler:
         with self.lock:
             need_launch = self._tick_locked()
         self._do_ssh_work()
+        self._reap_due()
         if need_launch:
             self._launch_queued()
+
+    def _reap_due(self) -> None:
+        interval = float(config.settings()["liveness"].get("reap_interval") or 0)
+        if interval <= 0 or _now() < self._reap_at:
+            return
+        self._reap_at = _now() + interval
+        try:
+            self.reap(apply=True)
+        except Exception as error:  # noqa: BLE001 — a scan must not stop the tick loop
+            self.tick_errors = (self.tick_errors + [f"reap: {error!r}"] )[-20:]
 
     def _tick_locked(self) -> bool:
         """Poll/materialize under the lock; True if some job waits for a launch."""
         self.last_tick = _now()
         self._reap_orphans()
-        active = [t for t in self.tasks.values() if t.state in ACTIVE_TASK_STATES and not t.blocked]
+        active = [t for t in self.tasks.values() if t.state in ACTIVE_TASK_STATES]
         if not active:
             return False
         tree = self._tree()
@@ -428,9 +493,13 @@ class Scheduler:
         for task in sorted(active, key=launch_order):
             try:
                 if task.state == "queued":
+                    if task.blocked:
+                        continue
                     dep = self._deps_state(task)
-                    note = {"wait": "waiting for dependencies", "broken": "blocked: a dependency failed",
-                            "ok": ""}[dep]
+                    if dep == "broken":
+                        self._cancel_dependency(tree, task)
+                        continue
+                    note = "waiting for dependencies" if dep == "wait" else ""
                     if task.note != note:
                         task.note = note
                         self._save(task)
@@ -440,7 +509,8 @@ class Scheduler:
                     self._save(task)
                 if task.state == "running":
                     self._poll(tree, task)
-                    need_launch |= any(j.state == "queued" for j in task.jobs)
+                    if not task.blocked:
+                        need_launch |= any(j.state == "queued" for j in task.jobs)
             except Exception as error:  # noqa: BLE001 — one bad task must not stop the loop
                 msg = f"{task.id}: {error!r}"
                 self.tick_errors = (self.tick_errors + [msg + "\n" + traceback.format_exc()])[-20:]
@@ -451,6 +521,26 @@ class Scheduler:
                     self.inbox.emit("failure", task=task.id, kind=task.kind, node=self._rel(tree, task),
                                     runset=task.runset_name, signature=task.failure["signature"])
         return need_launch
+
+    def _broken_dep(self, task: Task) -> tuple[str, str]:
+        """The first dependency that failed/was cancelled (kind, id) — the reason for the cancel."""
+        for dep in task.after:
+            t = self.tasks.get(dep)
+            if t is None or t.state in ("failed", "cancelled"):
+                return (t.kind if t else "task"), dep
+        return "task", (task.after[0] if task.after else "?")
+
+    def _cancel_dependency(self, tree: Tree, task: Task) -> None:
+        """A queued task whose dependency failed becomes cancelled instead of sitting in the queue
+        forever (it pinned binaries against gc, blocked `node mv` and kept the runset unsealed).
+        The cascade is transitive on its own: the next tick sees this cancel break its own
+        dependents. A relaunch of the upstream task revives it."""
+        kind, dep = self._broken_dep(task)
+        task.state, task.finished, task.cancelled_by = "cancelled", _now(), dep
+        task.note = f"dependency {kind} {dep[:12]} failed"
+        self._save(task)
+        self.inbox.emit("cancelled", task=task.id, kind=task.kind, node=self._rel(tree, task),
+                        runset=task.runset_name, reason="dependency", dependency=dep)
 
     def _rel(self, tree: Tree, task: Task) -> str:
         try:
@@ -481,10 +571,13 @@ class Scheduler:
                     # Cancelled (maybe already relaunched) while the ssh was in flight: the job
                     # had no pid to kill then, so kill the started attempt once it writes one.
                     if ok:
-                        self._orphans.append((host, jdir, attempt, now + grace))
+                        self._register_orphan(host, jdir, attempt)
                     continue
                 job.host, job.launched = host, now
                 if not ok:
+                    # An ssh timeout can be reported before the remote shell runs: watch for a late
+                    # start and kill it.
+                    self._register_orphan(host, jdir, attempt)
                     self._job_failed(tree, task, job, None, err)
             for task in {id(t): t for t, *_ in todo}.values():
                 self._refresh_task_state(tree, task)
@@ -492,13 +585,100 @@ class Scheduler:
 
     def _reap_orphans(self) -> None:
         keep = []
-        for host, jdir, attempt, deadline in self._orphans:
-            st = executor.read_state(jdir, attempt)
+        for o in self._orphans:
+            st = executor.read_state(o["job_dir"], o["attempt"])
             if st.get("pid") and "exit_code" not in st:
-                self._queue_kill(host, st["pid"])
-            elif "exit_code" not in st and _now() < deadline:
-                keep.append((host, jdir, attempt, deadline))
-        self._orphans = keep
+                self._queue_kill(o["host"], st["pid"])
+            elif "exit_code" not in st and _now() < o["deadline"]:
+                keep.append(o)
+        if len(keep) != len(self._orphans):
+            self._orphans = keep
+            self._save_pending()
+
+    # ----------------------------------------------------------------- reap
+    def _job_index(self) -> dict[str, tuple[Task, Job]]:
+        tree = self._tree()
+        out: dict[str, tuple[Task, Job]] = {}
+        for task in self.tasks.values():
+            for job in task.jobs:
+                try:
+                    jdir = self._job_dir(tree, task, job)
+                except (TreeError, OSError):
+                    continue
+                out[str(jdir)] = (task, job)
+                try:
+                    out[str(jdir.resolve())] = (task, job)
+                except OSError:
+                    pass
+        return out
+
+    def reap(self, *, apply: bool = False) -> dict:
+        """Find this root's `featx-exec <jdir> <attempt>` processes whose job is no longer active
+        (or whose attempt is stale), one ssh per host. Dry run unless apply: then kill the whole
+        session of each confirmed orphan and emit an `orphan` event. The daemon calls it at start
+        and every liveness.reap_interval; `featx reap --apply` is the manual version."""
+        self.placement.refresh()
+        hosts = sorted({h["host"] for h in self.placement.snapshot(self.jobs_per_host())})
+        root_paths = {str(config.root()), str(config.root().resolve())}
+
+        def under_root(jdir: str) -> bool:
+            try:
+                return any(jdir == p or jdir.startswith(p.rstrip("/") + "/") for p in root_paths) or \
+                    str(Path(jdir).resolve()).startswith(str(config.root().resolve()).rstrip("/") + "/")
+            except OSError:
+                return False
+
+        def one(host: str):
+            return host, executor.list_exec(host)
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            results = list(pool.map(one, hosts))
+        with self.lock:
+            index = self._job_index()
+        tree = self._tree()
+        rows: list[dict] = []
+        kills: dict[str, list[int]] = {}
+        for host, procs in results:
+            if procs is None:
+                rows.append({"host": host, "error": "unreachable"})
+                continue
+            for p in procs:
+                jdir = str(p["job_dir"])
+                if not under_root(jdir):
+                    continue
+                task, job = index.get(jdir) or index.get(str(Path(jdir).resolve())) or (None, None)
+                if task is None or job is None:
+                    why = "job not found"
+                elif job.state not in JOB_ACTIVE:
+                    why = f"job {job.state}"
+                elif job.attempt != int(p["attempt"]):
+                    why = f"attempt {p['attempt']} is not current ({job.attempt})"
+                else:
+                    why = ""
+                rows.append({"host": host, "pid": int(p["pid"]), "job_dir": jdir, "attempt": int(p["attempt"]),
+                             "task": task.id if task else None, "job": job.name if job else None,
+                             "node": self._rel(tree, task) if task else None,
+                             "runset": task.runset_name if task else None,
+                             "active": not why, "reason": why})
+                if why:
+                    kills.setdefault(host, []).append(int(p["pid"]))
+        ok_hosts: set[str] = set()
+        if apply and kills:
+            def kill_one(item):
+                host, pids = item
+                return host, executor.kill_many(host, pids)
+
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                ok_hosts = {h for h, ok in pool.map(kill_one, kills.items()) if ok}
+        for row in rows:
+            if apply and row.get("reason") and row["host"] in ok_hosts:
+                row["killed"] = True
+                self.inbox.emit("orphan", host=row["host"], pid=row["pid"], job_dir=row["job_dir"],
+                                attempt=row["attempt"], task=row["task"], job=row["job"],
+                                node=row["node"], runset=row["runset"], reason=row["reason"])
+        orphans = [r for r in rows if r.get("reason")]
+        return {"applied": apply, "hosts": hosts, "scanned": len(rows), "orphans": len(orphans),
+                "killed": sum(1 for r in orphans if r.get("killed")), "processes": rows}
 
     def _reserve_launches(self, tree: Tree) -> list[tuple[Task, Job, str, Path, int]]:
         """Pick hosts for queued jobs (at most placement.max_launches_per_tick) and write their
@@ -510,7 +690,8 @@ class Scheduler:
         # Priority, then FIFO, applies within each budget; queued runs must not block builds.
         core_full = {kind: False for kind in core_caps}
         starts: list[tuple[Task, Job, str]] = []
-        for task in sorted((t for t in self.tasks.values() if t.state == "running"), key=launch_order):
+        for task in sorted((t for t in self.tasks.values() if t.state == "running" and not t.blocked),
+                           key=launch_order):
             pool = "build" if task.kind == "build" else "run"
             core_cap = core_caps[pool]
             limit = task.spec.get("max_parallel")
@@ -643,6 +824,8 @@ class Scheduler:
                     job.hb_value, job.hb_seen = st.get("heartbeat"), now
                     changed = True
                 elif now - (job.launched or now) > live["launch_grace"]:
+                    # "Never started" may still start late (a slow host, a queued ssh): watch it.
+                    self._register_orphan(job.host, jdir, job.attempt)
                     self._job_failed(tree, task, job, None, "featx: launch failed: job never started")
                     changed = True
                 continue
@@ -813,8 +996,8 @@ class Scheduler:
         raise SchedError(f"no such task: {ref}" if not hits else f"ambiguous task prefix {ref}")
 
     def cancel(self, ref: str, jobs: list[str] | None = None) -> dict:
-        """Cancel some jobs, or (jobs=None) the whole task plus the not-yet-started tasks
-        that depend on it."""
+        """Cancel some jobs, or (jobs=None) the whole task plus every queued task that depends on
+        it, directly or transitively."""
         with self.lock:
             task = self.get(ref)
             tree = self._tree()
@@ -823,16 +1006,30 @@ class Scheduler:
             if not jobs:
                 if task.state in ACTIVE_TASK_STATES:   # queued (no jobs yet) or emptied running
                     task.state, task.finished, task.note = "cancelled", _now(), "cancelled"
-                for other in self.tasks.values():
-                    if task.id in other.after and other.state == "queued":
-                        other.state, other.finished, other.note = "cancelled", _now(), f"cancelled with {task.id[:12]}"
-                        self._save(other)
-                        cascaded.append(other.id)
+                cascaded = self._cancel_queued_dependents(task)
             self._save(task)
             self.inbox.emit("cancelled", task=task.id, node=self._rel(tree, task), runset=task.runset_name,
                             jobs=jobs, dependents=cascaded)
             out = {"task": task.id, "cancelled_jobs": n, "state": task.state, "dependents": cascaded}
         self._do_ssh_work(blocking=False)   # the kills, without the lock (else the next tick)
+        return out
+
+    def _cancel_queued_dependents(self, root: Task) -> list[str]:
+        """Every queued dependent, not just the direct ones. cancelled_by names the task the user
+        cancelled, so relaunching it revives exactly the cascade it caused."""
+        out, seen, queue = [], {root.id}, [root.id]
+        while queue:
+            current = queue.pop()
+            for other in self.tasks.values():
+                if other.id in seen or current not in other.after or other.state != "queued":
+                    continue
+                seen.add(other.id)
+                other.state, other.finished = "cancelled", _now()
+                other.cancelled_by = root.id
+                other.note = f"cancelled with {root.id[:12]}"
+                self._save(other)
+                out.append(other.id)
+                queue.append(other.id)
         return out
 
     def _cancel_jobs(self, tree: Tree, task: Task, jobs: list[str] | None) -> int:
@@ -890,18 +1087,33 @@ class Scheduler:
                 task.state = "queued"
             elif targets:
                 task.state = "running"
-            task.failure, task.finished = None, None
-            # Dependents that were blocked by this task's failure resume automatically.
-            for other in self.tasks.values():
-                if task.id in other.after and other.state == "failed" and not other.jobs:
-                    other.state, other.failure = "queued", None
-                    self._save(other)
+            task.failure, task.finished, task.cancelled_by = None, None, None
+            # Dependents auto-cancelled by this task's failure resume automatically (transitively);
+            # ones cancelled by a human keep their state.
+            revived = self._revive_cancelled_dependents(task)
             self._unseal(tree, task)
             self._save(task)
             self.inbox.emit("relaunched", task=task.id, node=self._rel(tree, task), runset=task.runset_name,
                             jobs=[j.name for j in targets], reason=reason)
             return {"task": task.id, "requeued": [j.name for j in targets], "state": task.state,
-                    "design_relaunches": task.design_relaunches}
+                    "design_relaunches": task.design_relaunches, "revived": revived}
+
+    def _revive_cancelled_dependents(self, root: Task) -> list[str]:
+        out, seen, queue = [], {root.id}, [root.id]
+        while queue:
+            current = queue.pop()
+            for other in self.tasks.values():
+                if other.id in seen or current not in other.after or other.state != "cancelled":
+                    continue
+                if not other.cancelled_by or other.jobs:
+                    continue
+                seen.add(other.id)
+                other.state, other.cancelled_by, other.note = "queued", None, ""
+                other.failure, other.finished = None, None
+                self._save(other)
+                out.append(other.id)
+                queue.append(other.id)
+        return out
 
     def _unseal(self, tree: Tree, task: Task) -> None:
         entry = tree.get(task.node_id)
@@ -970,6 +1182,7 @@ class Scheduler:
         out = {"id": task.id, "kind": task.kind, "node": self._rel(tree, task), "runset": task.runset_name,
                "state": task.state, "note": task.note, "after": task.after, "counts": task.counts(),
                "failure": task.failure, "created": task.created, "blocked": task.blocked,
+               "cancelled_by": task.cancelled_by,
                "priority": task.priority,
                "design_relaunches": task.design_relaunches, "outputs": task.outputs,
                "eta_s": self.task_eta(task)}
@@ -1028,11 +1241,16 @@ class Scheduler:
         return max(running, default=0.0) + (sum(queued) / slots if queued else 0.0)
 
     def list_tasks(self, *, active_only: bool = False, node_prefix: str | None = None,
-                   limit: int = 200) -> list[dict]:
+                   states: list[str] | None = None, limit: int = 200) -> list[dict]:
+        """`states` filters by state; the pseudo-state "blocked" means task.blocked or a dependency
+        failure cancelled it (cancelled_by set)."""
+        wanted = {s.strip() for s in states or [] if s and s.strip()}
         tree = self._tree()
         out = []
         for t in sorted(self.tasks.values(), key=lambda t: t.created, reverse=True):
             if active_only and t.state not in ACTIVE_TASK_STATES:
+                continue
+            if wanted and not (t.state in wanted or ("blocked" in wanted and (t.blocked or t.cancelled_by))):
                 continue
             v = self.task_view(t, tree)
             if node_prefix and not v["node"].startswith(node_prefix):

@@ -86,7 +86,9 @@ def test_design_failure_event_and_relaunch_guard(root, fake_emu):
     assert fails[0]["job"] == "abort_1_0.5" and "TraceRTL Error" in fails[0]["tail"]
     assert s.tasks[run_id].failure["signatures"] == {"TraceRTL Error at inst 77": 1}
     s.tick()
-    assert s.tasks[post_id].state == "queued" and "dependency failed" in s.tasks[post_id].note
+    # the dependency failure now cancels the dependent instead of leaving it queued forever
+    assert s.tasks[post_id].state == "cancelled" and s.tasks[post_id].cancelled_by == run_id
+    assert s.tasks[post_id].note == f"dependency run {run_id[:12]} failed"
 
     with pytest.raises(SchedError, match="problem-analysis"):
         s.relaunch(run_id)

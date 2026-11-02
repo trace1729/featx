@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import params as params_mod
 from . import recipes, store, taskstore, worktree
 from .tree import Entry, Tree
 
@@ -18,7 +19,9 @@ def node_summary(entry: Entry) -> dict:
 def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
     rdir = entry.dir / rs.name
     out = {"ref": f"{entry.rel}/{rs.name}", "id": rs.id, "purpose": rs.purpose, "created": rs.created,
-           "sealed": rs.sealed, "derived_from": rs.derived_from, "dir": str(rdir), "tasks": []}
+           "sealed": rs.sealed, "derived_from": rs.derived_from, "dir": str(rdir), "tasks": [],
+           "archived": rs.archived, "archived_at": rs.archived_at, "archive_note": rs.archive_note,
+           "overrides": rs.overrides, "params": params_mod.stage_params(rs.recipes, rs.bin)}
     for tid in rs.tasks:
         t = tasks.get(tid)
         if t:
@@ -39,11 +42,15 @@ def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
     return out
 
 
-def build(tree: Tree, entry: Entry, *, max_runsets: int = 3) -> dict:
+def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: bool = False,
+          archived_only: bool = False) -> dict:
     tasks = taskstore.load_all()
     scripts_dir = entry.dir / "scripts"
     scripts = sorted(p.name for p in scripts_dir.iterdir()) if scripts_dir.is_dir() else []
-    runsets = tree.runsets(entry)
+    all_runsets = tree.runsets(entry)
+    archived = [rs for rs in all_runsets if rs.archived]
+    runsets = [rs for rs in all_runsets if rs.archived] if archived_only else (
+        all_runsets if include_archived else [rs for rs in all_runsets if not rs.archived])
     return {
         "node": node_summary(entry),
         "dir": str(entry.dir),
@@ -57,6 +64,8 @@ def build(tree: Tree, entry: Entry, *, max_runsets: int = 3) -> dict:
         "scripts": scripts,
         "runsets": [runset_summary(entry, rs, tasks) for rs in runsets[-max_runsets:]],
         "runset_count": len(runsets),
+        "archived_count": len(archived),
+        "archived_runsets": [f"{entry.rel}/{rs.name}" for rs in archived[-max_runsets:]],
     }
 
 

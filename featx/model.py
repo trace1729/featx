@@ -120,6 +120,7 @@ class Task(BaseModel):
     design_relaunches: int = 0
     max_design_relaunches: int = 3
     blocked: bool = False
+    cancelled_by: str | None = None   # upstream task whose failure auto-cancelled this one
     note: str = ""
     priority: int = 0         # higher launches first; FIFO by `created` within a priority
 

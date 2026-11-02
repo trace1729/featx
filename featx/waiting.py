@@ -33,6 +33,13 @@ def wait_tasks(client, tasks: list[str], timeout: float = 86400) -> dict:
 
         for tid in list(pending):
             current = view(tid)
+            if current["state"] == "cancelled" and current.get("cancelled_by"):
+                # Auto-cancelled because a dependency failed: report it as blocked (what a wait on
+                # this task did while it sat in the queue), not as a plain cancelled finish.
+                failures = failed_dependencies(current["cancelled_by"], {tid}) or [current["cancelled_by"]]
+                blocked[tid] = {**current, "failed_dependencies": sorted(set(failures))}
+                pending.remove(tid)
+                continue
             if current["state"] in TERMINAL_TASK_STATES:
                 finished[tid] = current
                 pending.remove(tid)

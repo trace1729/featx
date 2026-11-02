@@ -236,9 +236,11 @@ def build_app(d: Daemon) -> "FastAPI":
                             priority=int(body.get("priority") or 0))
 
     @app.get("/tasks")
-    def tasks(active: bool = False, node: str | None = None, limit: int = 200):
+    def tasks(active: bool = False, node: str | None = None, state: str | None = None,
+              limit: int = 200):
         with sched.lock:
-            return sched.list_tasks(active_only=active, node_prefix=node, limit=limit)
+            return sched.list_tasks(active_only=active, node_prefix=node,
+                                    states=state.split(",") if state else None, limit=limit)
 
     @app.get("/tasks/{tid}")
     def task(tid: str, spec: bool = False):
@@ -279,6 +281,10 @@ def build_app(d: Daemon) -> "FastAPI":
     @app.post("/tasks/{tid}/unblock")
     def unblock(tid: str, body: dict = Body(default={})):
         return sched.unblock(tid, int(body.get("extra", 1)))
+
+    @app.post("/reap")
+    def reap(body: dict = Body(default={})):
+        return sched.reap(apply=bool(body.get("apply", False)))
 
     @app.get("/eta")
     def eta_view():
