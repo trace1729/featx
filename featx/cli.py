@@ -291,13 +291,20 @@ def script_show(ref: str, name: str):
 
 
 # ================================================================== submit
-def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after, priority=0):
-    overrides: dict = {}
+def _overrides(set_) -> dict:
+    """--set kind.key=value items -> {kind: {...}}; a null value stays (it deletes the inherited
+    key at submit), which merging one item at a time would drop."""
+    by_kind: dict = {}
     for item in set_ or []:
         kind, dot, rest = item.partition(".")
         if kind not in KINDS or not dot:
             fail(f"--set must look like run.W=1000000 (got {item!r})")
-        overrides = config.deep_merge(overrides, {kind: parse_kv([rest])})
+        by_kind.setdefault(kind, []).append(rest)
+    return {kind: parse_kv(items) for kind, items in by_kind.items()}
+
+
+def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after, priority=0):
+    overrides = _overrides(set_)
     body = {"node": node, "kinds": kinds, "runset": runset, "purpose": purpose, "overrides": overrides,
             "bin": bin_, "points": points or None, "post_steps": steps or None, "after": after or None,
             "priority": priority}
@@ -403,10 +410,7 @@ def task_resubmit(tid: str, all_points: bool = typer.Option(False, "--all-points
                   set_: List[str] = typer.Option([], "--set", help=SUBMIT_HELP),
                   force: bool = typer.Option(False), purpose: str = typer.Option("", "-m")):
     """New runset derived from this task's runset (recipes re-resolved, e.g. after a fix)."""
-    overrides: dict = {}
-    for item in set_:
-        kind, _, rest = item.partition(".")
-        overrides = config.deep_merge(overrides, {kind: parse_kv([rest])})
+    overrides = _overrides(set_)
     out(client().post(f"/tasks/{tid}/resubmit", {"only_failed": not all_points, "overrides": overrides,
                                                  "force": force, "purpose": purpose}))
 

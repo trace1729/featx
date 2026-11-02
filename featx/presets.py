@@ -2,6 +2,9 @@
 
 build:  tool    gsim | verilator | script      (legacy `type: gsim-two-step|script` still works)
         mode    trace | exec                   -> TRACERTL_MODE=1|0
+        pipeline difftest | tracertl           tracertl (trace mode, gsim/verilator): the emu is
+                 built by TraceRTL's own entry, `make -C TraceRTL MODE=xiangshan SIM=<tool> emu`,
+                 on top of the unmodified difftest (type tracertl-gsim|tracertl-verilator)
         options {chiseldb, chiselmap, constantin, dramsim3, threads, optimize, flags, extra}
                 -> the make variables of every make call; the raw gsim.step1_args /
                    gsim.step2_args / verilator.args come after them, so they win.
@@ -36,7 +39,10 @@ MODES = ("trace", "exec")
 TOOLS = ("gsim", "verilator", "script")
 LEGACY_TYPES = {"gsim-two-step": "gsim"}
 TOOL_TYPES = {"gsim": "gsim-two-step", "verilator": "verilator", "script": "script"}
-PRESET_KEYS = ("tool", "mode", "options")
+PIPELINES = ("difftest", "tracertl")
+TRACERTL_TYPES = {"gsim": "tracertl-gsim", "verilator": "tracertl-verilator"}
+BUILD_TYPES = tuple(TOOL_TYPES.values()) + tuple(TRACERTL_TYPES.values())
+PRESET_KEYS = ("tool", "mode", "options", "pipeline")
 
 
 class PresetError(ValueError):
@@ -72,12 +78,25 @@ def build_mode(spec: dict) -> str:
     return mode
 
 
+def build_pipeline(spec: dict) -> str:
+    pipeline = spec.get("pipeline") or "difftest"
+    if pipeline not in PIPELINES:
+        raise PresetError(f"build.pipeline must be one of {'|'.join(PIPELINES)}, got {pipeline!r}")
+    if pipeline == "tracertl":
+        if build_tool(spec) not in TRACERTL_TYPES:
+            raise PresetError(f"build.pipeline=tracertl needs build.tool gsim|verilator, got {build_tool(spec)!r}")
+        if build_mode(spec) != "trace":
+            raise PresetError("build.pipeline=tracertl builds the trace emu only; use build.mode=trace")
+    return pipeline
+
+
 def _bit(value) -> int:
     return 1 if value in (True, 1, "1", "true", "yes", "on") else 0
 
 
 def make_flags(spec: dict, step: str) -> str:
-    """Make variables for one make call: step1 (make gsim), step2 (difftest emu) or verilator."""
+    """Make variables for one make call: step1 (make gsim), step2 (difftest emu), verilator or
+    tracertl (TraceRTL's xiangshan.mk, which always elaborates with --trace-rtl)."""
     o = spec.get("options") or {}
     mode = 1 if build_mode(spec) == "trace" else 0
     threads, opt = o.get("threads", 1), shlex.quote(str(o.get("optimize", "-O3")))
@@ -93,6 +112,10 @@ def make_flags(spec: dict, step: str) -> str:
                  f"WITH_CONSTANTIN={cst}", f"EMU_OPTIMIZE={opt}"]
     elif step == "verilator":
         parts = ["NUM_CORES=1", "RTL_SUFFIX=sv", f"TRACERTL_MODE={mode}", f"WITH_DRAMSIM3={dram}",
+                 f"WITH_CONSTANTIN={cst}", f"WITH_CHISELDB={db}", f"EMU_THREADS={threads}",
+                 f"EMU_OPTIMIZE={opt}"]
+    elif step == "tracertl":
+        parts = [f"SIM={build_tool(spec)}", "NUM_CORES=1", f"WITH_DRAMSIM3={dram}",
                  f"WITH_CONSTANTIN={cst}", f"WITH_CHISELDB={db}", f"EMU_THREADS={threads}",
                  f"EMU_OPTIMIZE={opt}"]
     else:
@@ -116,9 +139,13 @@ def lower_build(spec: dict) -> dict:
     """tool/mode/options -> type + concrete make args. Call once, at submit."""
     spec = copy.deepcopy(spec)
     tool = build_tool(spec)
-    spec["tool"], spec["mode"] = tool, build_mode(spec)
+    spec["tool"], spec["mode"], spec["pipeline"] = tool, build_mode(spec), build_pipeline(spec)
     spec["type"] = TOOL_TYPES[tool]
-    if tool == "gsim":
+    if spec["pipeline"] == "tracertl":
+        spec["type"] = TRACERTL_TYPES[tool]
+        t = spec.setdefault("tracertl", {})
+        t["make_args"] = _join(make_flags(spec, "tracertl"), t.get("args"))
+    elif tool == "gsim":
         g = spec.setdefault("gsim", {})
         g["step1_args"] = _join(make_flags(spec, "step1"), g.get("step1_args"))
         g["step2_args"] = _join(make_flags(spec, "step2"), g.get("step2_args"))
@@ -131,9 +158,13 @@ def lower_build(spec: dict) -> dict:
 def key_recipe(spec: dict) -> dict:
     """The recipe part of the bincache key: without the preset keys (the lowered args carry
     them) and without the verilator section unless it is the tool (gsim/script builds keep
-    the key they had before verilator support; a verilator build ignores the gsim section)."""
+    the key they had before verilator support; a verilator build ignores the gsim section).
+    The tracertl section only counts for the tracertl pipeline, next to its tool's section."""
     drop = set(PRESET_KEYS)
-    drop.add("gsim" if spec.get("type") == "verilator" else "verilator")
+    kind = spec.get("type")
+    drop.add("gsim" if kind in ("verilator", "tracertl-verilator") else "verilator")
+    if kind not in TRACERTL_TYPES.values():
+        drop.add("tracertl")
     return {k: v for k, v in spec.items() if k not in drop}
 
 

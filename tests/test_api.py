@@ -86,3 +86,11 @@ def test_perf_keys_script(tmp_path):
     assert abs(s["new.mean_err_pct"] - 10.0) < 1e-6
     assert abs(s["ref.ipc_geomean"] - 0.5) < 1e-9
     assert "missing" in (out / "report.md").read_text()
+
+
+def test_set_overrides_keep_null():
+    # a null deletes the inherited key at submit: it must survive later --set items of its kind
+    o = cli._overrides(["run.W=0", "run.coverage=null", "run.exec.diff=/n", "run.exec.gcpt_restorer=/g",
+                        "build.cache=false"])
+    assert o == {"run": {"W": 0, "coverage": None, "exec": {"diff": "/n", "gcpt_restorer": "/g"}},
+                 "build": {"cache": False}}

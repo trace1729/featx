@@ -42,6 +42,10 @@ else:
 '''
 
 
+def _join_args(*args) -> str:
+    return " ".join(str(a).strip() for a in args if a and str(a).strip())
+
+
 def _exports(env: dict) -> str:
     return "".join(f"export {k}={shlex.quote(str(v))}\n" for k, v in (env or {}).items())
 
@@ -66,6 +70,23 @@ def build_script(task_id: str, spec: dict) -> str:
         out.append('echo "== make emu (verilator) $(date)"\n')
         out.append(f"{timeout}make emu -j{v.get('jobs', 64)} {ds} {v.get('make_args', '')}\n")
         out.append('rc=$?\necho "== make emu rc=$rc $(date)"\n[ $rc -eq 0 ] || exit $rc\n')
+    elif spec.get("type") in ("tracertl-gsim", "tracertl-verilator"):
+        # TraceRTL's own build entry: elaborate with --trace-rtl and build its harness over the
+        # unmodified difftest (TraceRTL/xiangshan.mk)
+        tool = spec.get("tool") or spec["type"].split("-", 1)[1]
+        sec, t = spec.get(tool) or {}, spec.get("tracertl") or {}
+        if tool == "verilator" and sec.get("bin_dir"):
+            out.append(f"export PATH={shlex.quote(str(sec['bin_dir']))}:$PATH\n")
+        paths = f"DRAMSIM3_HOME={shlex.quote(str(sec.get('dramsim3_home')))}" if sec.get("dramsim3_home") else ""
+        if tool == "gsim":
+            paths = _join_args(f"GSIM_BIN={shlex.quote(str(sec.get('gsim_bin')))}", paths)
+        tdir = shlex.quote(str(t.get("dir") or "TraceRTL"))
+        # a stale emu must not pass for this build's artifact
+        out.append("rm -f build/emu build/gsim-compile/emu\n")
+        out.append(f'echo "== make -C {tdir} MODE=xiangshan SIM={tool} emu $(date)"\n')
+        out.append(f"{timeout}make -C {tdir} MODE=xiangshan emu -j{sec.get('jobs', 64)} NOOP_HOME=\"$PWD\" "
+                   f"{_join_args(paths, t.get('make_args', ''))}\n")
+        out.append('rc=$?\necho "== tracertl emu rc=$rc $(date)"\n[ $rc -eq 0 ] || exit $rc\n')
     elif spec.get("type") == "script":
         body = spec.get("script") or ""
         out.append(f"cat > \"$FX_DIR/build-body.sh\" <<'FXEOF'\n{body}\nFXEOF\n")

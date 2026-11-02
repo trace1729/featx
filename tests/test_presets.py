@@ -84,6 +84,38 @@ def test_verilator_build_script(migrated):
     assert "gsim" not in presets.key_recipe(spec) and "verilator" in presets.key_recipe(spec)
 
 
+def test_tracertl_pipeline_build_script(migrated):
+    spec = _build({"pipeline": "tracertl", "options": {"threads": 4}, "tracertl": {"args": "XS_SIM_ARGS=x"}})
+    assert spec["type"] == "tracertl-gsim"
+    assert spec["tracertl"]["make_args"] == ("SIM=gsim NUM_CORES=1 WITH_DRAMSIM3=1 WITH_CONSTANTIN=0 "
+                                             "WITH_CHISELDB=0 EMU_THREADS=4 EMU_OPTIMIZE=-O3 XS_SIM_ARGS=x")
+    assert "step1_args" not in spec["gsim"] or "TRACERTL_MODE" not in spec["gsim"]["step1_args"]
+    spec["workdir"] = "/wd"
+    script = jobs.build_script("T", spec)
+    assert "rm -f build/emu build/gsim-compile/emu" in script
+    assert 'make -C TraceRTL MODE=xiangshan emu -j64 NOOP_HOME="$PWD" GSIM_BIN=/nfs/share/bin/gsim' in script
+    assert "make gsim" not in script and "make -C difftest" not in script
+    key = presets.key_recipe(spec)
+    assert "tracertl" in key and "gsim" in key and "verilator" not in key
+    # a different pipeline is a different binary; the difftest key ignores the tracertl section
+    assert key != presets.key_recipe(_build())
+    assert "tracertl" not in presets.key_recipe(_build({"tracertl": {"args": "Y=1"}}))
+
+    vspec = _build({"pipeline": "tracertl", "tool": "verilator"})
+    assert vspec["type"] == "tracertl-verilator" and vspec["tracertl"]["make_args"].startswith("SIM=verilator ")
+    vspec["workdir"] = "/wd"
+    vscript = jobs.build_script("T", vspec)
+    assert "export PATH=/opt/verilator/bin:$PATH" in vscript and "GSIM_BIN" not in vscript
+    assert "gsim" not in presets.key_recipe(vspec) and "verilator" in presets.key_recipe(vspec)
+
+    with pytest.raises(presets.PresetError, match="build.mode=trace"):
+        _build({"pipeline": "tracertl", "mode": "exec"})
+    with pytest.raises(presets.PresetError, match="gsim\\|verilator"):
+        _build({"pipeline": "tracertl", "tool": "script", "script": "true"})
+    with pytest.raises(presets.PresetError, match="build.pipeline"):
+        _build({"pipeline": "nope"})
+
+
 def test_legacy_type_and_bad_tool(root):
     Tree().add("t/b", parents=True)
     service.recipe_set("t/b", "build", {"type": "script", "script": "true"})

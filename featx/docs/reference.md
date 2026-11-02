@@ -111,6 +111,8 @@ Effective recipes can contain local paths from your private site, node overrides
 |---|---|---|
 | `tool` | `gsim` | `gsim` (two-step gsim build), `verilator` (`make emu`) or `script`. The legacy `type: gsim-two-step\|script` still works. |
 | `mode` | `trace` | `trace` or `exec` → `TRACERTL_MODE=1\|0`. A run of this build follows it. |
+| `pipeline` | `difftest` | `difftest` (the builds above) or `tracertl`: a trace-mode gsim/verilator emu built by TraceRTL's own entry, `make -C <tracertl.dir> MODE=xiangshan SIM=<tool> emu`, over the unmodified difftest (no `TRACERTL_MODE`) |
+| `tracertl.dir`, `tracertl.args` | `TraceRTL`, `""` | `pipeline: tracertl`: the TraceRTL dir in `workdir`, raw make args after the generated ones; paths and `-j` come from the tool's `gsim:` / `verilator:` section |
 | `options.chiseldb` | `false` | `WITH_CHISELDB` of the Chisel elaboration (gsim step 2 always links the DB bridge) |
 | `options.chiselmap` | `false` | adds `WITH_CHISELMAP=1` when true (a placeholder: no Makefile reads it yet) |
 | `options.constantin` | `false` | `WITH_CONSTANTIN` |

@@ -1,6 +1,7 @@
 # Build recipe defaults.
 tool: gsim           # gsim | verilator | script (the legacy `type: gsim-two-step|script` still works)
 mode: exec           # trace | exec -> TRACERTL_MODE=1|0; trace_enabled opts into trace defaults
+pipeline: difftest   # difftest | tracertl (trace mode: TraceRTL's own build entry, see tracertl:)
 # Make switches for every make call of the build (featx/presets.py lowers them at submit).
 options:
   chiseldb: false    # WITH_CHISELDB (Chisel elaboration; gsim step 2 always links the DB bridge)
@@ -38,6 +39,12 @@ verilator:
   bin_dir: ${paths.verilator_bin}   # prepended to PATH ("" = PATH as is)
   dramsim3_home: ${paths.dramsim3}
   jobs: 64
+  args: ""           # raw make args after the generated ones (they win)
+# pipeline: tracertl -> `make -C <dir> MODE=xiangshan SIM=<tool> emu`: TraceRTL elaborates XS with
+# --trace-rtl and builds its harness over the unmodified difftest. Paths/jobs come from the
+# tool's section above (gsim: or verilator:).
+tracertl:
+  dir: TraceRTL      # relative to workdir
   args: ""           # raw make args after the generated ones (they win)
 # tool: script -> bash body run in workdir; must leave ${artifact}.
 script: null

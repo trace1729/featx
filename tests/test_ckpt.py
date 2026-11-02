@@ -10,7 +10,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from featx import ckpt, cli, config, leaderboard, points, presets, service, store
+from featx import ckpt, cli, config, leaderboard, points, presets, recipes, service, store
 from featx.post import plugins
 from featx.tree import Tree
 
@@ -142,7 +142,7 @@ def test_cli_ckpt(sets):
 
 
 def _spec(**kw):
-    spec = store.read_yaml(config.DEFAULTS_DIR / "recipes" / "run.yaml")
+    spec = recipes._defaults("run")
     spec.update(kw)
     return presets.lower_run(spec, None)
 

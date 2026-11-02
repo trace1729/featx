@@ -285,7 +285,7 @@ class Scheduler:
     def _validate(self, tree: Tree, entry, task: Task, prev: Task | None) -> None:
         spec = task.spec
         if task.kind == "build":
-            if spec.get("type") not in ("gsim-two-step", "verilator", "script"):
+            if spec.get("type") not in presets.BUILD_TYPES:
                 raise SchedError(f"build.tool must be gsim|verilator|script, got {spec.get('tool', spec.get('type'))}")
             if not Path(spec["workdir"]).is_dir():
                 raise SchedError(f"build workdir {spec['workdir']} missing (create the node worktree first: "
