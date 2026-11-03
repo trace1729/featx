@@ -118,6 +118,30 @@ def test_catalog_layouts(sets):
         service.checkpoint_show("spec06_modern_a", bench="mcf")
 
 
+def test_catalog_keeps_readable_sets_on_permission_error(sets, monkeypatch):
+    from fastapi.testclient import TestClient
+    from featx.sched import daemon
+
+    denied = sets / "spec06_modern_a" / "json" / "checkpoints_all.json"
+    is_file = Path.is_file
+
+    def deny_weights(path):
+        if path == denied:
+            raise PermissionError(13, "Permission denied", str(path))
+        return is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", deny_weights)
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    r = c.get("/checkpoints", headers={"X-Featx-Token": d.token})
+    assert r.status_code == 200, r.text
+    rows = {row["name"]: row for row in r.json()}
+    assert rows["spec17_legacy0_b"]["runnable"]
+    assert not rows["spec06_modern_a"]["runnable"]
+    assert "Permission denied" in rows["spec06_modern_a"]["error"]
+    assert str(denied) in rows["spec06_modern_a"]["error"]
+
+
 def test_index_cache_rebuilds_on_change(sets):
     d = sets / "spec17_take_c"
     first = ckpt.index(d)

@@ -161,14 +161,19 @@ def _signature(d: Path, wjson: Path | None, base: Path | None) -> list:
     return [INDEX_VERSION, *sig]
 
 
+def _new_index(d: Path) -> dict:
+    m = _SPEC.search(d.name)
+    return {"name": d.name, "path": str(d), "spec": m.group(1) if m else None,
+            "label": f"spec{m.group(1)}" if m else None, "layout": None, "multihart": False,
+            "json": None, "json_sha256": None, "has_insts": False, "insts": {}, "points": {},
+            "benches": 0, "missing": 0, "extra": 0, "restorer_needed": False, "error": ""}
+
+
 def scan(d: Path) -> dict:
     """Full index of the set in `d` (points with images)."""
     d = Path(d)
-    m = _SPEC.search(d.name)
-    out = {"name": d.name, "path": str(d), "spec": m.group(1) if m else None,
-           "label": f"spec{m.group(1)}" if m else None, "layout": None, "multihart": _multihart(d),
-           "json": None, "json_sha256": None, "has_insts": False, "insts": {}, "points": {},
-           "benches": 0, "missing": 0, "extra": 0, "restorer_needed": False, "error": ""}
+    out = _new_index(d)
+    out["multihart"] = _multihart(d)
     layout, base, err = _layout(d)
     out["layout"], out["error"] = layout, err
     if not layout:
@@ -227,27 +232,32 @@ _memo: dict[str, tuple[list, dict]] = {}
 
 def index(d: Path, refresh: bool = False, write_cache: bool = True) -> dict:
     d = Path(d)
-    layout, base, _ = _layout(d)
-    sig = _signature(d, _weights_json(d) if layout else None, base)
-    cf = _cache_file(d)
-    if not refresh:
-        hit = _memo.get(str(cf))
-        if hit and hit[0] == sig:
-            return hit[1]
-        hit = store.read_json(cf)
-        if isinstance(hit, dict) and hit.get("sig") == sig:
-            if write_cache:
-                _memo[str(cf)] = (sig, hit["index"])
-            return hit["index"]
-    idx = scan(d)
-    if write_cache:
-        _memo[str(cf)] = (sig, idx)
-        try:
-            cf.parent.mkdir(parents=True, exist_ok=True)
-            store.atomic_write_text(cf, json.dumps({"sig": sig, "index": idx}))
-        except OSError:
-            pass
-    return idx
+    try:
+        layout, base, _ = _layout(d)
+        sig = _signature(d, _weights_json(d) if layout else None, base)
+        cf = _cache_file(d)
+        if not refresh:
+            hit = _memo.get(str(cf))
+            if hit and hit[0] == sig:
+                return hit[1]
+            hit = store.read_json(cf)
+            if isinstance(hit, dict) and hit.get("sig") == sig:
+                if write_cache:
+                    _memo[str(cf)] = (sig, hit["index"])
+                return hit["index"]
+        idx = scan(d)
+        if write_cache:
+            _memo[str(cf)] = (sig, idx)
+            try:
+                cf.parent.mkdir(parents=True, exist_ok=True)
+                store.atomic_write_text(cf, json.dumps({"sig": sig, "index": idx}))
+            except OSError:
+                pass
+        return idx
+    except OSError as error:
+        idx = _new_index(d)
+        idx["error"] = str(error)
+        return idx
 
 
 def summary(idx: dict) -> dict:
