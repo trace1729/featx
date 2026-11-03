@@ -329,6 +329,35 @@ def test_set_user_key(root):
             config.set_user_key(key, value)
 
 
+def test_review_state_tracks_completion_and_research_record(root):
+    from featx import context
+
+    entry = Tree().add("review")
+    rs, _ = Tree().new_runset(entry)
+    rs.tasks = ["TASK1"]
+    Tree().save_runset(entry, rs)
+    task = Task(id="TASK1", kind="run", name="run", node_id=entry.node.id,
+                runset_id=rs.id, runset_name=rs.name, state="running")
+    taskstore.save(task)
+    ref = f"review/{rs.name}"
+    assert service.result_get(ref)["review"]["complete"] is False
+
+    for state, outcome in (("succeeded", "succeeded"), ("failed", "failed"), ("cancelled", "cancelled")):
+        task.state = state
+        taskstore.save(task)
+        review = service.result_get(ref)["review"]
+        assert review["needed"] and review["complete"] and review["outcome"] == outcome
+        assert review["command"] == f"featx node set review --verdict VERDICT --evidence {ref}"
+
+    entry.node.verdict = "supported"
+    entry.node.evidence = []
+    assert context.review_state(entry, rs, {"TASK1": task})["needed"]
+    entry.node.evidence = [ref]
+    assert not context.review_state(entry, rs, {"TASK1": task})["needed"]
+    entry.node.verdict = "open"
+    assert context.review_state(entry, rs, {"TASK1": task})["needed"]
+
+
 def test_worktree_changes_and_diff(root, tmp_path):
     from featx import worktree
     from featx.model import GitInfo

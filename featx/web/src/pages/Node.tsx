@@ -76,7 +76,7 @@ function TasksCell({ tasks }: { tasks: RunsetSummary["tasks"] }) {
     <>
       {[...latest.values()].map((task) => (
         <span key={task.id} style={{ marginRight: 6, whiteSpace: "nowrap", display: "inline-block" }}>
-          {task.kind}: <StateBadge state={task.state} />
+          {t(task.kind)}: <StateBadge state={task.state} />
         </span>
       ))}
       {earlier.length > 0 && (
@@ -96,7 +96,7 @@ function CodeCell({ rs }: { rs: RunsetSummary }) {
   // a build of its own recorded the code; otherwise a run-only runset's code is its binary's
   if (code?.from && !(code.head && !code.legacy))
     return (
-      <span className="small muted" style={{ whiteSpace: "nowrap" }} title={`binary built by ${code.from}`}>
+      <span className="small muted" style={{ whiteSpace: "nowrap" }} title={t("binary built by {ref}", { ref: code.from })}>
         ← <Link to={`/runset/${code.from}?tab=code`}>{code.from.split("/").pop()}</Link>
       </span>
     );
@@ -104,9 +104,9 @@ function CodeCell({ rs }: { rs: RunsetSummary }) {
   const u = code.uncommitted;
   const title = [
     `HEAD ${code.head}${code.branch ? ` (${code.branch})` : ""}`,
-    u ? `uncommitted: ${u.files} files +${u.added} −${u.deleted} in ${u.repos.map((r) => r || "superproject").join(", ")}` : code.dirty ? "uncommitted changes (not saved)" : "no uncommitted changes",
-    code.omitted ? `${code.omitted} untracked entries not saved` : "",
-    code.legacy ? "legacy runset: recorded at submit" : "",
+    u ? t("uncommitted: {files} files +{added} −{deleted} in {repos}", { files: u.files, added: u.added, deleted: u.deleted, repos: u.repos.map((r) => r || t("superproject")).join(", ") }) : code.dirty ? t("uncommitted changes (not saved)") : t("no uncommitted changes"),
+    code.omitted ? t("{count} untracked entries not saved", { count: code.omitted }) : "",
+    code.legacy ? t("legacy runset: recorded at submit") : "",
   ].filter(Boolean).join("\n");
   return (
     <span className="mono small" style={{ whiteSpace: "nowrap" }} title={title}>
@@ -146,20 +146,20 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
           </button>
         )}
         {selected.length > 0 && <button onClick={() => setSelected([])}>{t("clear selection")}</button>}
-        {!ctx.runsets.length && <span className="muted">no runsets yet: use the submit tab.</span>}
+        {!ctx.runsets.length && <span className="muted">{t("no runsets yet: use the submit tab.")}</span>}
       </div>
       {ctx.runsets.length > 0 && (
         <table>
           <thead>
             <tr>
               <th />
-              <th>runset</th>
-              <th>created</th>
-              <th>purpose</th>
+              <th>{t("runset")}</th>
+              <th>{t("created")}</th>
+              <th>{t("purpose")}</th>
               <th>{t("parameters")}</th>
               <th>{t("code")}</th>
-              <th>tasks</th>
-              <th>key metrics</th>
+              <th>{t("tasks")}</th>
+              <th>{t("key metrics")}</th>
             </tr>
           </thead>
           <tbody>
@@ -169,11 +169,12 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
                   <input type="checkbox" checked={selected.includes(rs.ref)} onChange={() => toggle(rs.ref)} aria-label={`select ${rs.ref}`} />
                 </td>
                 <td className="mono">
-                  <Link to={`/runset/${rs.ref}`} style={{ whiteSpace: "nowrap" }}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">sealed</Badge>}
+                  <Link to={`/runset/${rs.ref}`} style={{ whiteSpace: "nowrap" }}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">{t("sealed")}</Badge>}
                   {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
+                  {rs.review?.needed && <a href="#verdict-evidence" className="badge warn">{t("Review needed")}</a>}
                   {rs.derived_from && (
                     <div className="muted small" title={rs.derived_from}>
-                      from{" "}
+                      {t("from")}{" "}
                       {rs.derived_from.startsWith(`${ctx.node.path}/`) ? rs.derived_from.slice(ctx.node.path.length + 1) : rs.derived_from}
                     </div>
                   )}
@@ -192,7 +193,7 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
                 <td className="small">
                   {keyMetrics(rs).map(([k, v]) => (
                     <div key={k}>
-                      {metricLabel(k)} <b className="mono">{fmtValue(v)}</b>
+                      {metricLabel(k, t)} <b className="mono">{fmtValue(v)}</b>
                     </div>
                   ))}
                 </td>
@@ -203,7 +204,7 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
       )}
       {ctx.runset_count > ctx.runsets.length && (
         <p className="muted">
-          showing the latest {ctx.runsets.length} of {ctx.runset_count}
+          {t("showing the latest {shown} of {total}", { shown: ctx.runsets.length, total: ctx.runset_count })}
         </p>
       )}
     </div>
@@ -257,12 +258,12 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
     parseError = (e as Error).message;
   }
   const prio = priority.trim();
-  if (prio && !/^-?\d+$/.test(prio)) parseError ??= `priority must be an integer, got "${prio}"`;
+  if (prio && !/^-?\d+$/.test(prio)) parseError ??= t('priority must be an integer, got "{value}"', { value: prio });
   const build = ctx.recipes.build ?? {};
   const run = ctx.recipes.run ?? {};
   const post = ctx.recipes.post ?? {};
   const opts = (build.options ?? {}) as Record<string, unknown>;
-  const current = (v: unknown) => `inherit (${v === undefined || v === null ? "unset" : String(v)})`;
+  const current = (v: unknown) => t("inherit ({value})", { value: v === undefined || v === null ? t("unset") : String(v) });
   const pick = (key: keyof QuickPresets, choices: [string, string][], now: unknown, title?: string) => (
     <select value={quick[key]} title={title} onChange={(e) => setQuick({ ...quick, [key]: e.target.value })}>
       <option value="">{current(now)}</option>
@@ -285,8 +286,8 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
   const wlSpec = /spec(\d\d)/.exec(workloadMap[wlName]?.label ?? wlName)?.[1] ?? null;
   const ckptGroups = checkpointGroups(checkpoints.data ?? [], wlSpec);
   const ckptInherit = run.checkpoint
-    ? `inherit (${String(run.checkpoint)})`
-    : `inherit (${workloadMap[wlName || String(config.data?.effective.default_workload ?? "")]?.checkpoint ?? "the workload's"} — the workload's)`;
+    ? t("inherit ({value})", { value: String(run.checkpoint) })
+    : t("inherit ({checkpoint} — the workload's)", { checkpoint: workloadMap[wlName || String(config.data?.effective.default_workload ?? "")]?.checkpoint ?? t("the workload's") });
   const customCoverage = quick.coverage !== "" && !COVERAGES.includes(quick.coverage);
   const inheritedSpecScore = !!((post.steps ?? {}) as Record<string, unknown>)["spec-score"];
   const list = (s: string) => parseCsv(s.replace(/\s+/g, ","))[0]?.filter(Boolean) ?? [];
@@ -311,10 +312,10 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
       <div className="row">
         {KINDS.map((k) => (
           <label key={k}>
-            <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setForm({ kinds: e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k) })} /> {k}
+            <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setForm({ kinds: e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k) })} /> {t(k)}
           </label>
         ))}
-        {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">without build the run recipe's emu (or --bin) is used</span>}
+        {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">{t("without build the run recipe's emu (or --bin) is used")}</span>}
         <span className="spacer" />
         <button className="link small" title={t("reset form")} onClick={() => setForm({ ...EMPTY_FORM })}>
           {t("reset form")}
@@ -322,14 +323,14 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
       </div>
       <label>{t("build")}</label>
       <div className="row">
-        <span className="muted small">tool</span>
+        <span className="muted small">{t("tool")}</span>
         {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
-        <span className="muted small">mode</span>
-        {pick("mode", config.data?.effective.trace_enabled ? [["trace", "trace"], ["exec", "exec"]] : [["exec", "exec"]], build.mode, "TRACERTL_MODE; the run follows the build")}
+        <span className="muted small">{t("mode")}</span>
+        {pick("mode", config.data?.effective.trace_enabled ? [["trace", "trace"], ["exec", "exec"]] : [["exec", "exec"]], build.mode, t("TRACERTL_MODE; the run follows the build"))}
         <span className="muted small">chiseldb</span>
         {pick("chiseldb", onOff, opts.chiseldb)}
         <span className="muted small">chiselmap</span>
-        {pick("chiselmap", onOff, opts.chiselmap, "WITH_CHISELMAP=1 (placeholder: no Makefile reads it yet)")}
+        {pick("chiselmap", onOff, opts.chiselmap, t("WITH_CHISELMAP=1 (placeholder: no Makefile reads it yet)"))}
       </div>
       <label>{t("run")}</label>
       <div className="row">
@@ -345,7 +346,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
             <span className="muted small">{t("checkpoint")}</span>
             <select
               value={quick.checkpoint}
-              title={`exec runs: the SimPoint checkpoint set (run.checkpoint)${wlSpec ? `; spec${wlSpec} sets only, as the workload is ${wlName}` : ""}`}
+              title={wlSpec ? t("exec runs: the SimPoint checkpoint set (run.checkpoint); spec{spec} sets only, as the workload is {workload}", { spec: wlSpec, workload: wlName }) : t("exec runs: the SimPoint checkpoint set (run.checkpoint)")}
               onChange={(e) => setQuick({ ...quick, checkpoint: e.target.value })}
             >
               <option value="">{ckptInherit}</option>
@@ -354,63 +355,59 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
                 <optgroup key={spec} label={`spec${spec}`}>
                   {sets.map((c) => (
                     <option key={c.name} value={c.name}>
-                      {c.name} ({c.n_points} points{c.restorer_needed ? ", .gz" : ""}{c.has_insts ? "" : ", no insts"})
+                      {c.name} ({c.n_points} {t("points")}{c.restorer_needed ? ", .gz" : ""}{c.has_insts ? "" : `, ${t("no insts")}`})
                     </option>
                   ))}
                 </optgroup>
               ))}
             </select>
-            {checkpoints.isError && <span className="error small">checkpoints: {(checkpoints.error as Error).message}</span>}
-            <Link className="small" to="/docs/checkpoints">
-              sets
-            </Link>
+            {checkpoints.isError && <span className="error small">{t("checkpoints:")} {(checkpoints.error as Error).message}</span>}
+            <Link className="small" to="/docs/checkpoints">{t("sets")}</Link>
           </>
         )}
         <span className="muted small">{t("coverage")}</span>
         <select
           value={customCoverage ? "custom" : quick.coverage}
-          title="per benchmark, the heaviest points until their weights sum to c (0.3 = the -0.3c configs)"
+          title={t("per benchmark, the heaviest points until their weights sum to c (0.3 = the -0.3c configs)")}
           onChange={(e) => setQuick({ ...quick, coverage: e.target.value === "custom" ? "0.9" : e.target.value })}
         >
           <option value="">{current(run.coverage)}</option>
           {COVERAGES.map((c) => (
             <option key={c} value={c}>
-              {c === "full" ? "full (all points)" : c}
+              {c === "full" ? t("full (all points)") : c}
             </option>
           ))}
-          <option value="custom">custom…</option>
+          <option value="custom">{t("custom…")}</option>
         </select>
         {customCoverage && (
-          <input type="text" className="mono narrow" aria-label="coverage" value={quick.coverage} onChange={(e) => setQuick({ ...quick, coverage: e.target.value })} />
+          <input type="text" className="mono narrow" aria-label={t("coverage")} value={quick.coverage} onChange={(e) => setQuick({ ...quick, coverage: e.target.value })} />
         )}
         <span className="muted small">W</span>
         <input type="text" className="mono narrow" value={quick.W} onChange={(e) => setQuick({ ...quick, W: e.target.value })} placeholder={String(run.W ?? "")} />
         <span className="muted small">I</span>
         <input type="text" className="mono narrow" value={quick.I} onChange={(e) => setQuick({ ...quick, I: e.target.value })} placeholder={String(run.I ?? "")} />
-        <Link className="small" to="/docs/run">
-          keys
-        </Link>
+        <Link className="small" to="/docs/run">{t("keys")}</Link>
       </div>
       <label>{t("post")}</label>
       <div className="row">
-        <label title="SPEC score as perf_trigger --report computes it (spec-score plugin)">
+        <label title={t("SPEC score as perf_trigger --report computes it (spec-score plugin)")}>
           <input type="checkbox" checked={inheritedSpecScore || quick.specScore === "on"} disabled={inheritedSpecScore} onChange={(e) => setQuick({ ...quick, specScore: e.target.checked ? "on" : "" })} /> spec-score
         </label>
-        {inheritedSpecScore && <span className="muted small">already in the post recipe</span>}
+        {inheritedSpecScore && <span className="muted small">{t("already in the post recipe")}</span>}
         <Link className="small" to="/docs/plugins">
-          plugins
+          {t("plugins")}
         </Link>
       </div>
       <label>{t("priority")}</label>
       <div className="row">
         <input type="number" className="mono narrow" value={priority} placeholder="0" onChange={(e) => setForm({ priority: e.target.value })} />
-        <span className="muted small">higher launches first (FIFO within a priority); running jobs are never preempted</span>
+        <span className="muted small">{t("higher launches first (FIFO within a priority); running jobs are never preempted")}</span>
       </div>
       <label>{t("purpose")}</label>
       <input type="text" value={purpose} onChange={(e) => setForm({ purpose: e.target.value })} placeholder={t("what this runset is meant to show")} />
-      <label>binary</label>
+      <label>{t("binary")}</label>
       <input type="text" className="mono" value={bin} onChange={(e) => setForm({ bin: e.target.value })} placeholder={t("optional: bincache key, runset ref, or /abs/path/emu")} />
-      <label>points</label>
+      <label>{t("points")}</label>
       <input type="text" className="mono" value={points} onChange={(e) => setForm({ points: e.target.value })} placeholder={t("optional subset, comma or space separated")} />
       <label>{t("post steps")}</label>
       <input type="text" className="mono" value={postSteps} onChange={(e) => setForm({ postSteps: e.target.value })} placeholder={t("optional subset of the post recipe's steps")} />
@@ -424,9 +421,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         <button className="primary" disabled={act.busy || !!parseError || !kinds.length} onClick={submit}>
           {t("Submit")}
         </button>
-        <span className="muted small mono">
-          {" "}
-          same as: featx submit {ctx.node.path} {KINDS.filter((k) => kinds.includes(k)).join(" ")}
+        <span className="muted small">{t("same as:")} featx submit {ctx.node.path} {KINDS.filter((k) => kinds.includes(k)).join(" ")}
           {bin && ` --bin ${bin}`}
           {points.trim() && list(points).map((p) => ` --point ${p}`).join("")}
           {postSteps.trim() && list(postSteps).map((p) => ` --step ${p}`).join("")}
@@ -440,6 +435,7 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
 }
 
 function RecipesTab({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const [kind, setKind] = useState<(typeof KINDS)[number]>("run");
   const own = ctx.own_recipes[kind] ?? {};
   const ownText = Object.keys(own).length ? YAML.stringify(own) : "";
@@ -463,26 +459,26 @@ function RecipesTab({ ctx }: { ctx: NodeContext }) {
       <div className="row">
         <Tabs tabs={KINDS} value={kind} onChange={setKind} />
         <label>
-          <input type="checkbox" checked={explain} onChange={(e) => setExplain(e.target.checked)} /> explain (which layer set each key)
+          <input type="checkbox" checked={explain} onChange={(e) => setExplain(e.target.checked)} /> {t("explain (which layer set each key)")}
         </label>
       </div>
       <div className="grid2">
         <div>
-          <h3>This node's layer</h3>
+          <h3>{t("This node's layer")}</h3>
           <YamlEditor value={text} onChange={setText} height="360px" />
           <div className="row" style={{ marginTop: 6 }}>
             <button className="primary" disabled={act.busy || text === ownText} onClick={save}>
-              Save {kind} recipe
+              {t("Save {kind} recipe", { kind: t(kind) })}
             </button>
             <button disabled={text === ownText} onClick={() => setText(ownText)}>
-              Revert
+              {t("Revert")}
             </button>
-            <span className="muted small">stored as YAML, comments are not kept · featx recipe set {ctx.node.path} {kind} -f FILE</span>
+            <span className="muted small">{t("stored as YAML, comments are not kept")} · featx recipe set {ctx.node.path} {kind} -f FILE</span>
           </div>
           <ErrorBox error={act.error} />
         </div>
         <div>
-          <h3>Effective (root → ancestors → node)</h3>
+          <h3>{t("Effective (root → ancestors → node)")}</h3>
           {explain ? (
             ex.isLoading ? <Loading /> : <pre className="logbox">{ex.data}</pre>
           ) : (
@@ -496,6 +492,7 @@ function RecipesTab({ ctx }: { ctx: NodeContext }) {
 }
 
 function ScriptsTab({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const [sel, setSel] = useState<string | null>(ctx.scripts[0] ?? null);
   const [name, setName] = useState("");
   const [text, setText] = useState("");
@@ -521,9 +518,7 @@ function ScriptsTab({ ctx }: { ctx: NodeContext }) {
   return (
     <div>
       <p className="muted small">
-        Saved in <span className="mono">{ctx.scripts_dir}</span>. Build, run and post recipes call them as{" "}
-        <span className="mono">{"${scripts}"}/NAME</span> (e.g. a post step <span className="mono">cmd: bash {"${scripts}"}/stats.sh {"${run} ${out}"}</span>).
-        Child nodes inherit them; each submit copies them into the runset.
+        {t("Saved in {path}. Build, run and post recipes call them as {script} (e.g. a post step {example}). Child nodes inherit them; each submit copies them into the runset.", { path: ctx.scripts_dir, script: "${scripts}/NAME", example: "cmd: bash ${scripts}/stats.sh ${run} ${out}" })}
       </p>
       <div className="chips">
         {ctx.scripts.map((s) => (
@@ -539,13 +534,13 @@ function ScriptsTab({ ctx }: { ctx: NodeContext }) {
             setText("#!/bin/bash\nset -euo pipefail\n");
           }}
         >
-          + new
+          {t("+ new")}
         </button>
       </div>
       <div className="row" style={{ margin: "8px 0" }}>
-        <input type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="script name" />
+        <input type="text" className="mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("script name")} />
         <button className="primary" disabled={!name || act.busy} onClick={save}>
-          Save (executable)
+          {t("Save (executable)")}
         </button>
       </div>
       <textarea className="mono" rows={18} style={{ width: "100%" }} value={text} onChange={(e) => setText(e.target.value)} />
@@ -566,22 +561,23 @@ interface WtStatus {
 }
 
 function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => void }) {
+  const { t } = useI18n();
   const act = useAction();
   const invalidate = useInvalidateNode();
   const [repo, setRepo] = useState("");
   const [base, setBase] = useState("");
   return (
-    <Dialog open onClose={onClose} title={`Create a worktree for ${path}`}>
+    <Dialog open onClose={onClose} title={t("Create a worktree for {path}", { path })}>
       <div className="form">
-        <label>repo</label>
-        <input type="text" className="mono" autoFocus value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="default: git.repo from featx.yaml" />
-        <label>base</label>
-        <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder="default: git.base from featx.yaml" />
+        <label>{t("repo")}</label>
+        <input type="text" className="mono" autoFocus value={repo} onChange={(e) => setRepo(e.target.value)} placeholder={t("default: git.repo from featx.yaml")} />
+        <label>{t("base")}</label>
+        <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder={t("default: git.base from featx.yaml")} />
       </div>
-      <p className="muted small">Creates the worktree and branch featx/{path} (and the configured submodule worktrees). This takes a while.</p>
+      <p className="muted small">{t("Creates the worktree and branch featx/{path} (and the configured submodule worktrees). This takes a while.", { path })}</p>
       <ErrorBox error={act.error} />
       <div className="dialog-actions">
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={onClose}>{t("Cancel")}</button>
         <button
           className="primary"
           disabled={act.busy}
@@ -593,7 +589,7 @@ function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => 
             })
           }
         >
-          {act.busy ? "Creating…" : "Create"}
+          {act.busy ? t("Creating…") : t("Create")}
         </button>
       </div>
     </Dialog>
@@ -601,6 +597,7 @@ function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => 
 }
 
 function WorktreeTab({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const [creating, setCreating] = useState(false);
   const q = useQuery({
     queryKey: ["wt", ctx.node.path],
@@ -613,11 +610,10 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
     return (
       <div>
         <p>
-          No worktree. Builds of this node need one (<span className="mono">{"${worktree}"}</span>); runs with an
-          existing binary (<span className="mono">--bin</span>) don't.
+          {t("No worktree. Builds of this node need one ({worktree}); runs with an existing binary (--bin) don't.", { worktree: "${worktree}" })}
         </p>
         <div className="row">
-          <button onClick={() => setCreating(true)}>Create worktree…</button>
+          <button onClick={() => setCreating(true)}>{t("Create worktree…")}</button>
           <span className="muted small">featx worktree create {ctx.node.path}</span>
         </div>
         {creating && <CreateWorktreeDialog path={ctx.node.path} onClose={() => setCreating(false)} />}
@@ -630,11 +626,11 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
       <div className="kv">
         <span>worktree</span>
         <span className="mono">{g.worktree}</span>
-        <span>branch / checkout</span>
+        <span>{t("branch / checkout")}</span>
         <span className="mono">
-          {g.branch === "HEAD" ? `detached at pinned commit ${q.data?.head ?? ""}` : g.branch}
+          {g.branch === "HEAD" ? t("detached at pinned commit {head}", { head: q.data?.head ?? "" }) : g.branch}
         </span>
-        <span>repo / base</span>
+        <span>{t("repo / base")}</span>
         <span className="mono">
           {g.repo} @ {g.base}
         </span>
@@ -643,24 +639,24 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
             <span>head</span>
             <span className="mono">{q.data.head}</span>
             <span>merge-base</span>
-            <span className="mono">{q.data.merge_base ?? "unavailable"}</span>
-            <span>uncommitted state</span>
+            <span className="mono">{q.data.merge_base ?? t("unavailable")}</span>
+            <span>{t("uncommitted state")}</span>
             <span>
               {!q.data.exists ? (
-                <Badge kind="failed">missing on disk</Badge>
+                <Badge kind="failed">{t("missing on disk")}</Badge>
               ) : q.data.dirty ? (
-                <Badge kind="warn">{q.data.dirty} uncommitted change(s)</Badge>
+                <Badge kind="warn">{t("{count} uncommitted change(s)", { count: q.data.dirty })}</Badge>
               ) : (
-                <Badge kind="succeeded">no uncommitted changes</Badge>
+                <Badge kind="succeeded">{t("no uncommitted changes")}</Badge>
               )}
             </span>
           </>
         )}
       </div>
-      {q.data?.error && <p className="muted small">{q.data.error}; repair it with featx worktree set-base.</p>}
+      {q.data?.error && <p className="muted small">{q.data.error}{t("; repair it with featx worktree set-base.")}</p>}
       {q.data?.submodules && Object.keys(q.data.submodules).length > 0 && (
         <>
-          <h3>submodule worktrees</h3>
+          <h3>{t("submodule worktrees")}</h3>
           <pre className="mono">{YAML.stringify(q.data.submodules)}</pre>
         </>
       )}
@@ -699,7 +695,7 @@ function EvidenceList({ evidence, archived, busy, save, add }: { evidence: strin
               style={{ flex: 1 }}
               autoFocus
               value={draft}
-              aria-label="edit evidence"
+              aria-label={t("edit evidence")}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) commitEdit();
@@ -726,7 +722,7 @@ function EvidenceList({ evidence, archived, busy, save, add }: { evidence: strin
             >
               {t("edit")}
             </button>
-            <button className="link small danger-link" title={t("remove this entry")} aria-label={`remove evidence ${i + 1}`} disabled={busy} onClick={() => save(evidence.filter((_, j) => j !== i))}>
+            <button className="link small danger-link" title={t("remove this entry")} aria-label={t("remove evidence {index}", { index: i + 1 })} disabled={busy} onClick={() => save(evidence.filter((_, j) => j !== i))}>
               ×
             </button>
           </div>
@@ -762,27 +758,29 @@ function useChanges(path: string) {
 }
 
 function ChangesBadge({ path }: { path: string }) {
+  const { t: translate, language } = useI18n();
   const q = useChanges(path);
   const t = q.data?.total;
   if (!t || (!t.files && !t.ahead)) return null;
   return (
-    <Link to={`/node/${path}?tab=worktree`} title="code that differs from the base (see the worktree tab)">
+    <Link to={`/node/${path}?tab=worktree`} title={translate("code that differs from the base (see the worktree tab)")}>
       <Badge kind="warn">
-        code changed: {t.files} file{t.files === 1 ? "" : "s"}, +{t.added} −{t.deleted}
-        {t.ahead ? `, ${t.ahead} commit${t.ahead === 1 ? "" : "s"} ahead` : ""}
+        {translate("code changed: {files} file{suffix}, +{added} −{deleted}", { files: t.files, suffix: language === "zh" || t.files === 1 ? "" : "s", added: t.added, deleted: t.deleted })}
+        {t.ahead ? translate(", {count} commit{suffix} ahead", { count: t.ahead, suffix: language === "zh" || t.ahead === 1 ? "" : "s" }) : ""}
       </Badge>
     </Link>
   );
 }
 
 function ChangesSection({ path }: { path: string }) {
+  const { t } = useI18n();
   const q = useChanges(path);
   if (q.isLoading) return <Loading what="changes" />;
   if (q.error) return <ErrorBox error={q.error} />;
   return (
     <div>
-      <h2>Committed + working-tree changes vs base</h2>
-      <p className="muted small">Submodule gitlinks are excluded from the superproject and shown in each submodule's own section.</p>
+      <h2>{t("Committed + working-tree changes vs base")}</h2>
+      <p className="muted small">{t("Submodule gitlinks are excluded from the superproject and shown in each submodule's own section.")}</p>
       <ChangesView
         changes={q.data}
         scope={`wt:${path}`}
@@ -793,6 +791,7 @@ function ChangesSection({ path }: { path: string }) {
 }
 
 function NotesTab({ ctx }: { ctx: NodeContext }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(ctx.notes ?? "");
   const act = useAction();
@@ -810,10 +809,10 @@ function NotesTab({ ctx }: { ctx: NodeContext }) {
     return (
       <div>
         <div className="row" style={{ marginBottom: 8 }}>
-          <button onClick={() => setEditing(true)}>Edit</button>
-          <span className="muted small">Markdown, stored in the node's node.yaml · featx node update {ctx.node.path} --notes …</span>
+          <button onClick={() => setEditing(true)}>{t("Edit")}</button>
+          <span className="muted small">{t("Markdown, stored in the node's node.yaml")} · featx node update {ctx.node.path} --notes …</span>
         </div>
-        {ctx.notes ? <Markdown text={ctx.notes} /> : <div className="muted">No notes yet — Edit to add.</div>}
+        {ctx.notes ? <Markdown text={ctx.notes} /> : <div className="muted">{t("No notes yet — Edit to add.")}</div>}
       </div>
     );
   }
@@ -821,15 +820,15 @@ function NotesTab({ ctx }: { ctx: NodeContext }) {
     <div>
       <div className="grid2">
         <div>
-          <textarea className="mono" rows={22} value={text} aria-label="notes" autoFocus onChange={(e) => setText(e.target.value)} placeholder="# Notes&#10;&#10;Markdown" />
+          <textarea className="mono" rows={22} value={text} aria-label={t("notes")} autoFocus onChange={(e) => setText(e.target.value)} placeholder={t("# Notes\n\nMarkdown")} />
         </div>
         <div className="card" style={{ overflow: "auto", maxHeight: "60vh" }}>
-          {text.trim() ? <Markdown text={text} /> : <span className="muted">preview</span>}
+          {text.trim() ? <Markdown text={text} /> : <span className="muted">{t("preview")}</span>}
         </div>
       </div>
       <div className="row" style={{ marginTop: 6 }}>
         <button className="primary" disabled={act.busy || text === (ctx.notes ?? "")} onClick={save}>
-          Save notes
+          {t("Save notes")}
         </button>
         <button
           onClick={() => {
@@ -837,7 +836,7 @@ function NotesTab({ ctx }: { ctx: NodeContext }) {
             setEditing(false);
           }}
         >
-          Cancel
+          {t("Cancel")}
         </button>
       </div>
       <ErrorBox error={act.error} />
@@ -879,7 +878,7 @@ function Header({ ctx }: { ctx: NodeContext }) {
         <h1 style={{ margin: 0 }}>
           <VerdictMark verdict={n.verdict} /> <span className="mono">{n.path}</span>
         </h1>
-        <Badge>{n.kind}</Badge>
+        <Badge>{t(n.kind)}</Badge>
         {n.tags.map((t) => (
           <Badge key={t} kind="tag">
             #{t}
@@ -893,29 +892,29 @@ function Header({ ctx }: { ctx: NodeContext }) {
           {t("Remove…")}
         </button>
       </div>
-      <div className="card form" style={{ marginTop: 10 }}>
+      <div className="card form" id="verdict-evidence" style={{ marginTop: 10 }}>
         <label>{t("hypothesis")}</label>
         <div className="row">
           <textarea rows={2} style={{ flex: 1 }} value={hyp} onChange={(e) => setHyp(e.target.value)} />
           <button disabled={hyp === n.hypothesis || act.busy} onClick={() => update({ hypothesis: hyp })}>
-            Save
+            {t("Save")}
           </button>
         </div>
         <label>{t("verdict")}</label>
         <div className="row">
           <select value={n.verdict} onChange={(e) => update({ verdict: e.target.value })}>
             {VERDICTS.map((v) => (
-              <option key={v}>{v}</option>
+              <option key={v} value={v}>{t(v)}</option>
             ))}
           </select>
           <input type="text" style={{ flex: 1 }} value={note} placeholder={t("verdict note")} onChange={(e) => setNote(e.target.value)} />
           <button disabled={note === n.verdict_note || act.busy} onClick={() => update({ verdict_note: note })}>
             {t("Save note")}
           </button>
-          <label>status</label>
+          <label>{t("status")}</label>
           <select value={n.status} onChange={(e) => update({ status: e.target.value })}>
             {STATUSES.map((v) => (
-              <option key={v}>{v}</option>
+              <option key={v} value={v}>{t(v)}</option>
             ))}
           </select>
         </div>
@@ -932,9 +931,9 @@ function Header({ ctx }: { ctx: NodeContext }) {
           <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder={t("your thoughts on this node: ideas, doubts, what to try next")} onChange={(e) => setComment(e.target.value)} />
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <button disabled={comment === (n.comment ?? "") || act.busy} onClick={() => update({ comment })}>
-              Save
+              {t("Save")}
             </button>
-            {comment !== (n.comment ?? "") && <span className="muted small">unsaved</span>}
+            {comment !== (n.comment ?? "") && <span className="muted small">{t("unsaved")}</span>}
           </div>
         </div>
       </div>

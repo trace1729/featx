@@ -82,10 +82,20 @@ def test_mcp_tools_registered(root):
     import anyio
     tools = anyio.run(mcp_server.server.list_tools)
     names = {t.name for t in tools}
-    for want in ("tree_list", "node_context", "task_submit", "events_wait", "problem_log_append",
+    for want in ("tree_list", "node_context", "node_show", "task_submit", "events_wait", "problem_log_append",
                  "task_relaunch", "result_get", "recipe_set"):
         assert want in names
     assert "(empty tree)" in mcp_server.tree_list()
+
+
+def test_mcp_node_show_matches_cli_semantics(root):
+    from featx import mcp_server
+    service.node_add("wpe/feature", hypothesis="try this", parents=True)
+    brief = mcp_server.node_show("wpe/feature")
+    assert brief["node"]["hypothesis"] == "try this"
+    assert "recipes" not in brief
+    full = mcp_server.node_show("wpe/feature", full=True)
+    assert "recipes" in full and "ancestors" in full
 
 
 def test_perf_keys_script(tmp_path):
@@ -149,3 +159,33 @@ def test_archive_and_task_state_api(root):
     assert c.get("/tasks", params={"state": "failed"}, headers=h).json() == []
     t.state, t.cancelled_by = "cancelled", "UPSTREAM"
     assert [x["id"] for x in c.get("/tasks", params={"state": "blocked"}, headers=h).json()] == ["TASK1"]
+
+
+def test_optional_hypothesis_warning_and_result_review_json(root):
+    from featx.tree import Tree
+    from featx import taskstore
+    from featx.model import Task
+
+    run = CliRunner().invoke
+    result = run(cli.app, ["node", "add", "review"])
+    assert result.exit_code == 0, result.output
+    assert "hypothesis is recommended" in result.stderr
+    assert Tree().get("review").node.hypothesis == ""
+    assert "hypothesis is recommended" not in run(cli.app, ["node", "add", "explained", "-H", "idea"]).stderr
+    tree = Tree()
+    entry = tree.get("review")
+    rs, _ = tree.new_runset(entry)
+    task = Task(id="REVIEW1", kind="run", name="run", node_id=entry.node.id,
+                runset_id=rs.id, runset_name=rs.name, state="failed")
+    rs.tasks = [task.id]
+    tree.save_runset(entry, rs)
+    taskstore.save(task)
+    ref = f"review/{rs.name}"
+    result = run(cli.app, ["result", ref])
+    assert result.exit_code == 0 and "Review needed" in result.output
+    assert f"--evidence {ref}" in result.output
+    result = run(cli.app, ["result", ref, "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == service.result_get(ref)
+    service.node_update("review", verdict="inconclusive", add_evidence=[ref])
+    assert "Review needed" not in run(cli.app, ["result", ref]).output

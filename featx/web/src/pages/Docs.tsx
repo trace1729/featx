@@ -26,7 +26,7 @@ export function DocsPage() {
             {t.topic}
           </NavLink>
         ))}
-        <NavLink to="/docs/all">all</NavLink>
+        <NavLink to="/docs/all">{t("all")}</NavLink>
         {index.data && <div className="muted small">{index.data.path}</div>}
         <div className="muted small">CLI: featx help {topic}</div>
       </div>

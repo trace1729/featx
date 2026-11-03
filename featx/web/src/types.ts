@@ -53,6 +53,7 @@ export interface RunsetSummary {
   tasks: TaskBrief[];
   post: Record<string, Record<string, unknown>>;
   problem_log_tail: string;
+  review?: { needed: boolean; complete: boolean; outcome: string; ref: string; verdict: string; evidence: string[]; command: string };
   bin?: Record<string, unknown> | null;
   provenance?: Record<string, unknown>;
   reports?: Record<string, string>;

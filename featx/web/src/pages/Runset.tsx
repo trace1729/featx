@@ -76,14 +76,14 @@ function JobsTable({ task, job, onJob, states }: { task: TaskView; job: string |
       <table>
         <thead>
           <tr>
-            <th>job</th>
-            <th>state</th>
-            <th>host</th>
-            <th className="num">attempt</th>
-            <th style={{ width: "22%" }}>progress</th>
+            <th>{t("job")}</th>
+            <th>{t("state")}</th>
+            <th>{t("host")}</th>
+            <th className="num">{t("attempt")}</th>
+            <th style={{ width: "22%" }}>{t("progress")}</th>
             <th>ETA</th>
             <th className="num">rc</th>
-            <th>failure</th>
+            <th>{t("failure")}</th>
           </tr>
         </thead>
         <tbody>
@@ -114,7 +114,7 @@ function JobsTable({ task, job, onJob, states }: { task: TaskView; job: string |
               <td className="small">
                 {j.failure && (
                   <span title={j.failure.tail ?? ""}>
-                    <Badge kind={j.failure.class === "design" ? "failed" : "warn"}>{j.failure.class ?? "?"}</Badge> <span className="mono">{j.failure.signature}</span>
+                    <Badge kind={j.failure.class === "design" ? "failed" : "warn"}>{t(j.failure.class ?? "?")}</Badge> <span className="mono">{j.failure.signature}</span>
                   </span>
                 )}
               </td>
@@ -145,25 +145,25 @@ function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
         <button disabled={!ACTIVE.includes(task.state) || act.busy} onClick={() => call("cancel")}>
           {t("Cancel")}
         </button>
-        <button disabled={!canRelaunch || act.busy} onClick={() => call("relaunch")} title="re-queue failed/cancelled jobs in this runset">
+        <button disabled={!canRelaunch || act.busy} onClick={() => call("relaunch")} title={t("re-queue failed/cancelled jobs in this runset")}>
           {t("Relaunch failed")}
         </button>
-        <button disabled={ACTIVE.includes(task.state) || act.busy} onClick={() => call("resubmit")} title="new derived runset with re-resolved recipes">
+        <button disabled={ACTIVE.includes(task.state) || act.busy} onClick={() => call("resubmit")} title={t("new derived runset with re-resolved recipes")}>
           {t("Resubmit…")}
         </button>
         {task.blocked && (
           <button className="danger" disabled={act.busy} onClick={() => call("unblock", { extra: 1 })}>
-            Unblock (+1 design relaunch)
+            {t("Unblock (+1 design relaunch)")}
           </button>
         )}
         {ACTIVE.includes(task.state) && (
           <>
-            <span className="muted small">priority</span>
+            <span className="muted small">{t("priority")}</span>
             <PriorityControl task={task} />
           </>
         )}
         <span className="muted small">
-          design relaunches {task.design_relaunches} · featx task relaunch {task.id}
+          {t("design relaunches {count} · featx task relaunch {task}", { count: task.design_relaunches, task: task.id })}
         </span>
       </div>
       {act.error ? (
@@ -171,7 +171,7 @@ function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
           {act.error instanceof Error ? act.error.message : String(act.error)}
           {String(act.error).includes("problem-analysis") && (
             <div>
-              Use the <b>problem log</b> tab to record what went wrong and how it is fixed, then relaunch. ({rsRef})
+              {t("Use the problem log tab to record what went wrong and how it is fixed, then relaunch. ({rsRef})", { rsRef })}
             </div>
           )}
         </div>
@@ -183,8 +183,9 @@ function TaskActions({ task, rsRef }: { task: TaskView; rsRef: string }) {
 }
 
 function PostTab({ rs }: { rs: RunsetSummary }) {
+  const { t } = useI18n();
   const steps = Object.keys({ ...rs.post, ...(rs.reports ?? {}) });
-  if (!steps.length) return <div className="muted">no post-processing output yet.</div>;
+  if (!steps.length) return <div className="muted">{t("no post-processing output yet.")}</div>;
   return (
     <div>
       {steps.map((step) => (
@@ -229,9 +230,9 @@ function ProblemLogTab({ rs, task }: { rs: RunsetSummary; task?: TaskView }) {
     });
   return (
     <div>
-      {rs.problem_log_tail ? <FileView key={n} path={path} /> : <div className="muted">no entries yet.</div>}
+      {rs.problem_log_tail ? <FileView key={n} path={path} /> : <div className="muted">{t("no entries yet.")}</div>}
       <h3>{t("Append an entry")}</h3>
-      <p className="muted small">A design failure can only be relaunched after an entry newer than the failure (featx log append {rs.ref} -p … -s …).</p>
+      <p className="muted small">{t("A design failure can only be relaunched after an entry newer than the failure (featx log append {ref} -p … -s …).", { ref: rs.ref })}</p>
       <div className="form">
         <label>{t("problem")}</label>
         <textarea rows={3} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder={t("what failed and the evidence for the suspected cause")} />
@@ -318,8 +319,8 @@ function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; l
       <table className="small record-table">
         <thead>
           <tr>
-            <th>repo</th>
-            <th>branch</th>
+            <th>{t("repo")}</th>
+            <th>{t("branch")}</th>
             <th>HEAD</th>
             <th>{t("uncommitted")}</th>
             <th>{t("untracked")}</th>
@@ -339,7 +340,7 @@ function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; l
                 <td>
                   {r.patch ? (
                     <span className="badge warn">
-                      {r.files ?? 0} files <span className="diff-add">+{r.added ?? 0}</span> <span className="diff-del">−{r.deleted ?? 0}</span>
+                      {r.files ?? 0} {t("files")} <span className="diff-add">+{r.added ?? 0}</span> <span className="diff-del">−{r.deleted ?? 0}</span>
                     </span>
                   ) : r.dirty ? (
                     <span className="badge failed">{t("dirty, not saved")}</span>
@@ -405,7 +406,7 @@ function CodeTab({ rs }: { rs: RunsetSummary }) {
     <div>
       <div className="row" style={{ marginBottom: 8 }}>
         <span className="muted small">{t("against")}</span>
-        <select value={against} onChange={(e) => setAgainst(e.target.value)} aria-label="against">
+        <select value={against} onChange={(e) => setAgainst(e.target.value)} aria-label={t("against")}>
           <option value="base">{t("node base")}: {t("what this runset adds")}</option>
           <option value="prev">{t("previous runset")}: {t("what changed since it")}</option>
           <option value="worktree">{t("worktree now")}: {t("changes since this runset")}</option>
@@ -541,7 +542,7 @@ export function RunsetPage() {
         <h1 style={{ margin: 0 }} className="mono">
           {name}
         </h1>
-        {rs.sealed && <Badge kind="sealed">sealed</Badge>}
+        {rs.sealed && <Badge kind="sealed">{t("sealed")}</Badge>}
         {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
         <span>{rs.purpose}</span>
         <span className="spacer" />
@@ -550,22 +551,26 @@ export function RunsetPage() {
       </div>
       {rs.derived_from && (
         <p className="muted">
-          derived from <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
+          {t("derived from")} <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
         </p>
       )}
+      {rs.review?.needed && <div className="notice" role="status">
+        <b>{t("Review needed")}</b> · {t("Review the verdict and evidence for this completed runset")}{" "}
+        <Link to={`/node/${node}#verdict-evidence`}>{t("Edit verdict and evidence")}</Link>
+      </div>}
       <div className="row" style={{ margin: "10px 0" }}>
-        {tasks.map((t, i) => (
-          <span key={t.id} className="row" style={{ gap: 4 }}>
+        {tasks.map((task, i) => (
+          <span key={task.id} className="row" style={{ gap: 4 }}>
             {i > 0 && <span className="muted">→</span>}
-            <button className={`chip ${t.id === pick?.id ? "active" : ""}`} onClick={() => setSp({ task: t.id }, { replace: true })}>
-              <b>{t.kind}</b> <StateBadge state={t.state} />
-              {t.state === "running" && t.progress_pct != null && <span className="small">{t.progress_pct.toFixed(0)}%</span>}
-              {ACTIVE.includes(t.state) && t.eta_s != null && (
+            <button className={`chip ${task.id === pick?.id ? "active" : ""}`} onClick={() => setSp({ task: task.id }, { replace: true })}>
+              <b>{t(task.kind)}</b> <StateBadge state={task.state} />
+              {task.state === "running" && task.progress_pct != null && <span className="small">{task.progress_pct.toFixed(0)}%</span>}
+              {ACTIVE.includes(task.state) && task.eta_s != null && (
                 <span className="small muted">
-                  <Eta seconds={t.eta_s} />
+                  <Eta seconds={task.eta_s} />
                 </span>
               )}
-              {t.blocked && <Badge kind="blocked">blocked</Badge>}
+              {task.blocked && <StateBadge state="blocked" />}
             </button>
           </span>
         ))}
@@ -573,7 +578,7 @@ export function RunsetPage() {
       {pick && (
         <div className="card" style={{ marginBottom: 10 }}>
           <div className="row">
-            <b>{pick.kind}</b> <span className="mono small">{pick.id}</span> <span>{countsText(pick.counts)}</span> <span className="muted">{pick.note}</span>
+            <b>{t(pick.kind)}</b> <span className="mono small">{pick.id}</span> <span>{countsText(pick.counts, t)}</span> <span className="muted">{pick.note}</span>
           </div>
           {pick.failure != null && <pre className="error mono small">{typeof pick.failure === "string" ? pick.failure : JSON.stringify(pick.failure, null, 2)}</pre>}
           <TaskActions task={pick} rsRef={ref} />
@@ -586,7 +591,7 @@ export function RunsetPage() {
           <JobFilter jobs={jobs} selected={jobStates} onChange={(next) => setParam("jobs", next.join(",") || null)} />
           <JobsTable task={pick} job={job} onJob={(j) => setParam("job", j)} states={jobStates} />
           <h3>
-            Log {job ? <span className="mono">{job}</span> : `(${pick.kind})`}
+            {t("Log")} {job ? <span className="mono">{job}</span> : `(${pick.kind})`}
           </h3>
           <LogTail
             key={`${pick.id}/${job}`}
@@ -603,9 +608,9 @@ export function RunsetPage() {
       {tab === "problem log" && <ProblemLogTab rs={rs} task={pick} />}
       {tab === "provenance" && (
         <div>
-          <h3>binary</h3>
+          <h3>{t("binary")}</h3>
           <Json value={rs.bin ?? null} />
-          <h3>provenance</h3>
+          <h3>{t("provenance")}</h3>
           <Json value={rs.provenance ?? {}} />
           <p className="muted mono small">{rs.dir}</p>
         </div>

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { ErrorBox } from "./ui";
+import { useI18n } from "../i18n";
 
 interface LogResp {
   path: string;
@@ -10,6 +11,7 @@ interface LogResp {
 }
 
 export function LogTail({ task, job, live, initialStream }: { task: string; job?: string; live: boolean; initialStream?: "out" | "err" }) {
+  const { t } = useI18n();
   const [stream, setStream] = useState<"out" | "err">(initialStream ?? "out");
   const [lines, setLines] = useState(200);
   const [follow, setFollow] = useState(true);
@@ -27,23 +29,23 @@ export function LogTail({ task, job, live, initialStream }: { task: string; job?
       <div className="row" style={{ marginBottom: 6 }}>
         <select value={stream} onChange={(e) => setStream(e.target.value as "out" | "err")}>
           <option value="out">stdout</option>
-          <option value="err">stderr (PERF lines hidden)</option>
+          <option value="err">{t("stderr (PERF lines hidden)")}</option>
         </select>
         <select value={lines} onChange={(e) => setLines(Number(e.target.value))}>
           {[80, 200, 1000, 5000].map((n) => (
             <option key={n} value={n}>
-              last {n} lines
+              {t("last {count} lines", { count: n })}
             </option>
           ))}
         </select>
         <label>
-          <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
+          <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> {t("follow")}
         </label>
         <span className="muted small mono">{q.data?.path}</span>
       </div>
       <ErrorBox error={q.error} />
       <pre className="logbox" ref={box}>
-        {q.data ? (q.data.exists ? q.data.tail || "(empty)" : "(no log file yet)") : "…"}
+        {q.data ? (q.data.exists ? q.data.tail || t("(empty)") : t("(no log file yet)")) : "…"}
       </pre>
     </div>
   );

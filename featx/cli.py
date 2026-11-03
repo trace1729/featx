@@ -134,6 +134,9 @@ def node_add(path: str, hypothesis: str = typer.Option("", "-H", "--hypothesis")
              worktree: bool = typer.Option(False, "-w", "--worktree", help="also create the node worktree"),
              base: Optional[str] = typer.Option(None, help="worktree base ref (default git.base)")):
     """Create a node, e.g. `featx node add wpe/real/after-anchor -p -H '...' -w`."""
+    if not hypothesis.strip():
+        typer.secho("featx: a hypothesis is recommended; add one with -H or edit it later on the node page",
+                    fg=typer.colors.YELLOW, err=True)
     c = via_daemon()
     body = {"path": path, "hypothesis": hypothesis, "tags": tag, "parents": parents, "worktree": worktree,
             "base": base}
@@ -646,6 +649,10 @@ def result(ref: str, as_json: bool = typer.Option(False, "--json")):
     typer.echo(f"{r['ref']}  ({'sealed' if r['sealed'] else 'open'})  {r['purpose']}")
     for t in r["tasks"]:
         typer.echo(f"  {t['kind']:5s} {t['state']:9s} {t['counts']}  {t.get('failure') or ''}")
+    if (r.get("review") or {}).get("needed"):
+        typer.secho("  Review needed: record the verdict and evidence for this completed runset",
+                    fg=typer.colors.YELLOW)
+        typer.echo(f"    {r['review']['command']}")
     if r.get("bin"):
         typer.echo(f"  bin {r['bin'].get('emu')}")
     for stage in ("build", "run", "post"):

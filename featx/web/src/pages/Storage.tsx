@@ -34,17 +34,17 @@ export function StoragePage() {
         {r.root} · {r.total_human}
       </p>
       <label>
-        <input type="checkbox" checked={worktrees} onChange={(e) => setWorktrees(e.target.checked)} /> also size the worktrees (slow)
+        <input type="checkbox" checked={worktrees} onChange={(e) => setWorktrees(e.target.checked)} /> {t("also size the worktrees (slow)")}
       </label>
       <h2>{t("Nodes")}</h2>
       <table>
         <thead>
           <tr>
-            <th>node</th>
-            <th className="num">runsets</th>
-            <th className="num">size</th>
+            <th>{t("node")}</th>
+            <th className="num">{t("runsets")}</th>
+            <th className="num">{t("size")}</th>
             <th style={{ width: "35%" }} />
-            {worktrees && <th className="num">worktree</th>}
+            {worktrees && <th className="num">{t("worktree")}</th>}
           </tr>
         </thead>
         <tbody>
@@ -65,15 +65,15 @@ export function StoragePage() {
       </table>
       <h2>{t("Binary cache")}</h2>
       {r.bincache.length === 0 ? (
-        <div className="muted">empty</div>
+        <div className="muted">{t("empty")}</div>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>key</th>
-              <th>label</th>
-              <th className="num">size</th>
-              <th>referenced by</th>
+              <th>{t("key")}</th>
+              <th>{t("label")}</th>
+              <th className="num">{t("size")}</th>
+              <th>{t("referenced by")}</th>
             </tr>
           </thead>
           <tbody>
@@ -82,7 +82,7 @@ export function StoragePage() {
                 <td className="mono">{b.key}</td>
                 <td>{b.label}</td>
                 <td className="num">{b.human}</td>
-                <td className="mono small">{b.refs.length ? b.refs.join(", ") : <span className="badge warn">unreferenced</span>}</td>
+                <td className="mono small">{b.refs.length ? b.refs.join(", ") : <span className="badge warn">{t("unreferenced")}</span>}</td>
               </tr>
             ))}
           </tbody>
@@ -90,7 +90,7 @@ export function StoragePage() {
       )}
       <h2>{t("Trash")}</h2>
       {r.trash.length === 0 ? (
-        <div className="muted">empty</div>
+        <div className="muted">{t("empty")}</div>
       ) : (
         <table>
           <tbody>
@@ -108,7 +108,7 @@ export function StoragePage() {
       <h2>{t("Garbage collection")}</h2>
       <div className="row">
         <label>
-          <input type="checkbox" checked={buildDirs} onChange={(e) => setBuildDirs(e.target.checked)} /> include worktree build/ dirs of done or abandoned nodes
+          <input type="checkbox" checked={buildDirs} onChange={(e) => setBuildDirs(e.target.checked)} /> {t("include worktree build/ dirs of done or abandoned nodes")}
         </label>
         <button disabled={act.busy} onClick={() => runGc(false)}>
           {t("Dry run")}
@@ -117,7 +117,7 @@ export function StoragePage() {
       <ErrorBox error={act.error} />
       {gc && (
         <div className="card" style={{ marginTop: 10 }}>
-          {gc.applied ? <div className="okbox">Deleted {gc.candidates.length} item(s), {gc.total_human}.</div> : <div>{gc.candidates.length} candidate(s), {gc.total_human}. Nothing referenced by a runset, baseline or active task is listed.</div>}
+          {gc.applied ? <div className="okbox">{t("Deleted {count} item(s), {size}.", { count: gc.candidates.length, size: gc.total_human })}</div> : <div>{t("{count} candidate(s), {size}. Nothing referenced by a runset, baseline or active task is listed.", { count: gc.candidates.length, size: gc.total_human })}</div>}
           {gc.candidates.length > 0 && (
             <table style={{ marginTop: 8 }}>
               <tbody>
@@ -142,7 +142,7 @@ export function StoragePage() {
       )}
       <Dialog open={confirm} onClose={() => setConfirm(false)} title={t("Delete permanently?")}>
         <p>
-          {gc?.candidates.length} item(s), {gc?.total_human}. This cannot be undone.
+          {t("{count} item(s), {size}. This cannot be undone.", { count: gc?.candidates.length ?? 0, size: gc?.total_human ?? "" })}
         </p>
         <div className="dialog-actions">
           <button onClick={() => setConfirm(false)}>{t("Cancel")}</button>

@@ -17,7 +17,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .. import coderec, config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
+from .. import coderec, config, context, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
 from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Runset, Task
 from ..tree import Tree, TreeError
 from . import classify, eta, executor
@@ -48,6 +48,10 @@ class Scheduler:
         self.placement = placement or Placement()
         self.history = eta.History()
         self.tasks: dict[str, Task] = taskstore.load_all()
+        # Recovery observes completed runsets without emitting new completion reminders.
+        completed = {t.runset_id for t in self.tasks.values()}
+        active = {t.runset_id for t in self.tasks.values() if t.state not in TERMINAL_TASK_STATES}
+        self._completed_runsets = completed - active
         self.tick_errors: list[str] = []
         self.last_tick = 0.0
         self._progress_at: dict[tuple[str, str], float] = {}
@@ -268,6 +272,7 @@ class Scheduler:
             for task in created:
                 self.tasks[task.id] = task
                 self._save(task)
+            self._completed_runsets.discard(rs.id)
             self.inbox.emit("submitted", node=entry.rel, runset=rs.name,
                             tasks=[{"id": t.id, "kind": t.kind} for t in created])
             return {"runset": f"{entry.rel}/{rs.name}", "runset_dir": str(rdir),
@@ -654,6 +659,7 @@ class Scheduler:
         self._save(task)
         self.inbox.emit("cancelled", task=task.id, kind=task.kind, node=self._rel(tree, task),
                         runset=task.runset_name, reason="dependency", dependency=dep)
+        self._maybe_seal(tree, task)
 
     def _rel(self, tree: Tree, task: Task) -> str:
         try:
@@ -1110,17 +1116,27 @@ class Scheduler:
 
     def _maybe_seal(self, tree: Tree, task: Task) -> None:
         group = [t for t in self.tasks.values() if t.runset_id == task.runset_id]
-        if all(t.state in TERMINAL_TASK_STATES for t in group) and all(t.state == "succeeded" for t in group):
-            try:
-                entry = tree.get(task.node_id)
-                _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
+        if not all(t.state in TERMINAL_TASK_STATES for t in group):
+            return
+        if task.runset_id in self._completed_runsets:
+            return
+        try:
+            entry = tree.get(task.node_id)
+            _, rs = tree.find_runset(f"{entry.rel}/{task.runset_name}")
+            self._completed_runsets.add(task.runset_id)
+            if all(t.state == "succeeded" for t in group):
                 rs.sealed = True
                 tree.save_runset(entry, rs)
                 self.inbox.emit("runset_done", node=entry.rel, runset=rs.name,
                                 post=sorted(p.name for p in (entry.dir / rs.name / "post").iterdir())
                                 if (entry.dir / rs.name / "post").is_dir() else [])
-            except TreeError:
-                pass
+            review = context.review_state(entry, rs, {t.id: t for t in group})
+            if review["needed"]:
+                self.inbox.emit("review_needed", node=entry.rel, runset=rs.name,
+                                ref=review["ref"], outcome=review["outcome"], verdict=review["verdict"],
+                                evidence=review["evidence"], command=review["command"])
+        except TreeError:
+            pass
 
     # ============================================================== control
     def get(self, ref: str) -> Task:
@@ -1146,6 +1162,8 @@ class Scheduler:
             self._save(task)
             self.inbox.emit("cancelled", task=task.id, node=self._rel(tree, task), runset=task.runset_name,
                             jobs=jobs, dependents=cascaded)
+            for tid in [task.id, *cascaded]:
+                self._maybe_seal(tree, self.tasks[tid])
             out = {"task": task.id, "cancelled_jobs": n, "state": task.state, "dependents": cascaded}
         self._do_ssh_work(blocking=False)   # the kills, without the lock (else the next tick)
         return out
@@ -1229,6 +1247,7 @@ class Scheduler:
             # ones cancelled by a human keep their state.
             revived = self._revive_cancelled_dependents(task)
             self._unseal(tree, task)
+            self._completed_runsets.discard(task.runset_id)
             self._save(task)
             self.inbox.emit("relaunched", task=task.id, node=self._rel(tree, task), runset=task.runset_name,
                             jobs=[j.name for j in targets], reason=reason)

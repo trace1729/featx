@@ -7,14 +7,16 @@ export function Badge({ kind, title, children }: { kind?: string; title?: string
 }
 
 export function StateBadge({ state }: { state: string }) {
-  return <Badge kind={state}>{state}</Badge>;
+  const { t } = useI18n();
+  return <Badge kind={state}>{t(state)}</Badge>;
 }
 
 const VERDICT_MARK: Record<string, string> = { supported: "✔", refuted: "✘", inconclusive: "?", open: "·" };
 
 export function VerdictMark({ verdict }: { verdict: string }) {
+  const { t } = useI18n();
   return (
-    <span className={`verdict ${verdict}`} title={`verdict: ${verdict}`}>
+    <span className={`verdict ${verdict}`} title={t("verdict: {verdict}", { verdict: t(verdict) })}>
       {VERDICT_MARK[verdict] ?? "·"}
     </span>
   );
@@ -33,7 +35,7 @@ export function Progress({ pct, label }: { pct: number | null | undefined; label
 export function Eta({ seconds }: { seconds: number | null | undefined }) {
   const { t } = useI18n();
   if (seconds === 0) return <span className="muted">{t("done")}</span>;
-  return <span title="estimated time remaining">{fmtDuration(seconds)}</span>;
+  return <span title={t("estimated time remaining")}>{fmtDuration(seconds)}</span>;
 }
 
 export function ErrorBox({ error }: { error: unknown }) {
@@ -55,6 +57,7 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: readon
 }
 
 export function Dialog({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = ref.current;
@@ -65,7 +68,7 @@ export function Dialog({ open, onClose, title, children }: { open: boolean; onCl
   if (!open) return null;
   return (
     <dialog ref={ref} onClose={onClose} onCancel={onClose}>
-      <h2>{title}</h2>
+      <h2>{t(title)}</h2>
       {children}
     </dialog>
   );
@@ -92,7 +95,7 @@ export function useAction() {
 
 export function Loading({ what }: { what?: string }) {
   const { t } = useI18n();
-  return <div className="muted">{t("Loading")} {what ?? ""}…</div>;
+  return <div className="muted">{t("Loading")} {what ? t(what) : ""}…</div>;
 }
 
 export function Json({ value }: { value: unknown }) {

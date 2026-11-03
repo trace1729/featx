@@ -20,6 +20,7 @@ export function DiffView({ text }: { text: string }) {
 }
 
 function FileDiff({ scope, sub, file, fetchDiff }: { scope: string; sub: string; file: string; fetchDiff: DiffFetcher }) {
+  const { t } = useI18n();
   const q = useQuery({
     queryKey: ["diff", scope, sub, file],
     queryFn: () => fetchDiff(sub, file),
@@ -28,13 +29,14 @@ function FileDiff({ scope, sub, file, fetchDiff }: { scope: string; sub: string;
   if (q.error) return <ErrorBox error={q.error} />;
   return (
     <div>
-      {q.data!.truncated && <div className="notice">diff truncated</div>}
-      {q.data!.diff ? <DiffView text={q.data!.diff} /> : <div className="muted small">no textual diff (binary or mode change)</div>}
+      {q.data!.truncated && <div className="notice">{t("diff truncated")}</div>}
+      {q.data!.diff ? <DiffView text={q.data!.diff} /> : <div className="muted small">{t("no textual diff (binary or mode change)")}</div>}
     </div>
   );
 }
 
 function UntrackedTree({ nodes, sub, level, scope, fetchDiff }: { nodes: UntrackedNode[]; sub: string; level: number; scope: string; fetchDiff: DiffFetcher }) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (path: string) =>
@@ -70,7 +72,7 @@ function UntrackedTree({ nodes, sub, level, scope, fetchDiff }: { nodes: Untrack
               <td />
               <td />
               <td className="mono" style={{ paddingLeft: 14 + level * 14 }}>
-                {node.name} <Badge>untracked</Badge>
+                {node.name} <Badge>{t("untracked")}</Badge>
               </td>
             </tr>
             {open === node.path && (
@@ -88,15 +90,16 @@ function UntrackedTree({ nodes, sub, level, scope, fetchDiff }: { nodes: Untrack
 }
 
 function UntrackedSection({ paths, sub, total, truncated, scope, fetchDiff }: { paths: string[]; sub: string; total: number; truncated: boolean; scope: string; fetchDiff: DiffFetcher }) {
+  const { t } = useI18n();
   const [show, setShow] = useState(false);
   const nodes = foldUntracked(paths);
   const dirs = untrackedDirCount(paths);
   return (
     <div style={{ marginTop: 8 }}>
       <button className="link small" onClick={() => setShow(!show)}>
-        {show ? "▾" : "▸"} untracked: {total} file{total === 1 ? "" : "s"}
-        {dirs > 0 ? ` in ${dirs} dir${dirs === 1 ? "" : "s"}` : ""}
-        {truncated ? " (list truncated)" : ""}
+        {show ? "▾" : "▸"} {t("untracked: {count} files", { count: total })}
+        {dirs > 0 ? t(" in {count} dirs", { count: dirs }) : ""}
+        {truncated ? t(" (list truncated)") : ""}
       </button>
       {show && (
         <table className="small" style={{ marginTop: 4 }} data-testid="untracked-tree">
@@ -117,9 +120,10 @@ function unchanged(r: CodeRepo): boolean {
 export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktree", vs }: {
   r: CodeRepo; sub: string; scope: string; fetchDiff: DiffFetcher; rootLabel?: string; vs?: string;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState<string | null>(null);
   const title = sub || rootLabel;
-  if (!r.exists) return <div className="notice">{title}: {r.path} is missing on disk</div>;
+  if (!r.exists) return <div className="notice">{title}: {t("{path} is missing on disk", { path: r.path })}</div>;
   if (r.error) return <div className="notice">{title}: {r.error}</div>;
   const files = r.files ?? [];
   const untracked = r.untracked ?? [];
@@ -130,17 +134,17 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
       <h3 style={{ marginTop: 0 }}>
         {title}{" "}
         <span className="muted small mono">
-          {vs ? `vs ${vs}` : r.base ? `vs ${r.base}` : ""}
+          {vs ? `${t("vs")} ${vs}` : r.base ? `${t("vs")} ${r.base}` : ""}
           {r.merge_base ? ` (merge-base ${r.merge_base})` : ""}
         </span>
       </h3>
       <div className="muted small">
-        {r.ahead ?? 0} commit(s) ahead, {r.behind ?? 0} behind · {files.length} file(s) changed, +{r.added ?? 0} −{r.deleted ?? 0}
-        {total > 0 && ` · ${total} untracked`}
+        {t("{ahead} commit(s) ahead, {behind} behind · {files} file(s) changed, +{added} −{deleted}", { ahead: r.ahead ?? 0, behind: r.behind ?? 0, files: files.length, added: r.added ?? 0, deleted: r.deleted ?? 0 })}
+        {total > 0 && t(" · {count} untracked", { count: total })}
       </div>
       {r.note && <div className="muted small">{r.note}</div>}
       {r.patch_error && <div className="notice small">{r.patch_error}</div>}
-      {!files.length && !total && !r.ahead && <div className="muted">no changes</div>}
+      {!files.length && !total && !r.ahead && <div className="muted">{t("no changes")}</div>}
       {(r.commits ?? []).length > 0 && (
         <table className="small" style={{ marginTop: 8 }}>
           <tbody>
@@ -162,7 +166,7 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
               <th>st</th>
               <th className="num">+</th>
               <th className="num">−</th>
-              <th>file</th>
+              <th>{t("file")}</th>
             </tr>
           </thead>
           <tbody>
@@ -173,7 +177,7 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
                 <td className="num diff-del">{f.deleted ?? "bin"}</td>
                 <td className="mono">
                   {f.old_path ? `${f.old_path} → ` : ""}
-                  {f.path} {f.uncommitted && <Badge kind="warn">uncommitted</Badge>}
+                  {f.path} {f.uncommitted && <Badge kind="warn">{t("uncommitted")}</Badge>}
                 </td>
               </tr>,
               open === f.path && (
@@ -192,10 +196,10 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
       )}
       {(r.omitted ?? []).length > 0 && (
         <div className="muted small" title={r.omitted!.map((o) => `${o.path}: ${o.reason}`).join("\n")}>
-          untracked, not saved: <span className="mono">{r.omitted!.slice(0, 3).map((o) => o.path).join(", ")}{r.omitted!.length > 3 ? `, … (${r.omitted!.length})` : ""}</span>
+          {t("untracked, not saved")}: <span className="mono">{r.omitted!.slice(0, 3).map((o) => o.path).join(", ")}{r.omitted!.length > 3 ? `, … (${r.omitted!.length})` : ""}</span>
         </div>
       )}
-      {r.truncated && <div className="muted small">file list truncated</div>}
+      {r.truncated && <div className="muted small">{t("file list truncated")}</div>}
     </div>
   );
 }
@@ -205,7 +209,7 @@ export function ChangesView({ changes, scope, fetchDiff, rootLabel = "worktree",
 }) {
   const { t } = useI18n();
   const repos = Object.entries(changes?.repos ?? {});
-  if (!repos.length) return <div className="muted">no changes</div>;
+  if (!repos.length) return <div className="muted">{t("no changes")}</div>;
   // unchanged repos (a node usually carries a dozen submodules) are listed on one line
   const same = repos.filter(([, r]) => unchanged(r));
   const shown = repos.filter(([, r]) => !unchanged(r));

@@ -36,30 +36,30 @@ function TopBar() {
         <NavLink to="/docs">{t("Docs")}</NavLink>
       </nav>
       <span className="spacer" />
-      {status.error && <span className="badge failed">daemon unreachable</span>}
+      {status.error && <span className="badge failed">{t("daemon unreachable")}</span>}
       {s && s.tick_errors.length > 0 && (
         <span className="badge failed" title={s.tick_errors[s.tick_errors.length - 1]}>
-          {s.tick_errors.length} tick errors
+          {t("{count} tick errors", { count: s.tick_errors.length })}
         </span>
       )}
       {s && (
         <span className="stat">
-          {s.tasks.running} running · {s.tasks.queued} queued · {s.tasks.failed} failed
+          {t("{running} running · {queued} queued · {failed} failed", { running: s.tasks.running, queued: s.tasks.queued, failed: s.tasks.failed })}
         </span>
       )}
       {s && s.max_total_cores !== undefined && (
-        <Link to="/tasks" className="stat" title={`run cores ${s.run_cores_in_use ?? 0}/${s.max_total_cores || "∞"} · build cores ${s.build_cores_in_use ?? 0}/${s.max_build_cores || "∞"} (caps editable on the Tasks page)`}>
-          cores {s.run_cores_in_use ?? 0}/{s.max_total_cores || "∞"}
+        <Link to="/tasks" className="stat" title={t("run cores {runUsed}/{runCap} · build cores {buildUsed}/{buildCap} (caps editable on the Tasks page)", { runUsed: s.run_cores_in_use ?? 0, runCap: s.max_total_cores || "∞", buildUsed: s.build_cores_in_use ?? 0, buildCap: s.max_build_cores || "∞" })}>
+          {t("cores {used}/{cap}", { used: s.run_cores_in_use ?? 0, cap: s.max_total_cores || "∞" })}
         </Link>
       )}
       {free.length > 0 && (
-        <span className="stat" title={free.map((h) => `${h.host}: ${h.free_cores?.toFixed(0)} cores free, ${h.featx_jobs} featx jobs`).join("\n")}>
-          {free.reduce((a, h) => a + Math.max(0, h.free_cores ?? 0), 0).toFixed(0)} cores free / {free.length} hosts
+        <span className="stat" title={free.map((h) => t("{host}: {cores} cores free, {jobs} featx jobs", { host: h.host, cores: h.free_cores?.toFixed(0) ?? 0, jobs: h.featx_jobs ?? 0 })).join("\n")}>
+          {t("{cores} cores free / {count} hosts", { cores: free.reduce((a, h) => a + Math.max(0, h.free_cores ?? 0), 0).toFixed(0), count: free.length })}
         </span>
       )}
       {health.data && (
         <span className={`stat ${stale ? "badge failed" : ""}`} title={`pid ${health.data.pid}, started ${health.data.started}\n${health.data.root}`}>
-          {health.data.host} · tick {ago(s?.last_tick)}
+          {health.data.host} · tick {ago(s?.last_tick, t)}
         </span>
       )}
       <button className="link" onClick={() => setToken("")}>
@@ -68,6 +68,11 @@ function TopBar() {
       <LanguageToggle />
     </div>
   );
+}
+
+function NotFound() {
+  const { t } = useI18n();
+  return <div className="muted">{t("no such page")}</div>;
 }
 
 export function App() {
@@ -93,7 +98,7 @@ export function App() {
                 <Route path="/storage" element={<StoragePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/docs/*" element={<DocsPage />} />
-                <Route path="*" element={<div className="muted">no such page</div>} />
+                <Route path="*" element={<NotFound />} />
               </Routes>
             </div>
           </div>

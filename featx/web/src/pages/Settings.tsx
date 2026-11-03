@@ -29,24 +29,23 @@ function ConfigEditor() {
       <div className="grid2">
         <div>
           <h3>
-            Overrides <span className="muted mono small">{c.path}</span>
+            {t("Overrides")} <span className="muted mono small">{c.path}</span>
           </h3>
           <YamlEditor value={text} onChange={setText} height="420px" />
         </div>
         <div>
-          <h3>Package defaults (read only)</h3>
+          <h3>{t("Package defaults (read only)")}</h3>
           <YamlEditor value={c.defaults_text} readOnly height="420px" />
         </div>
       </div>
       <p className="muted small">
-        Only keys that exist in the defaults are accepted. A key set to <code>null</code> falls back to the default. Changes to {c.restart_keys.join(", ")} need a
-        daemon restart, everything else applies at the next scheduler tick.
+        {t("Only keys that exist in the defaults are accepted. A key set to null falls back to the default. Changes to {keys} need a daemon restart, everything else applies at the next scheduler tick.", { keys: c.restart_keys.join(", ") })}
       </p>
       <ErrorBox error={act.error} />
       {saved && (
         <div className={saved.restart_needed.length ? "notice" : "okbox"}>
-          Saved. Changed: {saved.changed.join(", ") || "nothing"}.
-          {saved.restart_needed.length > 0 && ` Restart featxd to apply: ${saved.restart_needed.join(", ")} (featx daemon stop && featx daemon start).`}
+          {t("Saved. Changed: {changes}.", { changes: saved.changed.join(", ") || t("nothing") })}
+          {saved.restart_needed.length > 0 && t(" Restart featxd to apply: {keys} (featx daemon stop && featx daemon start).", { keys: saved.restart_needed.join(", ") })}
         </div>
       )}
       <div className="row">
@@ -89,7 +88,7 @@ function BaselinesCard() {
       await qc.invalidateQueries({ queryKey: ["baselines"] });
     });
   const field = (key: keyof typeof form, placeholder: string, width: number) => (
-    <input type="text" className="mono" placeholder={placeholder} style={{ width }} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+    <input type="text" className="mono" placeholder={t(placeholder)} style={{ width }} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
   );
   return (
     <div>
@@ -97,9 +96,9 @@ function BaselinesCard() {
       <table>
         <thead>
           <tr>
-            <th>name</th>
-            <th>result root</th>
-            <th>description</th>
+            <th>{t("name")}</th>
+            <th>{t("result root")}</th>
+            <th>{t("description")}</th>
             <th />
           </tr>
         </thead>
@@ -116,12 +115,12 @@ function BaselinesCard() {
                 {b.checkpoint && <div className="muted small mono">checkpoint {b.checkpoint}</div>}
               </td>
               <td>
-                <button className="link" disabled={rm.busy} onClick={() => remove(name)} title="refused while a workload or a post recipe uses it">
-                  remove
+                <button className="link" disabled={rm.busy} onClick={() => remove(name)} title={t("refused while a workload or a post recipe uses it")}>
+                  {t("remove")}
                 </button>
                 {blocked === name && !!rm.error && !rm.busy && (
                   <button className="link danger" onClick={() => remove(name, true)}>
-                    remove anyway
+                    {t("remove anyway")}
                   </button>
                 )}
               </td>
@@ -155,9 +154,9 @@ function BinImportCard() {
     <div>
       <div className="row">
         <input type="text" className="mono" placeholder="/abs/path/to/emu" style={{ width: 460 }} value={path} onChange={(e) => setPath(e.target.value)} />
-        <input type="text" placeholder="label" style={{ width: 200 }} value={label} onChange={(e) => setLabel(e.target.value)} />
-        <select value={mode} onChange={(e) => setMode(e.target.value)} title="the binary's TRACERTL_MODE; a run with --bin <key> follows it">
-          <option value="">mode: unknown</option>
+        <input type="text" placeholder={t("label")} style={{ width: 200 }} value={label} onChange={(e) => setLabel(e.target.value)} />
+        <select value={mode} onChange={(e) => setMode(e.target.value)} title={t("the binary's TRACERTL_MODE; a run with --bin <key> follows it")}>
+          <option value="">{t("mode: unknown")}</option>
           <option value="trace">trace</option>
           <option value="exec">exec</option>
         </select>
@@ -187,13 +186,13 @@ function DoctorCard() {
       <div className="row">
         {q.data && (
           <span>
-            {q.data.counts.ok ?? 0} ok, {q.data.counts.warn ?? 0} warn, {q.data.counts.fail ?? 0} fail
+            {t("{ok} ok, {warn} warn, {fail} fail", { ok: q.data.counts.ok ?? 0, warn: q.data.counts.warn ?? 0, fail: q.data.counts.fail ?? 0 })}
           </span>
         )}
-        <button disabled={q.isFetching} onClick={() => (ssh ? q.refetch() : setSsh(true))} title="also ssh to every host (slow)">
-          {q.isFetching ? t("Checking…") : ssh ? "Recheck with hosts" : "Check hosts too"}
+        <button disabled={q.isFetching} onClick={() => (ssh ? q.refetch() : setSsh(true))} title={t("also ssh to every host (slow)")}>
+          {q.isFetching ? t("Checking…") : t(ssh ? "Recheck with hosts" : "Check hosts too")}
         </button>
-        <span className="muted small">same as: featx doctor{ssh ? "" : " --no-ssh"}</span>
+        <span className="muted small">{t("same as:")} {t("featx doctor")}{ssh ? "" : " --no-ssh"}</span>
       </div>
       <ErrorBox error={q.error} />
       {q.isLoading ? (
@@ -204,7 +203,7 @@ function DoctorCard() {
             {(q.data?.checks ?? []).map((c) => (
               <tr key={c.check}>
                 <td>
-                  <Badge kind={CHECK_BADGE[c.status]}>{c.status}</Badge>
+                  <Badge kind={CHECK_BADGE[c.status]}>{t(c.status)}</Badge>
                 </td>
                 <td>{c.check}</td>
                 <td className="mono small">{c.detail}</td>
@@ -228,12 +227,12 @@ function CheckpointsCard() {
     <div>
       <div className="row">
         <label>
-          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> also multi-hart / broken sets
+          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> {t("also multi-hart / broken sets")}
         </label>
-        <button disabled={q.isFetching} onClick={() => (refresh ? q.refetch() : setRefresh(true))} title="rebuild every set's cached index (featx ckpt rescan)">
+        <button disabled={q.isFetching} onClick={() => (refresh ? q.refetch() : setRefresh(true))} title={t("rebuild every set's cached index (featx ckpt rescan)")}>
           {q.isFetching ? t("Scanning…") : t("Rescan")}
         </button>
-        <span className="muted small">exec runs pick one with run.checkpoint (submit tab, mode exec)</span>
+        <span className="muted small">{t("exec runs pick one with run.checkpoint (submit tab, mode exec)")}</span>
       </div>
       <ErrorBox error={q.error} />
       {q.isLoading ? (
@@ -242,13 +241,13 @@ function CheckpointsCard() {
         <table>
           <thead>
             <tr>
-              <th>set</th>
-              <th>layout</th>
-              <th>points</th>
-              <th>benches</th>
-              <th>insts</th>
-              <th>restorer</th>
-              <th>traced by / problem</th>
+              <th>{t("set")}</th>
+              <th>{t("layout")}</th>
+              <th>{t("points")}</th>
+              <th>{t("benches")}</th>
+              <th>{t("insts")}</th>
+              <th>{t("restorer")}</th>
+              <th>{t("traced by / problem")}</th>
             </tr>
           </thead>
           <tbody>
@@ -260,13 +259,13 @@ function CheckpointsCard() {
                 <td>{c.layout ?? "-"}</td>
                 <td className="mono">
                   {c.n_points}
-                  {(c.missing > 0 || c.extra > 0) && <span className="muted small" title="weights json entries without an image / images not in the json"> ({c.missing} missing, {c.extra} extra)</span>}
+                  {(c.missing > 0 || c.extra > 0) && <span className="muted small" title={t("weights json entries without an image / images not in the json")}> {t("({missing} missing, {extra} extra)", { missing: c.missing, extra: c.extra })}</span>}
                 </td>
                 <td className="mono">{c.benches}</td>
-                <td>{c.has_insts ? "yes" : "no"}</td>
+                <td>{t(c.has_insts ? "yes" : "no")}</td>
                 <td>{c.restorer_needed ? ".gz" : "-"}</td>
                 <td className="small">
-                  {c.runnable ? c.traced_by.join(", ") : <Badge kind={c.multihart ? "warn" : "failed"}>{[c.multihart && "multi-hart (not runnable)", c.error].filter(Boolean).join("; ")}</Badge>}
+                  {c.runnable ? c.traced_by.join(", ") : <Badge kind={c.multihart ? "warn" : "failed"}>{[c.multihart && t("multi-hart (not runnable)"), c.error].filter(Boolean).join("; ")}</Badge>}
                 </td>
               </tr>
             ))}

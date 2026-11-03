@@ -68,6 +68,16 @@ def test_run_post_success_seals(root, fake_emu):
     assert summ["self.finished"] == 1 and summ["self.ipc_geomean"] == pytest.approx(0.5)
     types = [e["type"] for e in s.inbox.query(unacked=True)]
     assert "runset_done" in types and "failure" not in types
+    reviews = s.inbox.query(types=["review_needed"])
+    assert len(reviews) == 1 and reviews[0]["outcome"] == "succeeded"
+    assert reviews[0]["ref"] == res["runset"] and r["review"]["needed"]
+    assert Tree().get("t/sched/x").node.verdict == "open" and Tree().get("t/sched/x").node.evidence == []
+    from featx import cli
+    from typer.testing import CliRunner
+    shown = CliRunner().invoke(cli.app, ["result", res["runset"]])
+    assert "Review needed" in shown.output and reviews[0]["command"] in shown.output
+    service.node_update("t/sched/x", verdict="supported", add_evidence=[res["runset"]])
+    assert not service.result_get(res["runset"])["review"]["needed"]
     # sealed runsets refuse new tasks
     with pytest.raises(SchedError, match="sealed"):
         s.submit("t/sched/x", ["post"], runset=res["runset"])
@@ -164,6 +174,29 @@ def test_heartbeat_death_infra_retry(root, fake_emu):
     st = executor.read_state(jdir, s.tasks[tid].jobs[0].attempt)
     assert executor.alive_on_host("localhost", st["pid"]) is False
     assert not session_procs(st["pid"])          # the emu went too
+
+
+def test_review_events_for_failure_cancellation_and_reviewed_node(root, fake_emu):
+    make_node(fake_emu, ["abort_1_0.5", "hang_1_0.5", "ok_1_0.5"])
+    s = sched()
+    failed = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), only_points=["abort_1_0.5"])
+    failed_id = failed["tasks"][0]["id"]
+    run_until(s, lambda: s.tasks[failed_id].state == "failed")
+    reviews = s.inbox.query(types=["review_needed"])
+    assert len(reviews) == 1 and reviews[0]["outcome"] == "failed"
+    assert Tree().get("t/sched/x").node.verdict == "open" and Tree().get("t/sched/x").node.evidence == []
+
+    cancelled = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), only_points=["hang_1_0.5"])
+    cancelled_id = cancelled["tasks"][0]["id"]
+    s.cancel(cancelled_id)
+    reviews = s.inbox.query(types=["review_needed"])
+    assert len(reviews) == 2 and reviews[-1]["outcome"] == "cancelled"
+
+    service.node_update("t/sched/x", verdict="supported", add_evidence=[failed["runset"], cancelled["runset"]])
+    done = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), only_points=["ok_1_0.5"])
+    done_id = done["tasks"][0]["id"]
+    run_until(s, lambda: s.tasks[done_id].state == "succeeded")
+    assert len(s.inbox.query(types=["review_needed"])) == 2
 
 
 def test_scripts_inherited_in_build_run_post(root, fake_emu, tmp_path):

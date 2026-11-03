@@ -29,8 +29,8 @@ scripts. Every submission creates a dated runset <node>/<YYYYMMDD-n> holding bui
 post/<step>/ and problem-analysis.log.
 
 Typical loop:
- 1. tree_list -> node_context(node): hypothesis chain, effective recipes, worktree state, latest
-    runsets and their post summaries.
+ 1. tree_list -> node_show(node) or node_context(node): the research record and recent runs;
+    node_context adds the hypothesis chain, effective recipes and worktree state.
  2. Implement in the node's worktree (path in node_context.git), adjust recipes with recipe_set,
     add helper scripts with script_write.
  3. task_submit(node, kinds=[build,run,post]) -> task ids; then events_wait.
@@ -91,6 +91,17 @@ def node_context(node: str, max_runsets: int = 3, include_archived: bool = False
     children, effective and own recipes, scripts, worktree status, latest runset summaries
     (task states, post metrics, problem-log tail)."""
     return service.node_context(node, max_runsets, include_archived=include_archived)
+
+
+@tool
+def node_show(node: str, runsets: int = 3, full: bool = False,
+              include_archived: bool = False) -> dict:
+    """Show a node's research record and recent runsets, matching ``featx node show``.
+    Set full=True for the complete context with ancestors, recipes, scripts and worktree state.
+    ``runsets=0`` hides runsets; include_archived includes archived ones."""
+    if full:
+        return service.node_context(node, runsets, include_archived=include_archived)
+    return service.node_brief(node, runsets, include_archived=include_archived)
 
 
 @tool

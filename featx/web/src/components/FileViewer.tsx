@@ -6,6 +6,7 @@ import { api } from "../api";
 import type { FileList, FileRead } from "../types";
 import { fmtBytes, parseCsv } from "../util";
 import { ErrorBox, Loading } from "./ui";
+import { useI18n } from "../i18n";
 
 export function Markdown({ text }: { text: string }) {
   return (
@@ -16,6 +17,7 @@ export function Markdown({ text }: { text: string }) {
 }
 
 export function CsvTable({ text }: { text: string }) {
+  const { t } = useI18n();
   const rows = useMemo(() => parseCsv(text), [text]);
   const [sort, setSort] = useState<{ col: number; desc: boolean } | null>(null);
   const [head, ...body] = rows;
@@ -31,7 +33,7 @@ export function CsvTable({ text }: { text: string }) {
       return sort.desc ? -c : c;
     });
   }, [body, sort]);
-  if (!head) return <div className="muted">empty</div>;
+  if (!head) return <div className="muted">{t("empty")}</div>;
   return (
     <div className="table-wrap">
       <table>
@@ -62,6 +64,7 @@ export function CsvTable({ text }: { text: string }) {
 }
 
 export function FileView({ path, tail, refetchMs }: { path: string; tail?: number; refetchMs?: number }) {
+  const { t } = useI18n();
   const q = useQuery({
     queryKey: ["file", path, tail],
     queryFn: () => api.get<FileRead>("/files", { path, tail }),
@@ -75,21 +78,22 @@ export function FileView({ path, tail, refetchMs }: { path: string; tail?: numbe
     <div>
       <div className="muted small mono">
         {f.path} · {fmtBytes(f.size)}
-        {f.truncated ? " · truncated preview" : ""}
+        {f.truncated ? t(" · truncated preview") : ""}
       </div>
-      {ext === "csv" ? <CsvTable text={f.text} /> : ext === "md" ? <Markdown text={f.text} /> : <pre className="logbox">{f.text || "(empty)"}</pre>}
+      {ext === "csv" ? <CsvTable text={f.text} /> : ext === "md" ? <Markdown text={f.text} /> : <pre className="logbox">{f.text || t("(empty)")}</pre>}
     </div>
   );
 }
 
 /** Lists the previewable files below `dir` and shows the selected one. */
 export function FileBrowser({ dir, depth }: { dir: string; depth?: number }) {
+  const { t } = useI18n();
   const [sel, setSel] = useState<string | null>(null);
   const q = useQuery({ queryKey: ["files", dir, depth], queryFn: () => api.get<FileList>("/files/list", { path: dir, depth: depth ?? 2 }) });
   if (q.isLoading) return <Loading what="files" />;
   if (q.error) return <ErrorBox error={q.error} />;
   const files = q.data!.files;
-  if (!files.length) return <div className="muted">no files</div>;
+  if (!files.length) return <div className="muted">{t("no files")}</div>;
   return (
     <div>
       <div className="chips" style={{ marginBottom: 8 }}>
@@ -100,14 +104,14 @@ export function FileBrowser({ dir, depth }: { dir: string; depth?: number }) {
               <span className="muted small">{fmtBytes(f.size)}</span>
             </button>
           ) : (
-            <span key={f.path} className="chip muted" title="binary: not previewed">
+            <span key={f.path} className="chip muted" title={t("binary: not previewed")}>
               <span className="mono">{f.path}</span>
               <span className="small">{fmtBytes(f.size)}</span>
             </span>
           ),
         )}
       </div>
-      {q.data!.truncated && <div className="notice">listing truncated</div>}
+      {q.data!.truncated && <div className="notice">{t("listing truncated")}</div>}
       {sel && <FileView path={`${q.data!.root}/${sel}`} />}
     </div>
   );

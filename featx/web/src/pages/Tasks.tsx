@@ -13,6 +13,7 @@ const ACTIVE = ["queued", "running", "launching"];
 export function PriorityControl({ task }: { task: TaskView }) {
   const qc = useQueryClient();
   const act = useAction();
+  const { t } = useI18n();
   const now = task.priority ?? 0;
   const [text, setText] = useState(String(now));
   useEffect(() => setText(String(now)), [now]);
@@ -23,7 +24,7 @@ export function PriorityControl({ task }: { task: TaskView }) {
     });
   if (!ACTIVE.includes(task.state)) return <span className="muted">{now || ""}</span>;
   return (
-    <span className="row" style={{ gap: 3, flexWrap: "nowrap" }} title={act.error ? String(act.error) : "launch priority of this runset (higher first)"}>
+    <span className="row" style={{ gap: 3, flexWrap: "nowrap" }} title={act.error ? String(act.error) : t("launch priority of this runset (higher first)")}>
       <button className="link" aria-label={`raise priority of ${task.id}`} disabled={act.busy} onClick={() => set(now + 1)}>
         ▲
       </button>
@@ -60,7 +61,7 @@ function CapField({ label, used, cap, keyName, onSaved }: { label: string; used:
     });
   return (
     <div className="row">
-      <span style={{ width: "7em" }}>{label}</span>
+      <span style={{ width: "7em" }}>{t(label)}</span>
       <span className="mono">
         {used} / {cap ? cap : "∞"}
       </span>
@@ -71,13 +72,14 @@ function CapField({ label, used, cap, keyName, onSaved }: { label: string; used:
       <button disabled={!valid || Number(text) === cap || act.busy} onClick={save}>
         {t("Set")}
       </button>
-      <span className="muted small mono">{keyName} (0 = no cap)</span>
+      <span className="muted small mono">{keyName} {t("(0 = no cap)")}</span>
       <ErrorBox error={act.error} />
     </div>
   );
 }
 
 export function CapacityPanel() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.get<Status>("/status"), refetchInterval: 5000 });
   const s = status.data;
@@ -91,26 +93,28 @@ export function CapacityPanel() {
       <CapField label="run cores" used={s.run_cores_in_use ?? 0} cap={s.max_total_cores ?? 0} keyName="placement.max_total_cores" onSaved={refresh} />
       <CapField label="build cores" used={s.build_cores_in_use ?? 0} cap={s.max_build_cores ?? 0} keyName="placement.max_build_cores" onSaved={refresh} />
       <div className="muted small">
-        Saved in the featx.yaml user layer and applied on the next scheduler tick; queued tasks wait for cores in priority order, running jobs are never stopped.
+        {t("Saved in the featx.yaml user layer and applied on the next scheduler tick; queued tasks wait for cores in priority order, running jobs are never stopped.")}
+
       </div>
     </div>
   );
 }
 
 export function TaskTable({ tasks }: { tasks: TaskView[] }) {
-  if (!tasks.length) return <div className="muted">none</div>;
+  const { t: tr } = useI18n();
+  if (!tasks.length) return <div className="muted">{tr("none")}</div>;
   return (
     <table>
       <thead>
         <tr>
-          <th>runset</th>
-          <th>stage</th>
-          <th>state</th>
-          <th title="launch priority (higher first)">prio</th>
-          <th>jobs</th>
-          <th>progress</th>
+          <th>{tr("runset")}</th>
+          <th>{tr("stage")}</th>
+          <th>{tr("state")}</th>
+          <th title={tr("launch priority (higher first)")}>{tr("prio")}</th>
+          <th>{tr("jobs")}</th>
+          <th>{tr("progress")}</th>
           <th>ETA</th>
-          <th>created</th>
+          <th>{tr("created")}</th>
         </tr>
       </thead>
       <tbody>
@@ -121,14 +125,14 @@ export function TaskTable({ tasks }: { tasks: TaskView[] }) {
                 {t.node}/{t.runset}
               </Link>
             </td>
-            <td>{t.kind}</td>
+            <td>{tr(t.kind)}</td>
             <td>
-              <StateBadge state={t.state} /> {t.blocked && <span className="badge blocked">blocked</span>} <span className="muted small">{t.note}</span>
+              <StateBadge state={t.state} /> {t.blocked && <span className="badge blocked">{tr("blocked")}</span>} <span className="muted small">{t.note}</span>
             </td>
             <td>
               <PriorityControl task={t} />
             </td>
-            <td>{countsText(t.counts)}</td>
+            <td>{countsText(t.counts, tr)}</td>
             <td>{t.state === "running" ? <Progress pct={t.progress_pct ?? null} /> : ""}</td>
             <td>{ACTIVE.includes(t.state) ? <Eta seconds={t.eta_s} /> : ""}</td>
             <td className="muted">{fmtTime(t.created)}</td>
@@ -218,12 +222,12 @@ export function TasksPage() {
       <table>
         <thead>
           <tr>
-            <th>host</th>
-            <th className="num">free cores</th>
-            <th className="num">free mem GB</th>
-            <th className="num">load</th>
-            <th className="num">featx jobs</th>
-            <th>state</th>
+            <th>{t("host")}</th>
+            <th className="num">{t("free cores")}</th>
+            <th className="num">{t("free mem GB")}</th>
+            <th className="num">{t("load")}</th>
+            <th className="num">{t("featx jobs")}</th>
+            <th>{t("state")}</th>
           </tr>
         </thead>
         <tbody>
@@ -234,7 +238,7 @@ export function TasksPage() {
               <td className="num">{h.free_mem_gb?.toFixed(0) ?? ""}</td>
               <td className="num">{h.load1 !== undefined ? `${h.load1.toFixed(0)} / ${h.cores}` : ""}</td>
               <td className="num">{h.featx_jobs ?? 0}</td>
-              <td>{h.bad ? <span className="badge failed">avoided</span> : h.error ? <span className="badge failed">{h.error}</span> : h.state ?? ""}</td>
+              <td>{h.bad ? <span className="badge failed">{t("avoided")}</span> : h.error ? <span className="badge failed">{h.error}</span> : h.state ?? ""}</td>
             </tr>
           ))}
         </tbody>

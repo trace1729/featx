@@ -38,6 +38,17 @@ featx 是一个面向香山的功能探索和实验任务调度的系统：它�
     - 运行进度、资源占用、失败原因和后处理结果集中展示。
 
 
+### 实验完成后的评审
+
+创建节点时建议填写 hypothesis，留空也可继续。runset 的任务全部成功、失败或取消后，如果节点结论仍为 `open`，或尚未记录 evidence，`featx result` 和 Web UI 会提示“待评审”。点击提示可进入节点编辑结论与证据，也可手动执行：
+
+```bash
+featx node set <node> --verdict inconclusive --evidence <node>/<runset>
+```
+
+请根据实验选择结论；任务状态不会自动改写 verdict 或 evidence。两项均记录后，刷新即可清除提醒。
+Web UI 支持 EN / 中文切换并保存浏览器偏好；用户内容、日志、命令、路径、配方与指标键保持原样，worktree 和 note 保留原术语。CLI 和参考文档不在本轮中文化范围内。
+
 ## 安装方式
 
 ### Agent

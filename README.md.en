@@ -399,3 +399,24 @@ unless you also pass `--drop-branches`.
 ```
 
 Fixes found while building and verifying featx are recorded in `problem-analysis.log`.
+
+## Experiment review and UI language
+
+A hypothesis is recommended when creating a node, but leaving it empty does not
+block creation. Once every runset task has succeeded, failed or been cancelled,
+`featx result` and the web UI show **Review needed** if the node verdict is still
+`open` or evidence is empty. Follow the UI link to the node editor, or record your
+own conclusion explicitly:
+
+```bash
+featx node set <node> --verdict inconclusive --evidence <node>/<runset>
+```
+
+Task outcomes never write verdict or evidence. Recording both fields clears the
+reminder on refresh. `review_needed` events are emitted on completion, not during
+recovery or read-only queries; existing sealing and archive rules are unchanged.
+
+The web UI supports EN / 中文 and remembers the browser preference. Built-in labels
+and hints are localized; user content, logs, commands, paths, recipe and metric
+keys, and reference documentation remain unchanged. worktree and note retain their
+original terminology. CLI localization is outside this change's scope.

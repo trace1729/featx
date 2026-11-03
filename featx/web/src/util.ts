@@ -40,7 +40,7 @@ export function fmtValue(v: unknown): string {
   return v.toPrecision(3);
 }
 
-export function metricLabel(name: string): string {
+export function metricLabel(name: string, translate: (text: string) => string = (s) => s): string {
   const [step, ...rest] = name.split(".");
   const key = rest.join(".");
   const known: Record<string, string> = {
@@ -50,7 +50,7 @@ export function metricLabel(name: string): string {
     "self.ipc_geomean": "IPC geomean",
     "self.finished": "finished points",
   };
-  return known[key] ? `${known[key]} (${step})` : name;
+  return known[key] ? `${translate(known[key])} (${step})` : name;
 }
 
 export function fmtTime(iso: string | undefined): string {
@@ -58,10 +58,10 @@ export function fmtTime(iso: string | undefined): string {
   return iso.replace("T", " ").replace(/([+-]\d\d:\d\d|Z)$/, "").slice(5, 16);
 }
 
-export function ago(ts: number | undefined): string {
-  if (!ts) return "never";
+export function ago(ts: number | undefined, translate: (text: string) => string = (s) => s): string {
+  if (!ts) return translate("never");
   const d = Date.now() / 1000 - ts;
-  return d < 2 ? "now" : `${fmtDuration(d)} ago`;
+  return d < 2 ? translate("now") : translate("{duration} ago").replace("{duration}", fmtDuration(d));
 }
 
 export interface TreeNode {
@@ -155,8 +155,8 @@ export function parseOverrides(text: string): Record<string, unknown> {
 
 export const STATE_ORDER = ["running", "launching", "queued", "failed", "cancelled", "succeeded"];
 
-export function countsText(counts: Record<string, number>): string {
-  return STATE_ORDER.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`).join(" · ");
+export function countsText(counts: Record<string, number>, translate: (text: string) => string = (s) => s): string {
+  return STATE_ORDER.filter((s) => counts[s]).map((s) => `${counts[s]} ${translate(s)}`).join(" · ");
 }
 
 /** Submit-form presets ("" = inherit the recipe's value). */

@@ -54,7 +54,7 @@ export function LeaderboardPage() {
     return (
       <div>
         <h1>{t("Leaderboard")}</h1>
-        <p className="muted">No runset has a post-processing summary yet. Submit a node with a post recipe (for example the perf-keys plugin).</p>
+        <p className="muted">{t("No runset has a post-processing summary yet. Submit a node with a post recipe (for example the perf-keys plugin).")}</p>
       </div>
     );
   }
@@ -68,7 +68,7 @@ export function LeaderboardPage() {
         <select value={b.metric} onChange={(e) => set("metric", e.target.value)}>
           {b.metrics.map((m) => (
             <option key={m.name} value={m.name}>
-              {metricLabel(m.name)} · {m.runsets} runsets
+              {metricLabel(m.name, t)} · {t("{count} runsets", { count: m.runsets })}
             </option>
           ))}
         </select>
@@ -76,11 +76,11 @@ export function LeaderboardPage() {
         <select value={b.class ?? ""} onChange={(e) => set("cls", e.target.value)}>
           {b.classes.map((c) => (
             <option key={c.key} value={c.key}>
-              {c.label} · {c.complete_rows}/{c.rows} complete
+              {c.label} · {t("{completed}/{total} complete", { completed: c.complete_rows, total: c.rows })}
             </option>
           ))}
         </select>
-        <button onClick={() => set("order", b.order === "asc" ? "desc" : "asc")} title="sort order">
+        <button onClick={() => set("order", b.order === "asc" ? "desc" : "asc")} title={t("sort order")}>
           {t(b.order === "asc" ? "lowest first ▴" : "highest first ▾")}
         </button>
         <label>
@@ -91,7 +91,7 @@ export function LeaderboardPage() {
         </label>
         {params.node && (
           <span className="chip">
-            under <span className="mono">{params.node}</span>
+            {t("under")} <span className="mono">{params.node}</span>
             <button className="link" onClick={() => set("node", null)}>
               ×
             </button>
@@ -99,23 +99,23 @@ export function LeaderboardPage() {
         )}
       </div>
       <p className="muted small">
-        Runsets are only ranked against others with the same reference, PERF block, window and point set
-        {cls ? ` (${cls.label})` : ""}. {b.classes.length > 1 ? `${b.classes.length - 1} other class(es) are in the selector.` : ""}
+        {t("Runsets are only ranked against others with the same reference, PERF block, window and point set")}
+        {cls ? ` (${cls.label})` : ""}. {b.classes.length > 1 ? t("{count} other class(es) are in the selector.", { count: b.classes.length - 1 }) : ""}
       </p>
       {b.rows.length === 0 ? (
-        <div className="notice">No complete runset in this class. Tick “show incomplete” to list the partial ones.</div>
+        <div className="notice">{t("No complete runset in this class. Tick “show incomplete” to list the partial ones.")}</div>
       ) : (
         <table>
           <thead>
             <tr>
               <th className="num">#</th>
-              <th className="num">{metricLabel(b.metric)}</th>
+              <th className="num">{metricLabel(b.metric, t)}</th>
               <th style={{ width: "18%" }} />
-              <th>runset</th>
-              <th>points</th>
-              <th>purpose</th>
-              <th>binary</th>
-              <th>created</th>
+              <th>{t("runset")}</th>
+              <th>{t("points")}</th>
+              <th>{t("purpose")}</th>
+              <th>{t("binary")}</th>
+              <th>{t("created")}</th>
             </tr>
           </thead>
           <tbody>
@@ -131,10 +131,10 @@ export function LeaderboardPage() {
                   <Link to={`/node/${r.node}`} onClick={(e) => e.stopPropagation()} className="mono">
                     {r.node}
                   </Link>
-                  <span className="mono muted">/{r.name}</span> {r.sealed && <Badge kind="sealed">sealed</Badge>}
+                  <span className="mono muted">/{r.name}</span> {r.sealed && <Badge kind="sealed">{t("sealed")}</Badge>}
                 </td>
                 <td>
-                  {r.points !== null ? `${r.common_points}/${r.points}` : ""} {!r.complete && <Badge kind="warn">incomplete</Badge>}
+                  {r.points !== null ? `${r.common_points}/${r.points}` : ""} {!r.complete && <Badge kind="warn">{t("incomplete")}</Badge>}
                 </td>
                 <td>{r.purpose}</td>
                 <td className="mono small">{r.bin}</td>

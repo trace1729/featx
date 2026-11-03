@@ -6,6 +6,7 @@ from pathlib import Path
 
 from . import params as params_mod
 from . import coderec, recipes, store, taskstore, worktree
+from .model import TERMINAL_TASK_STATES
 from .tree import Entry, Tree
 
 
@@ -56,13 +57,28 @@ def code_summary(entry: Entry, rs) -> dict:
             "bin_key": bin.get("key"), "bin_emu": bin.get("emu")}
 
 
+def review_state(entry: Entry, rs, tasks: dict) -> dict:
+    states = [tasks[tid].state for tid in rs.tasks if tid in tasks]
+    complete = bool(states) and len(states) == len(rs.tasks) and all(s in TERMINAL_TASK_STATES for s in states)
+    if rs.sealed and not rs.tasks:
+        complete = True
+    outcome = ("succeeded" if complete and all(s == "succeeded" for s in states) else
+               "failed" if complete and any(s == "failed" for s in states) else
+               "cancelled" if complete else "active")
+    needed = complete and (entry.node.verdict == "open" or not entry.node.evidence)
+    ref = f"{entry.rel}/{rs.name}"
+    return {"needed": needed, "complete": complete, "outcome": outcome, "ref": ref,
+            "verdict": entry.node.verdict, "evidence": entry.node.evidence,
+            "command": f"featx node set {entry.rel} --verdict VERDICT --evidence {ref}"}
+
+
 def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
     rdir = entry.dir / rs.name
     out = {"ref": f"{entry.rel}/{rs.name}", "id": rs.id, "purpose": rs.purpose, "created": rs.created,
            "sealed": rs.sealed, "derived_from": rs.derived_from, "dir": str(rdir), "tasks": [],
            "archived": rs.archived, "archived_at": rs.archived_at, "archive_note": rs.archive_note,
            "overrides": rs.overrides, "params": params_mod.stage_params(rs.recipes, rs.bin),
-           "code": code_summary(entry, rs)}
+           "code": code_summary(entry, rs), "review": review_state(entry, rs, tasks)}
     for tid in rs.tasks:
         t = tasks.get(tid)
         if t:
@@ -139,7 +155,7 @@ def brief(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: b
                 for name, summary in rs["post"].items()}
         runsets.append({"ref": rs["ref"], "purpose": rs["purpose"], "sealed": rs["sealed"],
                         "archived": rs["archived"], "tasks": rs["tasks"], "params": rs["params"],
-                        "post": post})
+                        "post": post, "review": rs["review"]})
     return {"node": full["node"], "notes": full["notes"], "git": full["git"],
             "runsets": runsets, "runset_count": full["runset_count"],
             "archived_count": full["archived_count"], "archived_runsets": full["archived_runsets"]}

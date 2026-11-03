@@ -25,6 +25,7 @@ function Row({ node, depth, selected, collapsed, toggle, onDropOn }: {
   onDropOn: (src: string, target: string) => void;
 }) {
   const nav = useNavigate();
+  const { t } = useI18n();
   const [over, setOver] = useState(false);
   const { row } = node;
   const st = stage(row);
@@ -63,10 +64,10 @@ function Row({ node, depth, selected, collapsed, toggle, onDropOn }: {
         <VerdictMark verdict={row.verdict} />
         <span className={`name ${row.status === "abandoned" ? "abandoned" : ""}`}>{row.name}</span>
         <span className="meta">
-          {row.worktree && <span title="has a git worktree">⎇</span>}
-          {row.status !== "active" && row.status !== "abandoned" && <span>{row.status}</span>}
-          {st && <Badge kind={st.state}>{st.text}</Badge>}
-          {row.active.length > 0 && row.eta_s !== null && <span title="estimated time remaining">{fmtDuration(row.eta_s)}</span>}
+          {row.worktree && <span title={t("has a git worktree")}>⎇</span>}
+          {row.status !== "active" && row.status !== "abandoned" && <span>{t(row.status)}</span>}
+          {st && <Badge kind={st.state}>{st.text.split(":").map((part) => t(part)).join(":")}</Badge>}
+          {row.active.length > 0 && row.eta_s !== null && <span title={t("estimated time remaining")}>{fmtDuration(row.eta_s)}</span>}
         </span>
       </div>
       {!closed && node.children.map((c) => <Row key={c.row.path} node={c} depth={depth + 1} selected={selected} collapsed={collapsed} toggle={toggle} onDropOn={onDropOn} />)}
@@ -118,7 +119,7 @@ export function TreePanel() {
       ))}
       {!tree.isLoading && !rows.length && <div className="muted" style={{ padding: 8 }}>{t("no nodes yet: add a category")}</div>}
       <div className="muted small" style={{ padding: "10px 6px" }}>
-        Drag a node onto another to move it (a dry run is shown first).
+        {t("Drag a node onto another to move it (a dry run is shown first).")}
       </div>
       {adding && <AddNodeDialog parent="" onClose={() => setAdding(false)} onDone={(p) => { setAdding(false); nav(`/node/${p}`); }} />}
       {move && (

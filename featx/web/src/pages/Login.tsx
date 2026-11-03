@@ -17,14 +17,14 @@ export function LoginPage() {
   const act = useAction();
   const submit = () =>
     act.run(async () => {
-      if (!(await probeToken(value))) throw new Error("featxd rejected this token");
+      if (!(await probeToken(value))) throw new Error(t("featxd rejected this token"));
       setToken(value);
     });
   return (
     <div className="login card">
       <h1>featx</h1>
       <p className="muted">
-        {t("Paste the featxd token.")} On the daemon host: <code>cat {tokenFile}</code>
+        {t("Paste the featxd token.")} {t("On the daemon host:")} <code>cat {tokenFile}</code>
       </p>
       <form
         className="row"

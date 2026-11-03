@@ -392,6 +392,37 @@ Shell environment of every job:
 workload. A workload without a reference fails the step with "no reference baseline". In that
 case set `with.reference` or `baselines` explicitly.
 
+## review — Hypothesis, experiment and review
+
+A hypothesis is recommended when creating a node, but remains optional. The CLI
+prints a warning to stderr and the web dialog shows a hint; neither blocks creation.
+
+When every task in a runset is terminal (`succeeded`, `failed` or `cancelled`), the
+runset needs review if its node's verdict is `open` or its evidence list is empty.
+`featx result REF` shows a reminder and a suggested command:
+
+```bash
+featx node set NODE --verdict inconclusive --evidence NODE/YYYYMMDD-N
+```
+
+Choose the verdict yourself (`supported`, `refuted`, or `inconclusive`) and record
+what the experiment supports, including failures and cancellations. Task outcomes
+never update verdict or evidence automatically. Web runset badges and banners link
+to the existing node editor; refreshing after both fields are recorded clears the
+reminder. Review is a node-level record, not a separate review of each runset.
+
+The scheduler emits one `review_needed` event on each transition to all-terminal
+when review is needed. Recovery and read-only queries do not emit reminders;
+relaunching a task permits a new reminder when it finishes again. The additive
+`review` object in result/runset summaries includes `needed`, `complete`, `outcome`,
+`ref`, `verdict`, `evidence` and `command`. `result --json` keeps its existing fields
+and metrics. Only all-success runsets are sealed; archive behavior is unchanged.
+
+The web UI's EN / 中文 buttons save the language choice in this browser. Built-in
+labels, dialogs and hints are translated; user content, logs, commands, paths,
+recipe/metric keys and this reference remain unchanged. Unknown labels fall back
+to English. worktree and note keep their original terminology.
+
 ## wait — Waiting for tasks
 
 Use `featx wait TASK... --timeout 3600` or MCP `task_wait(tasks=[...], timeout=3600)`.

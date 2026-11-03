@@ -7,16 +7,17 @@ import type { EventRow } from "../types";
 import { fmtTime } from "../util";
 import { useI18n } from "../i18n";
 
-const TYPES = ["failure", "retry", "budget_exhausted", "task_done", "runset_done", "submitted", "relaunched", "cancelled"];
+const TYPES = ["failure", "retry", "budget_exhausted", "task_done", "runset_done", "review_needed", "submitted", "relaunched", "cancelled"];
 
-function detail(e: EventRow): string {
+function detail(e: EventRow, t: (text: string, values?: Record<string, string | number>) => string): string {
   if (e.type === "failure" || e.type === "retry") {
     const f = (e.failure ?? {}) as { signature?: string; class?: string };
     return [e.job, e.signature ?? f.signature, f.class].filter(Boolean).join(" · ");
   }
-  if (e.type === "task_done") return `${e.kind} ${e.state}`;
-  if (e.type === "runset_done") return "all tasks succeeded";
-  if (e.type === "budget_exhausted") return `design relaunch budget used up (${e.relaunches}); needs featx task unblock ${e.task}`;
+  if (e.type === "task_done") return `${t(String(e.kind))} ${t(String(e.state))}`;
+  if (e.type === "runset_done") return t("all tasks succeeded");
+  if (e.type === "review_needed") return t("Review the verdict and evidence for this completed runset");
+  if (e.type === "budget_exhausted") return t("design relaunch budget used up ({count}); needs featx task unblock {task}", { count: Number(e.relaunches ?? 0), task: e.task ?? "" });
   if (e.type === "relaunched") return [Array.isArray(e.jobs) ? e.jobs.join(", ") : "", e.reason].filter(Boolean).join(" · ");
   return "";
 }
@@ -43,9 +44,9 @@ export function EventsPage() {
     <div>
       <h1>{t("Events")}</h1>
       <div className="card row">
-        {TYPES.map((t) => (
-          <label key={t}>
-            <input type="checkbox" checked={types.includes(t)} onChange={(e) => setTypes(e.target.checked ? [...types, t] : types.filter((x) => x !== t))} /> {t}
+        {TYPES.map((type) => (
+          <label key={type}>
+            <input type="checkbox" checked={types.includes(type)} onChange={(e) => setTypes(e.target.checked ? [...types, type] : types.filter((x) => x !== type))} /> {t(type)}
           </label>
         ))}
         <label>
@@ -66,10 +67,10 @@ export function EventsPage() {
           <thead>
             <tr>
               <th className="num">seq</th>
-              <th>time</th>
-              <th>type</th>
-              <th>runset</th>
-              <th>detail</th>
+              <th>{t("time")}</th>
+              <th>{t("type")}</th>
+              <th>{t("runset")}</th>
+              <th>{t("detail")}</th>
               <th />
             </tr>
           </thead>
@@ -80,7 +81,7 @@ export function EventsPage() {
                   <td className="num">{e.seq}</td>
                   <td className="muted">{fmtTime(e.time)}</td>
                   <td>
-                    <Badge kind={e.type === "task_done" || e.type === "runset_done" ? (e.state === "failed" ? "failed" : e.state === "cancelled" ? "cancelled" : "succeeded") : e.type === "budget_exhausted" ? "failed" : e.type}>{e.type}</Badge>
+                    <Badge kind={e.type === "task_done" || e.type === "runset_done" ? (e.state === "failed" ? "failed" : e.state === "cancelled" ? "cancelled" : "succeeded") : e.type === "budget_exhausted" ? "failed" : e.type}>{t(e.type)}</Badge>
                   </td>
                   <td className="mono">
                     {e.node && e.runset ? (
@@ -91,7 +92,7 @@ export function EventsPage() {
                       e.node ?? ""
                     )}
                   </td>
-                  <td>{detail(e)}</td>
+                  <td>{detail(e, t)}</td>
                   <td>
                     {!e.acked && (
                       <button
@@ -100,7 +101,7 @@ export function EventsPage() {
                           void ack({ seqs: [e.seq] });
                         }}
                       >
-                        ack
+                        {t("ack")}
                       </button>
                     )}
                   </td>

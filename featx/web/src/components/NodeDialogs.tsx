@@ -34,18 +34,19 @@ export function AddNodeDialog({ parent, onClose, onDone }: { parent: string; onC
       onDone(path);
     });
   return (
-    <Dialog open onClose={onClose} title={parent ? `Add a child of ${parent}` : t("Add a category")}>
+    <Dialog open onClose={onClose} title={parent ? t("Add a child of {parent}", { parent }) : t("Add a category")}>
       <div className="form">
-        <label>path</label>
+        <label>{t("path")}</label>
         <span className="mono">
           {parent ? `${parent}/` : ""}
           <input type="text" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t("name (a/b creates both)")} style={{ width: 240 }} />
         </span>
-        <label>hypothesis</label>
+        <label>{t("hypothesis")}</label>
         <textarea rows={3} value={hypothesis} onChange={(e) => setHypothesis(e.target.value)} placeholder={t("what this node is meant to show")} />
-        <label>worktree</label>
+        {!hypothesis.trim() && <p className="muted small">{t("A hypothesis is recommended; you can add it now or edit it after the experiment starts.")}</p>}
+        <label>{t("worktree")}</label>
         <label>
-          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> create a git worktree and branch now (takes a while)
+          <input type="checkbox" checked={worktree} onChange={(e) => setWorktree(e.target.checked)} /> {t("create a git worktree and branch now (takes a while)")}
         </label>
       </div>
       <ErrorBox error={act.error} />
@@ -60,19 +61,20 @@ export function AddNodeDialog({ parent, onClose, onDone }: { parent: string; onC
 }
 
 export function PlanView({ plan }: { plan: MovePlan }) {
+  const { t } = useI18n();
   return (
     <div>
       {plan.create_parents && plan.create_parents.length > 0 && (
-        <div className="notice">creates missing parent nodes: {plan.create_parents.join(", ")}</div>
+        <div className="notice">{t("creates missing parent nodes: {nodes}", { nodes: plan.create_parents.join(", ") })}</div>
       )}
       <table>
         <thead>
           <tr>
-            <th>node</th>
-            <th>becomes</th>
-            <th>kind</th>
-            <th className="num">runsets</th>
-            <th>worktree / branch</th>
+            <th>{t("node")}</th>
+            <th>{t("becomes")}</th>
+            <th>{t("kind")}</th>
+            <th className="num">{t("runsets")}</th>
+            <th>{t("worktree / branch")}</th>
           </tr>
         </thead>
         <tbody>
@@ -80,29 +82,25 @@ export function PlanView({ plan }: { plan: MovePlan }) {
             <tr key={n.from}>
               <td className="mono">{n.from}</td>
               <td className="mono">{n.to}</td>
-              <td>{n.kind}</td>
+              <td>{t(n.kind ?? "")}</td>
               <td className="num">{n.runsets ?? ""}</td>
               <td className="mono small">
                 {n.git?.worktree && (
                   <div>
-                    dir {n.git.worktree.from} → {n.git.worktree.to}
+                    {t("dir")} {n.git.worktree.from} → {n.git.worktree.to}
                   </div>
                 )}
-                {n.git?.worktree_kept && <div className="muted">dir stays at {n.git.worktree_kept}</div>}
-                {n.git?.branch && (
-                  <div>
-                    branch {n.git.branch.from} → {n.git.branch.to}
-                    {n.git.branch.submodules?.length ? ` (+ ${n.git.branch.submodules.join(", ")})` : ""}
-                  </div>
-                )}
+                {n.git?.worktree_kept && <div className="muted">{t("dir stays at")} {n.git.worktree_kept}</div>}
+                {n.git?.branch && <div>{t("branch")} {n.git.branch.from} → {n.git.branch.to}
+                  {n.git.branch.submodules?.length ? ` (+ ${n.git.branch.submodules.join(", ")})` : ""}</div>}
                 {n.git?.error && <div className="error">{n.git.error}</div>}
-                {!n.git && <span className="muted">none</span>}
+                {!n.git && <span className="muted">{t("none")}</span>}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      <p className="muted small">Old paths keep resolving through forwarding symlinks. Nothing has been changed yet.</p>
+      <p className="muted small">{t("Old paths keep resolving through forwarding symlinks. Nothing has been changed yet.")}</p>
     </div>
   );
 }
@@ -138,27 +136,27 @@ export function MoveDialog({ src, initialDst, onClose, onDone }: { src: string; 
       await refresh(src);
     });
   return (
-    <Dialog open onClose={onClose} title={`Move ${src}`}>
+    <Dialog open onClose={onClose} title={t("Move {src}", { src })}>
       <div className="form">
-        <label>new path</label>
+        <label>{t("new path")}</label>
         <input type="text" className="mono" autoFocus value={dst} onChange={(e) => setDst(e.target.value)} />
-        <label>options</label>
+        <label>{t("options")}</label>
         <span className="row">
           <label>
-            <input type="checkbox" checked={parents} onChange={(e) => setParents(e.target.checked)} /> create missing parents
+            <input type="checkbox" checked={parents} onChange={(e) => setParents(e.target.checked)} /> {t("create missing parents")}
           </label>
           <label>
-            <input type="checkbox" checked={rename} onChange={(e) => setRename(e.target.checked)} /> rename the branches featx created
+            <input type="checkbox" checked={rename} onChange={(e) => setRename(e.target.checked)} /> {t("rename the branches featx created")}
           </label>
         </span>
       </div>
-      <h3>Dry run</h3>
-      {same ? <div className="muted">enter a different path</div> : plan.isFetching ? <div className="muted">checking…</div> : plan.error ? <ErrorBox error={plan.error} /> : plan.data ? <PlanView plan={plan.data} /> : null}
+      <h3>{t("Dry run")}</h3>
+      {same ? <div className="muted">{t("enter a different path")}</div> : plan.isFetching ? <div className="muted">{t("checking…")}</div> : plan.error ? <ErrorBox error={plan.error} /> : plan.data ? <PlanView plan={plan.data} /> : null}
       <ErrorBox error={act.error} />
       <div className="dialog-actions">
         <button onClick={onClose}>{t("Cancel")}</button>
         <button className="primary" disabled={blocked || act.busy} onClick={apply}>
-          {act.busy ? t("Moving…") : `${t("Move")} ${plan.data?.nodes.length ?? ""} node(s)`}
+          {act.busy ? t("Moving…") : t("Move {count} node(s)", { count: plan.data?.nodes.length ?? 0 })}
         </button>
       </div>
     </Dialog>
@@ -179,24 +177,22 @@ export function RemoveDialog({ path, onClose, onDone }: { path: string; onClose:
       await refresh(path);
     });
   return (
-    <Dialog open onClose={onClose} title={`Remove ${path}`}>
+    <Dialog open onClose={onClose} title={t("Remove {path}", { path })}>
       <p>
-        The node, its children and all their runsets move to <code>tree/.trash</code>. They stay there until <code>gc</code> is applied.
+        {t("The node, its children and all their runsets move to tree/.trash. They stay there until gc is applied.")}
       </p>
       <p>
         <label>
-          <input type="checkbox" checked={dropWt} onChange={(e) => setDropWt(e.target.checked)} /> also delete the worktrees (uncommitted diffs are saved as
-          patches) and the branches featx created that have no own commits
+          <input type="checkbox" checked={dropWt} onChange={(e) => setDropWt(e.target.checked)} /> {t("also delete the worktrees (uncommitted diffs are saved as patches) and the branches featx created that have no own commits")}
         </label>
       </p>
       <p>
         <label>
-          <input type="checkbox" disabled={!dropWt} checked={dropWt && dropBr} onChange={(e) => setDropBr(e.target.checked)} /> also delete branches that
-          carry unmerged commits
+          <input type="checkbox" disabled={!dropWt} checked={dropWt && dropBr} onChange={(e) => setDropBr(e.target.checked)} /> {t("also delete branches that carry unmerged commits")}
         </label>
       </p>
       <div className="form">
-        <label>type the path to confirm</label>
+        <label>{t("type the path to confirm")}</label>
         <input type="text" className="mono" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={path} />
       </div>
       <ErrorBox error={act.error} />

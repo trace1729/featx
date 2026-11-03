@@ -515,3 +515,50 @@ describe("App", () => {
     });
   });
 });
+
+describe("Chinese lifecycle workflow", () => {
+  beforeEach(() => { setToken("t0k"); localStorage.setItem("featx.language", "zh"); });
+
+  it("renders settings in Chinese without translating checkpoint names or config keys", async () => {
+    renderAt("/settings");
+    expect(await screen.findByText("spec17_new")).toBeTruthy();
+    expect(await screen.findByText("1 项正常，1 项警告，0 项失败")).toBeTruthy();
+    expect(screen.getByText("git.repo")).toBeTruthy();
+    expect(screen.getAllByText("设置").length).toBeGreaterThan(0);
+    expect(writes()).toEqual([]);
+  });
+
+  it("recommends a hypothesis but permits creating a node without one", async () => {
+    renderAt("/node/wpe");
+    fireEvent.click(await screen.findByRole("button", { name: "添加子节点…" }));
+    expect(screen.getByText("建议填写假设；可以现在补充，也可以在实验开始后编辑。")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("名称（a/b 会同时创建）"), { target: { value: "new" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建", hidden: true }));
+    await waitFor(() => expect(writes()[0]).toEqual(["/nodes", { path: "wpe/new", hypothesis: "", worktree: false, parents: true }]));
+  });
+
+  it("links completed experiments to manual review and preserves API values", async () => {
+    const ref = "wpe/overlay/20261013-1";
+    const rs = { ...(FIXTURES["/result"] as Record<string, unknown>), review: { needed: true, complete: true, outcome: "succeeded", ref } };
+    extra["/result"] = rs;
+    extra["/nodes/context"] = withNode({ path: "wpe/overlay", hypothesis: "original user hypothesis" }, { runsets: [rs], runset_count: 1 });
+    renderAt(`/runset/${ref}`);
+    expect(await screen.findByText("待评审")).toBeTruthy();
+    expect(writes()).toEqual([]);
+    fireEvent.click(screen.getByRole("link", { name: "编辑结论和证据" }));
+    expect(await screen.findByDisplayValue("original user hypothesis")).toBeTruthy();
+    expect(document.getElementById("verdict-evidence")).toBeTruthy();
+    expect(writes()).toEqual([]);
+    const verdict = screen.getByRole("option", { name: "支持" }).closest("select")!;
+    fireEvent.change(verdict, { target: { value: "supported" } });
+    await waitFor(() => expect(writes()[0]).toEqual(["/nodes/update", { ref: "wpe/overlay", verdict: "supported" }]));
+    fireEvent.change(screen.getByPlaceholderText("runset 引用或 note（Ctrl+Enter 添加）"), { target: { value: ref } });
+    fireEvent.click(screen.getByRole("button", { name: "添加证据" }));
+    await waitFor(() => expect(writes()[1]).toEqual(["/nodes/update", { ref: "wpe/overlay", add_evidence: [ref] }]));
+    extra["/result"] = { ...rs, review: { needed: false, complete: true, outcome: "succeeded", ref } };
+    cleanup();
+    renderAt(`/runset/${ref}`);
+    await screen.findByText("20261013-1", { exact: false });
+    expect(screen.queryByText("待评审")).toBeNull();
+  });
+});

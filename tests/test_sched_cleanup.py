@@ -42,6 +42,8 @@ def test_dependency_failure_cancels_and_relaunch_revives(root, fake_emu, tmp_pat
 
     events = [e for e in s.inbox.query(types=["cancelled"]) if e.get("reason") == "dependency"]
     assert {(e["task"], e["dependency"]) for e in events} == {(r, b), (p, r)}
+    reviews = s.inbox.query(types=["review_needed"])
+    assert len(reviews) == 1 and reviews[0]["outcome"] == "failed"
 
     # A dependent a human cancelled keeps its state through a relaunch.
     s.tasks[p].cancelled_by = None
@@ -68,6 +70,18 @@ def test_cancel_is_transitive_and_relaunch_revives_the_cascade(root, fake_emu):
     out = s.cancel(r)             # post is only a transitive dependent
     assert out["dependents"] == [p]
     assert s.tasks[p].state == "cancelled" and s.tasks[p].cancelled_by == r
+    assert len(s.inbox.query(types=["review_needed"])) == 1
+    seq = s.inbox.seq
+    # Duplicate completion checks, read-only queries and recovery emit nothing.
+    s._maybe_seal(s._tree(), s.tasks[p])
+    service.result_get(res["runset"])
+    s.list_tasks()
+    assert s.inbox.seq == seq
+    recovered = sched()
+    recovered._maybe_seal(recovered._tree(), recovered.tasks[p])
+    assert recovered.inbox.seq == seq
+    assert Tree().get("t/sched/x").node.verdict == "open"
+    assert Tree().get("t/sched/x").node.evidence == []
     revived = s.relaunch(r)
     assert revived["revived"] == [p]
     assert s.tasks[r].state == "queued" and s.tasks[p].state == "queued"
