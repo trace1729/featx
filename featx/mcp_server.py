@@ -37,7 +37,9 @@ Typical loop:
  4. On a `failure` event: task_log for details, fix, then problem_log_append(runset, problem,
     solution, code) BEFORE task_relaunch (design failures are refused without a newer entry and are
     limited by a relaunch budget). Use task_resubmit when recipes/binaries changed (new runset).
- 5. result_get(runset) to read metrics; node_update(verdict=..., add_evidence=[runset]).
+ 5. result_get(runset) to read metrics and review state; node_update(verdict=..., add_evidence=[runset]).
+    review_needed covers all terminal outcomes, including failure and cancellation. Task status
+    never determines a verdict or adds evidence. Choose the verdict from the research evidence.
 Infra failures (ssh, host down, OOM) are retried automatically on another host and only appear as
 `retry` events. Always ack events you have handled (events_ack).
 """
@@ -109,8 +111,11 @@ def node_create(path: str, hypothesis: str = "", tags: list[str] | None = None, 
                 worktree: bool = False, base: str | None = None) -> dict:
     """Create a node at category/feature/subfeature (parents=True creates missing ancestors).
     worktree=True also creates its git worktree (branch <path>) from `base`."""
-    return service.node_add(path, hypothesis=hypothesis, tags=tags, parents=parents, worktree_create=worktree,
-                            base=base)
+    result = service.node_add(path, hypothesis=hypothesis, tags=tags, parents=parents, worktree_create=worktree,
+                              base=base)
+    if not hypothesis.strip():
+        result["warnings"] = ["A hypothesis is recommended; add it later with node_update(hypothesis=...)."]
+    return result
 
 
 @tool
@@ -118,20 +123,22 @@ def node_update(node: str, hypothesis: str | None = None, verdict: str | None = 
                 verdict_note: str | None = None, status: str | None = None,
                 add_evidence: list[str] | None = None, add_tags: list[str] | None = None,
                 notes: str | None = None, comment: str | None = None,
-                rm_evidence: list[str] | None = None, evidence: list[str] | None = None) -> dict:
+                rm_evidence: list[str] | None = None, evidence: list[str] | None = None,
+                rm_tags: list[str] | None = None) -> dict:
     """Update a node. verdict: open|supported|refuted|inconclusive (back it with add_evidence =
     runset refs). status: active|parked|done|abandoned. evidence replaces the whole list,
     rm_evidence drops entries; notes = Markdown notes, comment = free-form thoughts."""
     return service.node_update(node, hypothesis=hypothesis, verdict=verdict, verdict_note=verdict_note,
                                status=status, add_evidence=add_evidence, add_tags=add_tags, notes=notes,
-                               comment=comment, rm_evidence=rm_evidence, evidence=evidence)
+                               comment=comment, rm_evidence=rm_evidence, evidence=evidence, rm_tags=rm_tags)
 
 
 @tool
-def node_move(src: str, dst: str, parents: bool = True) -> dict:
+def node_move(src: str, dst: str, parents: bool = True, dry_run: bool = False,
+              keep_branches: bool = False) -> dict:
     """Cascade-move a node subtree (dirs, worktrees, branches; old path keeps a forwarding
     symlink). Refused while tasks under it are active."""
-    return service.node_mv(src, dst, parents=parents)
+    return service.node_mv(src, dst, parents=parents, dry_run=dry_run, rename_branches=not keep_branches)
 
 
 # --------------------------------------------------------------- recipes
@@ -162,7 +169,7 @@ def plugins_list() -> dict:
 def docs(topic: str | None = None) -> Any:
     """featx reference (docs/reference.md). No topic: the topic list. A topic (concepts, launch,
     recipes, build, run, points, workloads, post, variables, references, plugins, worktrees,
-    baselines, checkpoints, a plugin name, or "all"): its Markdown."""
+    baselines, checkpoints, review, a plugin name, or "all"): its Markdown."""
     if not topic:
         return featx_docs.index()
     return featx_docs.topic(topic)
@@ -261,7 +268,7 @@ def task_cancel(task: str, jobs: list[str] | None = None) -> dict:
 async def events_wait(timeout: float = 300, types: list[str] | None = None, node: str | None = None,
                       since: int = 0) -> list:
     """Block up to `timeout` s for unacked events (failure, retry, task_done, runset_done,
-    budget_exhausted, relaunched...). Returns immediately if some are pending."""
+    review_needed, budget_exhausted, relaunched...). Returns immediately if some are pending."""
     timeout = max(0.0, min(float(timeout), 1800.0))
 
     def call():
@@ -299,7 +306,9 @@ def problem_log_append(target: str, problem: str, solution: str, code: str = "",
 
 @tool
 def result_get(runset: str) -> dict:
-    """Runset result: task states, binary, provenance, post summary metrics and reports."""
+    """Runset result: task states, binary, provenance, metrics, reports and computed review state.
+    review.needed means all tasks are terminal and verdict is open or evidence is empty.
+    Record your own conclusion with node_update; this read never mutates research fields."""
     return service.result_get(runset)
 
 

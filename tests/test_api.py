@@ -189,3 +189,30 @@ def test_optional_hypothesis_warning_and_result_review_json(root):
     assert json.loads(result.stdout) == service.result_get(ref)
     service.node_update("review", verdict="inconclusive", add_evidence=[ref])
     assert "Review needed" not in run(cli.app, ["result", ref]).output
+
+
+def test_mcp_research_workflow_and_move_preview(root):
+    from featx import mcp_server, taskstore
+    from featx.model import Task
+    from featx.tree import Tree
+    created = mcp_server.node_create("mcp", tags=["old"])
+    assert created["warnings"]
+    assert "warnings" not in mcp_server.node_create("explained", hypothesis="idea")
+    tree = Tree()
+    entry = tree.get("mcp")
+    rs, _ = tree.new_runset(entry)
+    rs.tasks = ["MCP1"]
+    tree.save_runset(entry, rs)
+    taskstore.save(Task(id="MCP1", kind="run", name="run", node_id=entry.node.id,
+                        runset_id=rs.id, runset_name=rs.name, state="failed"))
+    ref = f"mcp/{rs.name}"
+    assert mcp_server.result_get(ref)["review"]["needed"]
+    assert mcp_server.node_show("mcp")["runsets"][0]["review"]["needed"]
+    assert mcp_server.node_show("mcp", runsets=0)["runsets"] == []
+    assert tree.get("mcp").node.verdict == "open"
+    assert tree.get("mcp").node.evidence == []
+    mcp_server.node_update("mcp", verdict="inconclusive", add_evidence=[ref], rm_tags=["old"])
+    assert not mcp_server.result_get(ref)["review"]["needed"]
+    assert Tree().get("mcp").node.tags == []
+    mcp_server.node_move("mcp", "renamed", dry_run=True, keep_branches=True)
+    assert Tree().get("mcp").node.id == entry.node.id

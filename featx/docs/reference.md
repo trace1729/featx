@@ -423,6 +423,13 @@ labels, dialogs and hints are translated; user content, logs, commands, paths,
 recipe/metric keys and this reference remain unchanged. Unknown labels fall back
 to English. worktree and note keep their original terminology.
 
+MCP parity: `node_show(node, runsets=3, full=False)` matches `featx node show`;
+`full=True` includes the complete context, also available through `node_context`.
+`node_create` returns an additive `warnings` list when the hypothesis is blank.
+`result_get`, `runsets_list` and node summaries expose computed review state.
+`node_update(rm_tags=[...])` removes tags; `node_move(dry_run=True,
+keep_branches=True)` supports move previews and keeping branch names.
+
 ## wait — Waiting for tasks
 
 Use `featx wait TASK... --timeout 3600` or MCP `task_wait(tasks=[...], timeout=3600)`.
