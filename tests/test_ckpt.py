@@ -129,6 +129,27 @@ def test_index_cache_rebuilds_on_change(sets):
     assert sorted(ckpt.index(d)["points"]) == ["xz_7_0.333333", "xz_8_0.500000"]
 
 
+def test_checkpoint_dry_run_does_not_write_cache(sets, fake_emu):
+    from test_sched_local import make_node
+
+    make_node(fake_emu, ["ok_1_0.500000"])
+    recipes.patch_own(Tree().get("t/sched/x"), "run", {
+        "mode": "exec", "checkpoint": "spec06_modern_a", "points": ["ok_1_0.500000"],
+        "coverage": None, "exec": {"diff": str(fake_emu[0]), "gcpt_restorer": None},
+    })
+    s = sched()
+    ckpt._memo.clear()
+    assert not ckpt.cache_dir().exists()
+    preview = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]), dry_run=True)
+    assert preview["tasks"][0]["points"][0]["inputs"]["checkpoint"].endswith("_1_0.500000_.zstd")
+    assert "_read_only" not in preview["tasks"][0]["spec"]
+    assert not ckpt.cache_dir().exists()
+
+    actual = s.submit("t/sched/x", ["run"], bin_ref=str(fake_emu[0]))
+    assert actual["tasks"] and list(ckpt.cache_dir().glob("spec06_modern_a-*.json"))
+    assert "_read_only" not in s.tasks[actual["tasks"][0]["id"]].spec
+
+
 def test_cli_ckpt(sets):
     r = CliRunner().invoke(cli.app, ["ckpt", "list", "--all"])
     assert r.exit_code == 0, r.output

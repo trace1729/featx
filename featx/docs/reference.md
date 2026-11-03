@@ -31,9 +31,15 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
   (active|parked|done|abandoned), `evidence` (a list: `--evidence` adds, `--rm-evidence` removes;
   the API also accepts the full list), `tags`, `notes` (Markdown, the Notes tab) and `comment`
   (free-form thoughts). Other keys (git, moves, created) cannot be changed this way.
-- **Code changes**: `node_context.git` reports `ahead` and `files_changed` against the base; the
-  UI worktree tab and `GET /worktrees/changes?ref=NODE` list the commits and files of the main and
-  submodule worktrees, `GET /worktrees/diff?ref=NODE&sub=&path=` one file's diff.
+- **Code changes**: `node_context.git` reports `ahead` and `files_changed` against the base;
+  `featx worktree changes NODE [--json]` lists committed and working-tree changes against each
+  repository's merge-base. The UI worktree tab and `GET /worktrees/changes?ref=NODE` expose the
+  same data, and `GET /worktrees/diff?ref=NODE&sub=&path=` returns one file's diff. Submodule
+  gitlinks are excluded from the superproject and shown separately.
+- **Node display**: `featx node show NODE` is a concise text view of the research record and
+  recent runs. `--json` emits that brief view as JSON; `--full` selects the complete context as
+  YAML, and `--full --json` selects the complete JSON context used by MCP. `--runsets 0` hides
+  runsets. Hypothesis, verdict, verdict note, evidence, and comment stay in the concise view.
 - **Ref forms**: a node is its path (`wpe/overlay/smoke`) or its id. A runset is
   `<node path>/<YYYYMMDD-n>` or a runset id prefix (≥ 6 characters).
 
@@ -120,11 +126,19 @@ featx ps ; featx logs <task> -j astar_biglakes_38_0.017849 -f
 - `--set kind.key=value` overrides one key for this submit only. The value is parsed as YAML:
   `--set run.points=[a_1_0.1,b_2_0.2]`, `--set build.options.chiseldb=true`.
 - `--step NAME` restricts post to some steps.
+- `--dry-run` runs the real recipe/preset/point validation and prints the resolved tasks and
+  commands without creating a runset, tasks, script snapshots, links, or events. Preview-only
+  IDs and the `dry-run` runset path are marked as such. A bincache key that needs a future script
+  snapshot is reported as unavailable rather than guessed.
 - `--priority N` (default 0): when cores are scarce, queued jobs launch highest priority first,
   then oldest task first. Running jobs are never preempted. Change it later with
   `featx task priority TASK N` (the whole runset; `--only-task` for one task), MCP
   `task_priority`, or ▲/▼ on the Tasks page. The caps are `placement.max_total_cores` (run) and
   `placement.max_build_cores` (build), live-editable with `featx config set` or the UI.
+- Builds sharing a canonical `build.workdir` may all be submitted, including with `--after`.
+  They wait in the queue and are serialized at dispatch; two compilation jobs never use one
+  workdir simultaneously. Different workdirs can build in parallel, and simulations keep using
+  their cached emulators.
 
 A run recipe only needs the keys that differ from the defaults. `featx recipe show NODE run`
 prints the effective recipe. A minimal `recipes/run.yaml`:
@@ -563,6 +577,13 @@ only confirmed orphans and emits one `orphan` event per kill. REST: `POST /reap 
 - If a branch with that name exists, or a branch that is a path prefix of it (git can't hold both
   `a` and `a/b`), create is refused before anything changes. Pass `--branch NAME` in that case.
 - `--adopt --path DIR` registers an existing worktree. featx then never renames or deletes its branch.
+- Root and explicitly configured submodule bases are validated with `git rev-parse --verify`
+  before create/adoption saves anything. Set one with `--base REF` and `--sub-base NAME=REF`;
+  repair one later with `featx worktree set-base NODE REF [--sub NAME]`. An unresolved ref is an
+  error instead of a later misleading code display. `worktree status` includes merge-bases.
+- `featx worktree changes NODE [--json]` shows committed and uncommitted changes against the
+  merge-base. “Clean” in APIs means no uncommitted changes, not no branch changes; detached
+  submodule HEADs are normal. The web labels state these meanings explicitly.
 - `featx node mv` moves worktrees and renames the branches featx created. On a name clash it
   keeps the old branch name and reports it.
 - `featx worktree rename-branch NODE [--to NAME] [--dry-run]` renames a featx-created branch
@@ -571,7 +592,9 @@ only confirmed orphans and emits one `orphan` event per kill. REST: `POST /reap 
   own commits. Branches
   with commits are kept unless you also pass `--drop-branches`.
 
-A build needs the node's **own** worktree (`${worktree}`). A run with `--bin` doesn't.
+A build needs the node's **own** worktree (`${worktree}`). A run with `--bin` doesn't. Compilation
+outputs are not per-runset: builds in one workdir are queued and serialized at dispatch, while
+runset logs and cached emulators are isolated.
 
 ## baselines — Baselines
 

@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+import yaml
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
@@ -29,6 +30,23 @@ def test_rest_auth_and_errors(root):
     assert c.get("/status", headers=h).json()["tasks"]["queued"] == 0
 
 
+def test_submit_dry_run_rest(root, fake_emu):
+    from test_sched_local import make_node
+
+    make_node(fake_emu, ["ok_1_0.5"])
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    h = {"X-Featx-Token": d.token}
+    r = c.post("/tasks", json={"node": "t/sched/x", "kinds": ["run"], "bin": str(fake_emu[0]),
+                               "dry_run": True}, headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] and body["preview_only"]
+    assert body["tasks"][0]["points"][0]["name"] == "ok_1_0.5"
+    assert c.get("/events", headers=h).json() == []
+    assert c.get("/status", headers=h).json()["tasks"]["queued"] == 0
+
+
 def test_cli_direct(root):
     run = CliRunner().invoke
     r = run(cli.app, ["node", "add", "wpe/real/after", "-p", "-H", "after-anchor pick"])
@@ -44,7 +62,15 @@ def test_cli_direct(root):
     r = run(cli.app, ["node", "mv", "wpe/real/after", "wpe/real/after2"])
     assert r.exit_code == 0, r.output
     r = run(cli.app, ["node", "show", "wpe/real/after2"])
+    assert r.exit_code == 0 and "Hypothesis: after-anchor pick" in r.output
+    assert "Verdict: supported" in r.output and "Evidence:" in r.output and "Comment:" in r.output
+    brief = json.loads(run(cli.app, ["node", "show", "wpe/real/after2", "--json"]).output)
+    assert brief["node"]["hypothesis"] == "after-anchor pick" and "recipes" not in brief
+    assert {"hypothesis", "verdict", "verdict_note", "evidence", "comment"} <= set(brief["node"])
+    r = run(cli.app, ["node", "show", "wpe/real/after2", "--full", "--json"])
     assert json.loads(r.output)["ancestors"][0]["path"] == "wpe"
+    r = run(cli.app, ["node", "show", "wpe/real/after2", "--full"])
+    assert yaml.safe_load(r.output)["ancestors"][0]["path"] == "wpe"
     r = run(cli.app, ["node", "add", "wpe/run"])
     assert r.exit_code == 1 and "reserved" in r.output
     r = run(cli.app, ["storage"])

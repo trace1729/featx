@@ -192,10 +192,17 @@ featx submit N build run --set build.mode=exec               # trace (default) |
 featx submit N build --set build.options.chiseldb=true       # also chiselmap, constantin, threads, flags ...
 featx recipe set N run workload=spec17 'benchmarks=[mcf]'  # spec06 | spec17 | spec26 (all points by default)
 featx submit N run --bin <emu> --point mcf_165900000000_0.031476 --set run.W=100000 --set run.I=200000
+featx submit N --dry-run  # validate and show the exact resolved submission without creating anything
+featx node show N [--json] [--full]  # concise research record by default; full context on request
+featx worktree changes N [--json]    # committed + working-tree changes vs each repo's merge-base
 ```
 
+Builds sharing a workdir can be queued; dispatch serializes them so they never compile in the
+same directory simultaneously. Different workdirs still build in parallel.
+
 Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`,
-`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`).
+`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`),
+`featx worktree set-base NODE REF [--sub NAME]`.
 
 ## Web UI (leaderboard)
 

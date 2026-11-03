@@ -225,7 +225,7 @@ def _cache_file(d: Path) -> Path:
 _memo: dict[str, tuple[list, dict]] = {}
 
 
-def index(d: Path, refresh: bool = False) -> dict:
+def index(d: Path, refresh: bool = False, write_cache: bool = True) -> dict:
     d = Path(d)
     layout, base, _ = _layout(d)
     sig = _signature(d, _weights_json(d) if layout else None, base)
@@ -236,15 +236,17 @@ def index(d: Path, refresh: bool = False) -> dict:
             return hit[1]
         hit = store.read_json(cf)
         if isinstance(hit, dict) and hit.get("sig") == sig:
-            _memo[str(cf)] = (sig, hit["index"])
+            if write_cache:
+                _memo[str(cf)] = (sig, hit["index"])
             return hit["index"]
     idx = scan(d)
-    _memo[str(cf)] = (sig, idx)
-    try:
-        cf.parent.mkdir(parents=True, exist_ok=True)
-        store.atomic_write_text(cf, json.dumps({"sig": sig, "index": idx}))
-    except OSError:
-        pass
+    if write_cache:
+        _memo[str(cf)] = (sig, idx)
+        try:
+            cf.parent.mkdir(parents=True, exist_ok=True)
+            store.atomic_write_text(cf, json.dumps({"sig": sig, "index": idx}))
+        except OSError:
+            pass
     return idx
 
 
@@ -284,13 +286,13 @@ def find(ref: str) -> Path:
     return d
 
 
-def get(ref: str, refresh: bool = False) -> dict:
-    return index(find(ref), refresh)
+def get(ref: str, refresh: bool = False, write_cache: bool = True) -> dict:
+    return index(find(ref), refresh, write_cache=write_cache)
 
 
-def runnable(ref: str) -> dict:
+def runnable(ref: str, write_cache: bool = True) -> dict:
     """The index of a set that exec runs can use, else CkptError."""
-    idx = get(ref)
+    idx = get(ref, write_cache=write_cache)
     if idx.get("multihart"):
         raise CkptError(f"checkpoint set {idx['name']} is multi-hart; featx runs single-core emus only")
     if idx.get("error"):

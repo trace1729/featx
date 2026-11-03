@@ -279,6 +279,9 @@ describe("App", () => {
     extra["/worktrees/diff"] = { sub: "", path: "src/core.scala", diff: "--- a/src/core.scala\n+++ b/src/core.scala\n@@ -1 +1 @@\n-old\n+new", truncated: false };
     renderAt("/node/wpe?tab=worktree");
     expect(await screen.findByText(/code changed: 1 file, \+3 −1, 1 commit ahead/)).toBeTruthy();
+    expect(await screen.findByText("Committed + working-tree changes vs base")).toBeTruthy();
+    expect(await screen.findByText("no uncommitted changes")).toBeTruthy();
+    expect(await screen.findByText(/Submodule gitlinks are excluded/)).toBeTruthy();
     expect(await screen.findByText("try a wider window")).toBeTruthy();
     fireEvent.click(screen.getByText("src/core.scala"));
     expect((await screen.findByText("+new")).className).toBe("add");

@@ -171,26 +171,31 @@ def script_read(node: str, name: str) -> str:
 
 
 @tool
-def worktree_create(node: str, base: str | None = None, adopt_path: str | None = None) -> dict:
-    """Create the node's git worktree (or adopt an existing one at adopt_path)."""
+def worktree_create(node: str, base: str | None = None, adopt_path: str | None = None,
+                    sub_base: dict[str, str] | None = None) -> dict:
+    """Create or adopt a worktree; sub_base maps submodule names to their base refs."""
     if adopt_path:
-        return service.worktree_create(node, path=adopt_path, adopt=True, base=base)
-    return service.worktree_create(node, base=base)
+        return service.worktree_create(node, path=adopt_path, adopt=True, base=base, sub_base=sub_base)
+    return service.worktree_create(node, base=base, sub_base=sub_base)
+
+
+@tool
+def worktree_set_base(node: str, base: str, submodule: str = "") -> dict:
+    """Validate and replace a worktree or registered submodule comparison base."""
+    return service.worktree_set_base(node, base, submodule)
 
 
 # ----------------------------------------------------------------- tasks
 @tool
 def task_submit(node: str, kinds: list[str] | None = None, purpose: str = "",
                 overrides: dict | None = None, bin: str | None = None, points: list[str] | None = None,
-                post_steps: list[str] | None = None, runset: str | None = None, priority: int = 0) -> dict:
-    """Submit build/run/post (default all, chained) as a new runset of `node`.
-    overrides: {"run": {"W": 1000000, "I": 2000000}, ...} merged over the effective recipes.
-    bin: emu path | bincache key | runset ref to skip the build. points: subset of run points.
-    priority: higher launches first when cores are scarce (default 0)."""
+                post_steps: list[str] | None = None, runset: str | None = None, priority: int = 0,
+                dry_run: bool = False) -> dict:
+    """Submit build/run/post, or resolve them without side effects when dry_run is true."""
     return _c(300).post("/tasks", {"node": node, "kinds": kinds or ["build", "run", "post"], "purpose": purpose,
                                    "overrides": overrides, "bin": bin, "points": points,
-                                   "post_steps": post_steps, "runset": runset, "priority": priority},
-                        timeout=300)
+                                   "post_steps": post_steps, "runset": runset, "priority": priority,
+                                   "dry_run": dry_run}, timeout=300)
 
 
 @tool

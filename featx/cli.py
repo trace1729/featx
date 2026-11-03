@@ -142,11 +142,51 @@ def node_add(path: str, hypothesis: str = typer.Option("", "-H", "--hypothesis")
                          base=base))
 
 
+def _node_brief_text(data: dict) -> None:
+    node = data["node"]
+    typer.echo(f"Node: {node['path']} ({node['kind']}, {node['status']})")
+    typer.echo(f"Hypothesis: {node['hypothesis'] or '-'}")
+    typer.echo(f"Verdict: {node['verdict']}" + (f" — {node['verdict_note']}" if node["verdict_note"] else ""))
+    typer.echo(f"Tags: {', '.join(node['tags']) or '-'}")
+    typer.echo("Evidence:")
+    for evidence in node["evidence"] or ["-"]:
+        typer.echo(f"  - {evidence}")
+    typer.echo(f"Comment:\n{node['comment'] or '-'}")
+    if data.get("notes"):
+        typer.echo(f"Notes:\n{data['notes']}")
+    git = data.get("git")
+    if git:
+        typer.echo(f"Git: {git.get('head')} {git.get('branch')} @ {git.get('base')}; "
+                   f"merge-base {git.get('merge_base', '<none>')}; "
+                   f"{git.get('dirty', 0)} uncommitted change(s)")
+        for name, sub in (git.get("submodules") or {}).items():
+            typer.echo(f"  {name}: {sub.get('head')} {sub.get('branch')} @ {sub.get('base') or '<unset>'}; "
+                       f"merge-base {sub.get('merge_base', '<none>')}; {sub.get('dirty', 0)} uncommitted change(s)")
+    typer.echo(f"Runsets: {data['runset_count']} ({data['archived_count']} archived)")
+    for rs in data["runsets"]:
+        typer.echo(f"  {rs['ref']}: {rs['purpose'] or '-'}")
+        for task in rs["tasks"]:
+            typer.echo(f"    {task['kind']}: {task['state']} {task['counts']}")
+        for step, metrics in rs["post"].items():
+            if metrics:
+                typer.echo(f"    {step}: {json.dumps(metrics, ensure_ascii=False, default=str)}")
+
+
 @node_app.command("show")
 @guarded
-def node_show(ref: str, runsets: int = typer.Option(3, help="latest N runsets")):
-    """Node context bundle (what the MCP node_context tool returns)."""
-    out(service.node_context(ref, runsets))
+def node_show(ref: str, runsets: int = typer.Option(3, help="latest N runsets (0 hides runsets)"),
+              full: bool = typer.Option(False, "--full", help="include the complete node context"),
+              as_json: bool = typer.Option(False, "--json", help="emit JSON instead of text/YAML")):
+    """Show the research record and recent runs; use --full for recipes and complete context."""
+    if full:
+        data = service.node_context(ref, runsets)
+        if as_json:
+            out(data)
+        else:
+            typer.echo(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+        return
+    data = service.node_brief(ref, runsets)
+    out(data) if as_json else _node_brief_text(data)
 
 
 @node_app.command("set")
@@ -264,12 +304,29 @@ def recipe_edit(ref: str, kind: str):
 def worktree_create(ref: str, base: Optional[str] = None, branch: Optional[str] = None,
                     path: Optional[str] = None, repo: Optional[str] = None,
                     sub: List[str] = typer.Option(None, "--sub", help="submodule worktrees (default TraceRTL)"),
+                    sub_base: List[str] = typer.Option([], "--sub-base", help="submodule base: NAME=REF"),
                     adopt: bool = typer.Option(False, help="register an existing worktree at --path")):
-    """Create the node worktree at <wt_root>/<node path> on branch <node path>
-    (git.branch_prefix + path; refused when that name clashes with an existing branch — pass --branch)."""
-    kw = {"base": base, "branch": branch, "path": path, "repo": repo, "submodules": sub or None, "adopt": adopt}
+    """Create or adopt a worktree, validating the root and submodule base refs."""
+    bases = {}
+    for item in sub_base:
+        name, sep, value = item.partition("=")
+        if not sep or not name or not value:
+            fail(f"--sub-base must be NAME=REF (got {item!r})")
+        bases[name] = value
+    kw = {"base": base, "branch": branch, "path": path, "repo": repo, "submodules": sub or None,
+          "sub_base": bases, "adopt": adopt}
     c = via_daemon()
     out(c.post("/worktrees", {"ref": ref, **kw}, timeout=900) if c else service.worktree_create(ref, **kw))
+
+
+@wt_app.command("set-base")
+@guarded
+def worktree_set_base(ref: str, base: str,
+                      sub: Optional[str] = typer.Option(None, "--sub", help="registered submodule name")):
+    """Set and validate a worktree or submodule comparison base."""
+    c = via_daemon()
+    body = {"ref": ref, "base": base, "sub": sub or ""}
+    out(c.post("/worktrees/base", body) if c else service.worktree_set_base(ref, base, sub or ""))
 
 
 @wt_app.command("rename-branch")
@@ -286,6 +343,35 @@ def worktree_rename_branch(ref: str, to: Optional[str] = typer.Option(None, help
 @guarded
 def worktree_status(ref: str):
     out(service.worktree_status(ref))
+
+
+@wt_app.command("changes")
+@guarded
+def worktree_changes(ref: str, as_json: bool = typer.Option(False, "--json")):
+    """Committed and working-tree changes against each repository's merge-base."""
+    result = service.worktree_changes(ref)
+    if as_json:
+        out(result)
+        return
+    for name, repo in result["repos"].items():
+        typer.echo(f"{name or 'worktree'}: base {repo.get('base') or '<unset>'}, "
+                   f"merge-base {repo.get('merge_base', '<none>')}")
+        if repo.get("error"):
+            typer.echo(f"  error: {repo['error']}")
+            continue
+        typer.echo(f"  ahead {repo.get('ahead', 0)}, behind {repo.get('behind', 0)}; "
+                   f"+{repo.get('added', 0)} -{repo.get('deleted', 0)}")
+        for commit in repo.get("commits", []):
+            typer.echo(f"  {commit['sha']} {commit['subject']}")
+        for file in repo.get("files", []):
+            typer.echo(f"  {file['status']} {file['path']} +{file['added'] or 0} -{file['deleted'] or 0}")
+        if repo.get("untracked_total"):
+            typer.echo(f"  untracked: {repo['untracked_total']} file(s)")
+    total = result["total"]
+    typer.echo(f"total: {total['files']} files, +{total['added']} -{total['deleted']}, "
+               f"{total['ahead']} commit(s) ahead")
+    if len(result["repos"]) > 1:
+        typer.echo("Submodule gitlinks are excluded from the superproject and shown separately.")
 
 
 # ================================================================== scripts
@@ -314,12 +400,16 @@ def _overrides(set_) -> dict:
     return {kind: parse_kv(items) for kind, items in by_kind.items()}
 
 
-def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after, priority=0):
+def _submit(node: str, kinds: list[str], runset, purpose, bin_, set_, points, steps, after, priority=0,
+            dry_run=False):
     overrides = _overrides(set_)
     body = {"node": node, "kinds": kinds, "runset": runset, "purpose": purpose, "overrides": overrides,
             "bin": bin_, "points": points or None, "post_steps": steps or None, "after": after or None,
-            "priority": priority}
+            "priority": priority, "dry_run": dry_run}
     res = client().post("/tasks", body, timeout=300)
+    if dry_run:
+        out(res)
+        return
     typer.echo(f"runset {res['runset']}")
     for t in res["tasks"]:
         typer.echo(f"  {t['kind']:5s} {t['id']}" + (f"  after {','.join(a[:10] for a in t['after'])}"
@@ -339,12 +429,13 @@ def submit(node: str, kinds: List[str] = typer.Argument(None, help="build run po
            point: List[str] = typer.Option([], "--point", help="restrict run to these points"),
            step: List[str] = typer.Option([], "--step", help="restrict post to these steps"),
            after: List[str] = typer.Option([], "--after", help="task ids the first task waits for"),
-           priority: int = typer.Option(0, "--priority", help="higher launches first when cores are scarce")):
-    """Submit build/run/post as a chained DAG in a new runset of NODE."""
+           priority: int = typer.Option(0, "--priority", help="higher launches first when cores are scarce"),
+           dry_run: bool = typer.Option(False, "--dry-run", help="resolve and validate without creating anything")):
+    """Submit build/run/post, or preview the exact resolved submission with --dry-run."""
     for k in kinds or []:
         if k not in KINDS:
             fail(f"unknown kind {k} (build|run|post)")
-    _submit(node, list(kinds or KINDS), runset, purpose, bin_, set_, point, step, after, priority)
+    _submit(node, list(kinds or KINDS), runset, purpose, bin_, set_, point, step, after, priority, dry_run)
 
 
 @app.command()

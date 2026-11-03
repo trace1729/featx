@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .. import coderec, config, jobs as jobgen, points as ptmod, presets, problemlog, provenance, recipes, store, taskstore
-from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Task
+from ..model import ACTIVE_TASK_STATES, JOB_ACTIVE, TERMINAL_TASK_STATES, Job, Runset, Task
 from ..tree import Tree, TreeError
 from . import classify, eta, executor
 from .placement import Placement
@@ -205,10 +205,8 @@ class Scheduler:
                purpose: str = "", overrides: dict | None = None, bin_ref: str | None = None,
                after: list[str] | None = None, derived_from: str | None = None,
                only_points: list[str] | None = None, post_steps: list[str] | None = None,
-               priority: int = 0) -> dict:
-        """Create tasks for a node. kinds ⊆ [build, run, post] in pipeline order; a new runset
-        is created unless `runset` names an existing unsealed one. Higher `priority` tasks get
-        freed cores and launch slots first."""
+               priority: int = 0, dry_run: bool = False) -> dict:
+        """Resolve and optionally persist tasks for a node in pipeline order."""
         overrides = overrides or {}
         kinds = [k for k in ("build", "run", "post") if k in kinds]
         if not kinds:
@@ -223,23 +221,33 @@ class Scheduler:
                                      f"to create a new one (use derived_from to link)")
                 rdir = entry.dir / rs.name
                 created_rs = False
+            elif dry_run:
+                rs = Runset(id="DRYRUN", name="dry-run", node_id=entry.node.id, purpose=purpose,
+                            created=store.now_iso(), derived_from=derived_from)
+                rdir = entry.dir / rs.name
+                created_rs = False
             else:
                 rs, rdir = tree.new_runset(entry, purpose=purpose, derived_from=derived_from)
                 created_rs = True
             try:
+                if not dry_run:
+                    recipes.snapshot_scripts(tree, entry, rdir)
                 created = self._submit_tasks(tree, entry, rs, rdir, kinds, overrides, bin_ref, after,
-                                             only_points, post_steps)
+                                             only_points, post_steps, dry_run=dry_run)
             except Exception:
                 # A submit that fails validation must not leave an empty runset behind.
                 if created_rs:
                     shutil.rmtree(rdir, ignore_errors=True)
                 raise
+            for task in created:
+                task.priority = int(priority or 0)
+            if dry_run:
+                return self._dry_run_result(tree, entry, rs, rdir, created, overrides)
             if overrides:
                 # kind-level merge keeps a null (a deletion at submit) in the record for the UI
                 rs.overrides = {**rs.overrides, **overrides}
             emu_override = next((t.spec["emu"] for t in created if t.kind == "run"), None) if bin_ref else None
             for task in created:
-                task.priority = int(priority or 0)
                 rs.recipes[task.kind] = task.spec
                 rs.tasks.append(task.id)
             if emu_override and not rs.bin:
@@ -265,11 +273,51 @@ class Scheduler:
             return {"runset": f"{entry.rel}/{rs.name}", "runset_dir": str(rdir),
                     "tasks": [{"id": t.id, "kind": t.kind, "after": t.after} for t in created]}
 
+    def _dry_run_result(self, tree: Tree, entry, rs: Runset, rdir: Path, tasks: list[Task],
+                        overrides: dict) -> dict:
+        result = {"dry_run": True, "preview_only": True,
+                  "runset": f"{entry.rel}/{rs.name}", "runset_dir": str(rdir),
+                  "purpose": rs.purpose, "overrides": overrides, "tasks": [], "warnings": []}
+        has_scripts = any(p.is_file() and not p.name.startswith(".")
+                          for d in recipes.script_layers(tree, entry) if d.is_dir() for p in d.iterdir())
+        for task in tasks:
+            item = {"id": task.id, "kind": task.kind, "after": task.after,
+                    "priority": task.priority, "spec": task.spec}
+            if task.kind == "build":
+                item["source"] = self._worktree_state(task.spec.get("workdir"))
+                if has_scripts:
+                    item["bincache_note"] = "key requires the real runset's script snapshot"
+                else:
+                    key = self._build_key(task, rdir)
+                    item["bincache_key"] = key
+                    item["bincache_hit"] = (bool(provenance.bincache_lookup(key))
+                                            if task.spec.get("cache", True) else False)
+                conflict = self._build_workdir_conflict(task)
+                if conflict:
+                    result["warnings"].append(f"build {task.id} will wait for workdir used by {conflict.id}")
+            elif task.kind == "run" and task.spec.get("executor") == "points":
+                item["points"] = self._dry_run_points(task.spec)
+            result["tasks"].append(item)
+        return result
+
+    @staticmethod
+    def _dry_run_points(spec: dict) -> list[dict]:
+        spec = {**spec, "_read_only": True}
+        points = []
+        for name in ptmod.resolve(spec, strict=True):
+            point = ptmod.parse(name)
+            ctx = {"point.name": point["name"], "point.bench": point["bench"], "point.cp": point["cp"],
+                   "point.weight": point["weight"], "emu": spec["emu"], "W": spec["W"], "I": spec["I"],
+                   "args": spec.get("args", ""), "trace_root": spec.get("trace_root", ""),
+                   **presets.point_vars(spec, point["name"])}
+            command, inputs = presets.point_command(spec, ctx)
+            points.append({"name": name, "command": command, "inputs": inputs})
+        return points
+
     def _submit_tasks(self, tree: Tree, entry, rs, rdir: Path, kinds: list[str], overrides: dict,
                       bin_ref: str | None, after: list[str] | None, only_points: list[str] | None,
-                      post_steps: list[str] | None) -> list[Task]:
+                      post_steps: list[str] | None, dry_run: bool = False) -> list[Task]:
         """Effective, substituted and lowered (presets) specs of the new tasks, validated."""
-        recipes.snapshot_scripts(tree, entry, rdir)
         ctx = recipes.base_context(tree, entry, rdir, rs.name)
         emu_override = bin_mode = None
         if bin_ref and "run" in kinds:
@@ -285,6 +333,8 @@ class Scheduler:
                 ov = {**(ov or {}), "emu": emu_override}
             try:
                 spec = recipes.effective(tree, entry, kind, ov)
+                if dry_run:
+                    spec["_read_only"] = True
                 built = prev.spec if prev is not None and prev.kind == "build" else \
                     ({"mode": bin_mode} if bin_mode else None)
                 if kind == "run" and spec.get("checkpoint") and presets.run_mode(spec, built) == "exec":
@@ -310,6 +360,7 @@ class Scheduler:
                 self._validate(tree, entry, task, prev)
             except presets.PresetError as error:
                 raise SchedError(str(error)) from None
+            task.spec.pop("_read_only", None)
             created.append(task)
             prev = task
         return created
@@ -350,10 +401,6 @@ class Scheduler:
                                  f"featx worktree create {entry.rel})")
             if spec.get("type") == "script" and not spec.get("script"):
                 raise SchedError("build.type=script needs build.script")
-            busy = [t for t in self.tasks.values() if t.kind == "build" and t.state in ACTIVE_TASK_STATES
-                    and t.spec.get("workdir") == spec["workdir"]]
-            if busy:
-                raise SchedError(f"another build is active in {spec['workdir']}: {busy[0].id}")
         elif task.kind == "run":
             if spec.get("executor") not in ("points", "perf_trigger"):
                 raise SchedError("run.executor must be points|perf_trigger")
@@ -535,6 +582,16 @@ class Scheduler:
         except Exception as error:  # noqa: BLE001 — a scan must not stop the tick loop
             self.tick_errors = (self.tick_errors + [f"reap: {error!r}"] )[-20:]
 
+    def _build_workdir_conflict(self, task: Task) -> Task | None:
+        if task.kind != "build":
+            return None
+        workdir = Path(task.spec["workdir"]).resolve()
+        for other in self.tasks.values():
+            if (other.id != task.id and other.kind == "build" and other.state == "running"
+                    and Path(other.spec["workdir"]).resolve() == workdir):
+                return other
+        return None
+
     def _tick_locked(self) -> bool:
         """Poll/materialize under the lock; True if some job waits for a launch."""
         self.last_tick = _now()
@@ -553,11 +610,13 @@ class Scheduler:
                     if dep == "broken":
                         self._cancel_dependency(tree, task)
                         continue
-                    note = "waiting for dependencies" if dep == "wait" else ""
+                    conflict = self._build_workdir_conflict(task) if dep == "ok" else None
+                    note = ("waiting for dependencies" if dep == "wait" else
+                            f"waiting for build workdir ({conflict.id[:12]})" if conflict else "")
                     if task.note != note:
                         task.note = note
                         self._save(task)
-                    if dep != "ok":
+                    if dep != "ok" or conflict:
                         continue
                     self._materialize(tree, task)
                     self._save(task)
@@ -750,11 +809,14 @@ class Scheduler:
             core_cap = core_caps[pool]
             limit = task.spec.get("max_parallel")
             running = sum(1 for j in task.jobs if j.state in ("launching", "running"))
+            conflict = self._build_workdir_conflict(task)
             changed = False
             waiting = False
             for job in task.jobs:
                 if job.state != "queued":
                     continue
+                if conflict:
+                    break
                 if limit and running >= int(limit):
                     break
                 if cap and len(starts) >= cap:
@@ -788,9 +850,10 @@ class Scheduler:
                     cores_used[pool] += job.cores
                 changed = True
             label = "build core cap" if pool == "build" else "core cap"
-            note = f"pending: featx {label} {core_cap} reached" if waiting else ""
-            if task.note != note and (waiting or task.note.startswith(("pending: featx core cap",
-                                                                      "pending: featx build core cap"))):
+            note = (f"waiting for build workdir ({conflict.id[:12]})" if conflict else
+                    f"pending: featx {label} {core_cap} reached" if waiting else "")
+            if task.note != note and (conflict or waiting or task.note.startswith(
+                    ("pending: featx core cap", "pending: featx build core cap", "waiting for build workdir"))):
                 task.note, changed = note, True
             if changed and not any(t is task for t, _, _ in starts):
                 self._refresh_task_state(tree, task)

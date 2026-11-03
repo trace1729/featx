@@ -268,7 +268,7 @@ def checkpoint_index(spec: dict) -> dict | None:
     if spec.get("mode") != "exec" or not info.get("path") or info.get("implied"):
         return None
     from . import ckpt
-    return ckpt.index(Path(info["path"]))
+    return ckpt.index(Path(info["path"]), write_cache=not spec.get("_read_only"))
 
 
 def _lower_checkpoint(spec: dict) -> None:
@@ -290,7 +290,7 @@ def _lower_checkpoint(spec: dict) -> None:
     if spec.get("executor") == "perf_trigger":
         raise PresetError("run.checkpoint needs executor: points (perf_trigger takes gcpt_path / json_path)")
     try:
-        idx = ckpt.runnable(str(want))
+        idx = ckpt.runnable(str(want), write_cache=not spec.get("_read_only"))
     except ckpt.CkptError as error:
         raise PresetError(str(error)) from None
     wl = spec.get("workload")

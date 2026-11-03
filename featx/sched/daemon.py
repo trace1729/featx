@@ -228,6 +228,10 @@ def build_app(d: Daemon) -> "FastAPI":
         ref = body.pop("ref")
         return locked(service.worktree_create, ref, **body)
 
+    @app.post("/worktrees/base")
+    def worktree_set_base(body: dict = Body(...)):
+        return locked(service.worktree_set_base, body["ref"], body["base"], body.get("sub", ""))
+
     @app.get("/worktrees/status")
     def worktree_status(ref: str):
         return service.worktree_status(ref)
@@ -248,7 +252,7 @@ def build_app(d: Daemon) -> "FastAPI":
                             overrides=body.get("overrides"), bin_ref=body.get("bin"),
                             after=body.get("after"), derived_from=body.get("derived_from"),
                             only_points=body.get("points"), post_steps=body.get("post_steps"),
-                            priority=int(body.get("priority") or 0))
+                            priority=int(body.get("priority") or 0), dry_run=bool(body.get("dry_run")))
 
     @app.get("/tasks")
     def tasks(active: bool = False, node: str | None = None, state: str | None = None,

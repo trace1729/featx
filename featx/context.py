@@ -88,6 +88,8 @@ def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
 
 def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: bool = False,
           archived_only: bool = False) -> dict:
+    if max_runsets < 0:
+        raise ValueError("max_runsets must be non-negative")
     tasks = taskstore.load_all()
     scripts_dir = entry.dir / "scripts"
     scripts = sorted(p.name for p in scripts_dir.iterdir()) if scripts_dir.is_dir() else []
@@ -95,7 +97,7 @@ def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: b
     archived = [rs for rs in all_runsets if rs.archived]
     runsets = [rs for rs in all_runsets if rs.archived] if archived_only else (
         all_runsets if include_archived else [rs for rs in all_runsets if not rs.archived])
-    shown = runsets[-max_runsets:]
+    shown = runsets[-max_runsets:] if max_runsets else []
     differing = params_mod.differing(shown)
     summaries = []
     for rs in shown:
@@ -121,6 +123,26 @@ def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: b
         "archived_runsets": [f"{entry.rel}/{rs.name}" for rs in archived],
         "params_differing": differing,
     }
+
+
+def brief(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: bool = False,
+          archived_only: bool = False) -> dict:
+    full = build(tree, entry, max_runsets=max_runsets, include_archived=include_archived,
+                 archived_only=archived_only)
+    metric_keys = {"suite", "reference", "block", "configured_points", "completed_points", "points",
+                   "common_points", "configured_benchmarks", "fully_completed_benchmarks",
+                   "ipc_geomean_completed_benchmarks", "benchmark_mean_ipc", "lifecycle_nonzero_points",
+                   "topdown_invalid_points", "self.mean_abs_err_pct", "self.rms_err_pct", "self.ipc_geomean"}
+    runsets = []
+    for rs in full["runsets"]:
+        post = {name: {k: v for k, v in summary.items() if k in metric_keys and v is not None}
+                for name, summary in rs["post"].items()}
+        runsets.append({"ref": rs["ref"], "purpose": rs["purpose"], "sealed": rs["sealed"],
+                        "archived": rs["archived"], "tasks": rs["tasks"], "params": rs["params"],
+                        "post": post})
+    return {"node": full["node"], "notes": full["notes"], "git": full["git"],
+            "runsets": runsets, "runset_count": full["runset_count"],
+            "archived_count": full["archived_count"], "archived_runsets": full["archived_runsets"]}
 
 
 def read_script(entry: Entry, name: str) -> str:

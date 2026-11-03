@@ -15,6 +15,8 @@ from pathlib import Path
 from . import config
 
 REFERENCE = config.DOCS_DIR / "reference.md"
+ALIASES = {"submit": "launch", "worktree": "worktrees", "runset": "runsets",
+           "recipe": "recipes", "ckpt": "checkpoints"}
 BEGIN, END = "<!-- plugins:begin (generated: python -m featx.docs) -->", "<!-- plugins:end -->"
 HEAD_RE = re.compile(r"^## (\S+) — (.+)$", re.M)
 
@@ -40,6 +42,7 @@ def index() -> dict:
 
 
 def topic(name: str) -> str:
+    name = ALIASES.get(name, name)
     if name in ("all", "reference"):
         return _with_live_plugins(text())
     found = topics()

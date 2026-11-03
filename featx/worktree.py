@@ -64,6 +64,15 @@ def _script() -> Path:
     return config.BIN_DIR / "add-worktree.sh"
 
 
+def validate_base(repo: str, base: str, *, label: str = "base") -> str:
+    if not base:
+        raise TreeError(f"{label} is required; pass an explicit Git ref")
+    commit = run_git(["-C", repo, "rev-parse", "--verify", f"{base}^{{commit}}"], check=False).strip()
+    if not commit:
+        raise TreeError(f"{label} {base!r} does not resolve to a commit in {repo}")
+    return commit
+
+
 def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = None,
            branch: str | None = None, path: str | None = None,
            submodules: list[str] | None = None, sub_base: dict[str, str] | None = None,
@@ -79,6 +88,7 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
     wt_path = Path(path) if path else default_path(entry.rel)
     submodules = gset.get("submodule_worktrees", []) if submodules is None else submodules
     sub_base = sub_base or {}
+    validate_base(repo, base)
 
     if adopt:
         if not wt_path.is_dir():
@@ -88,6 +98,8 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
         for sub in submodules:
             sp = wt_path / sub
             if sp.is_dir() and not sp.is_symlink() and (sp / ".git").exists():
+                if sub_base.get(sub):
+                    validate_base(str(sp), sub_base[sub], label=f"{sub} base")
                 info.submodule_worktrees[sub] = SubWorktree(
                     repo=str(Path(repo) / sub), base=sub_base.get(sub, ""),
                     branch=run_git(["-C", str(sp), "rev-parse", "--abbrev-ref", "HEAD"]), path=str(sp),
@@ -124,6 +136,7 @@ def _sub_worktree(repo: str, base: str, wt: Path, sub: str, branch: str, sub_bas
     if not sub_base:
         line = run_git(["-C", repo, "ls-tree", base, sub])
         sub_base = line.split()[2] if line else "HEAD"
+    validate_base(str(sub_repo), sub_base, label=f"{sub} base")
     dst = wt / sub
     if dst.is_symlink():
         dst.unlink()
@@ -318,18 +331,29 @@ def status(node: Node) -> dict:
         subs = {}
         for name, sub in git.submodule_worktrees.items():
             porcelain = run_git(["-C", sub.path, "status", "--porcelain"], check=False)
-            subs[name] = {"branch": sub.branch, "path": sub.path,
-                          "head": run_git(["-C", sub.path, "rev-parse", "--short", "HEAD"], check=False),
-                          "dirty": len(porcelain.splitlines())}
+            item = {"branch": sub.branch, "path": sub.path, "base": sub.base,
+                    "head": run_git(["-C", sub.path, "rev-parse", "--short", "HEAD"], check=False),
+                    "dirty": len(porcelain.splitlines())}
+            mb = run_git(["-C", sub.path, "merge-base", sub.base, "HEAD"], check=False)
+            if mb:
+                item["merge_base"] = mb[:12]
+                ahead = run_git(["-C", sub.path, "rev-list", "--count", f"{mb}..HEAD"], check=False)
+                item["ahead"] = int(ahead or 0)
+            else:
+                item["error"] = f"no merge-base between {sub.base} and HEAD"
+            subs[name] = item
         out["submodules"] = subs
         mb = run_git(["-C", git.worktree, "merge-base", git.base, "HEAD"], check=False)
         if mb:
+            out["merge_base"] = mb[:12]
             ahead = run_git(["-C", git.worktree, "rev-list", "--count", f"{mb}..HEAD"], check=False)
             out["ahead"] = int(ahead or 0)
             changed = run_git(["-C", git.worktree, "diff", "--name-only", "-z", "--ignore-submodules=all",
                                mb], check=False)
             skip = _submodule_paths(git.worktree)
             out["files_changed"] = len([p for p in changed.split("\0") if p and p not in skip])
+        else:
+            out["error"] = f"no merge-base between {git.base} and HEAD"
     return out
 
 

@@ -134,6 +134,15 @@ featx submit backend/rob/feature1 run --bin <emu> \
   --point <benchmark_point> --set run.I=200000 --set run.W=200000
 ```
 
+提交前可用 `--dry-run` 检查实际生效的 recipe、checkpoint 和命令，不会创建 runset 或任务。相同 workdir 的多个 build 可以排队提交，调度器保证同一时刻只有一个编译任务使用该目录。
+
+```bash
+featx submit backend/rob/feature1 --dry-run
+featx node show backend/rob/feature1                # 简洁研究记录；--json 输出 JSON
+featx node show backend/rob/feature1 --full --json # 完整节点上下文
+featx worktree changes backend/rob/feature1         # 基线以来的已提交和未提交改动
+```
+
 查看 Web UI：
 
 ```bash

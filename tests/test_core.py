@@ -79,6 +79,13 @@ def test_runset_numbering(root):
     a, _ = t.new_runset(t.get("x"))
     b, _ = t.new_runset(t.get("x"))
     assert a.name.endswith("-1") and b.name.endswith("-2") and a.name[:8] == store.today()
+    service.node_update("x", comment="remember this", add_evidence=[f"x/{b.name}"])
+    brief = service.node_brief("x", 0)
+    assert brief["runsets"] == [] and brief["runset_count"] == 2
+    assert brief["node"]["comment"] == "remember this" and brief["node"]["evidence"] == [f"x/{b.name}"]
+    assert "recipes" not in brief
+    with pytest.raises(ValueError, match="non-negative"):
+        service.node_brief("x", -1)
 
 
 # --------------------------------------------------------------- recipes
@@ -356,7 +363,7 @@ def test_worktree_changes_and_diff(root, tmp_path):
     assert r["untracked"] == ["u.txt"]
     assert ch["total"] == {"files": 3, "added": 3, "deleted": 0, "ahead": 2}
     st = service.worktree_status("c")
-    assert st["ahead"] == 2 and st["files_changed"] == 2
+    assert st["ahead"] == 2 and st["files_changed"] == 2 and st["merge_base"]
     d = service.worktree_diff("c", "", "a.txt")["diff"]
     assert "+two" in d and "a/a.txt" in d
     assert "+untracked" in service.worktree_diff("c", "", "u.txt")["diff"]
@@ -364,3 +371,48 @@ def test_worktree_changes_and_diff(root, tmp_path):
         service.worktree_diff("c", "", "../etc/passwd")
     with pytest.raises(TreeError):
         service.worktree_diff("c", "TraceRTL", "a.txt")
+
+
+def test_worktree_base_validation_and_repair(root, tmp_path):
+    import json
+    from typer.testing import CliRunner
+    from featx import cli
+
+    repo, wt = tmp_path / "repo", tmp_path / "wt"
+    sub, sub_wt = tmp_path / "sub", wt / "TraceRTL"
+    for path in (repo, sub):
+        _git("init", "-q", "-b", "main", str(path))
+        _git("commit", "-q", "--allow-empty", "-m", "base", cwd=path)
+    _git("worktree", "add", "-q", "-b", "feature", str(wt), "main", cwd=repo)
+    _git("worktree", "add", "-q", "--detach", str(sub_wt), "main", cwd=sub)
+    Tree().add("adopt")
+    with pytest.raises(TreeError, match="does not resolve"):
+        service.worktree_create("adopt", repo=str(repo), path=str(wt), base="missing", adopt=True,
+                                submodules=[])
+    assert Tree().get("adopt").node.git is None
+
+    with pytest.raises(TreeError, match="TraceRTL base"):
+        service.worktree_create("adopt", repo=str(repo), path=str(wt), base="main", adopt=True,
+                                submodules=["TraceRTL"], sub_base={"TraceRTL": "missing"})
+    assert Tree().get("adopt").node.git is None
+    service.worktree_create("adopt", repo=str(repo), path=str(wt), base="main", adopt=True,
+                            submodules=["TraceRTL"], sub_base={"TraceRTL": "main"})
+    status = service.worktree_status("adopt")
+    assert status["merge_base"] and status["submodules"]["TraceRTL"]["merge_base"]
+    assert status["submodules"]["TraceRTL"]["base"] == "main"
+    with pytest.raises(TreeError, match="does not resolve"):
+        service.worktree_set_base("adopt", "missing", "TraceRTL")
+    assert Tree().get("adopt").node.git.submodule_worktrees["TraceRTL"].base == "main"
+    assert service.worktree_set_base("adopt", "main", "TraceRTL")["submodules"]["TraceRTL"]["ahead"] == 0
+
+    result = CliRunner().invoke(cli.app, ["worktree", "changes", "adopt", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["total"]["ahead"] == 0
+    text = CliRunner().invoke(cli.app, ["worktree", "changes", "adopt"])
+    assert "Submodule gitlinks are excluded" in text.output
+
+    Tree().add("create")
+    dest = tmp_path / "new-worktree"
+    with pytest.raises(TreeError, match="does not resolve"):
+        service.worktree_create("create", repo=str(repo), path=str(dest), base="missing", submodules=[])
+    assert not dest.exists() and Tree().get("create").node.git is None

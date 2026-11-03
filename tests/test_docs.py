@@ -38,6 +38,8 @@ def test_topics_and_every_documented_key():
 
 def test_topic_lookup(root):
     assert docs.topic("points").startswith("## points")
+    for alias, target in docs.ALIASES.items():
+        assert docs.topic(alias) == docs.topic(target)
     assert "### perf-keys" in docs.topic("plugins") and docs.BEGIN not in docs.topic("plugins")
     assert docs.topic("pair").startswith("## pair") and "`reference`" in docs.topic("pair")
     assert "## worktrees" in docs.topic("all") and docs.END not in docs.topic("all")

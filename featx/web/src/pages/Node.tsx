@@ -560,7 +560,9 @@ interface WtStatus {
   exists: boolean;
   head?: string;
   dirty?: number;
-  submodules?: Record<string, { branch: string; path: string; head: string; dirty: number }>;
+  merge_base?: string;
+  error?: string;
+  submodules?: Record<string, { branch: string; path: string; head: string; dirty: number; base: string; merge_base?: string; ahead?: number; error?: string }>;
 }
 
 function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => void }) {
@@ -628,8 +630,10 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
       <div className="kv">
         <span>worktree</span>
         <span className="mono">{g.worktree}</span>
-        <span>branch</span>
-        <span className="mono">{g.branch}</span>
+        <span>branch / checkout</span>
+        <span className="mono">
+          {g.branch === "HEAD" ? `detached at pinned commit ${q.data?.head ?? ""}` : g.branch}
+        </span>
         <span>repo / base</span>
         <span className="mono">
           {g.repo} @ {g.base}
@@ -638,19 +642,22 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
           <>
             <span>head</span>
             <span className="mono">{q.data.head}</span>
-            <span>state</span>
+            <span>merge-base</span>
+            <span className="mono">{q.data.merge_base ?? "unavailable"}</span>
+            <span>uncommitted state</span>
             <span>
               {!q.data.exists ? (
                 <Badge kind="failed">missing on disk</Badge>
               ) : q.data.dirty ? (
                 <Badge kind="warn">{q.data.dirty} uncommitted change(s)</Badge>
               ) : (
-                <Badge kind="succeeded">clean</Badge>
+                <Badge kind="succeeded">no uncommitted changes</Badge>
               )}
             </span>
           </>
         )}
       </div>
+      {q.data?.error && <p className="muted small">{q.data.error}; repair it with featx worktree set-base.</p>}
       {q.data?.submodules && Object.keys(q.data.submodules).length > 0 && (
         <>
           <h3>submodule worktrees</h3>
@@ -774,7 +781,8 @@ function ChangesSection({ path }: { path: string }) {
   if (q.error) return <ErrorBox error={q.error} />;
   return (
     <div>
-      <h2>Changes vs base</h2>
+      <h2>Committed + working-tree changes vs base</h2>
+      <p className="muted small">Submodule gitlinks are excluded from the superproject and shown in each submodule's own section.</p>
       <ChangesView
         changes={q.data}
         scope={`wt:${path}`}

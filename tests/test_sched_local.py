@@ -209,6 +209,113 @@ def test_scripts_inherited_in_build_run_post(root, fake_emu, tmp_path):
     run_until(s, lambda: t3.state in ("succeeded", "failed"))
 
 
+def test_submit_dry_run_matches_submit_without_side_effects(root, fake_emu, tmp_path):
+    import json
+
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"])
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    service.recipe_set("t/sched/x", "build", {
+        "type": "script", "workdir": str(wd), "cores": 1, "mem_gb": 1, "cache": False,
+        "script": f"mkdir -p build && cp {emu} build/emu\n",
+    })
+    s = sched()
+
+    def snapshot():
+        result = {}
+        for directory, dirs, files in os.walk(root):
+            base = Path(directory)
+            for name in dirs + files:
+                path = base / name
+                rel = str(path.relative_to(root))
+                result[rel] = ("symlink", os.readlink(path)) if path.is_symlink() else (
+                    "dir",) if path.is_dir() else ("file", path.read_bytes())
+        return result
+
+    before = snapshot()
+    task_ids = set(s.tasks)
+    events = s.inbox.query(unacked=True)
+    preview = s.submit("t/sched/x", ["build", "run"], dry_run=True)
+    assert preview["dry_run"] and preview["preview_only"]
+    assert snapshot() == before and set(s.tasks) == task_ids
+    assert s.inbox.query(unacked=True) == events
+    assert not (root / "tree" / "t" / "sched" / "x" / "dry-run").exists()
+    assert [t["kind"] for t in preview["tasks"]] == ["build", "run"]
+    assert preview["tasks"][0]["bincache_key"]
+    assert preview["tasks"][1]["points"][0]["name"] == "ok_1_0.5"
+    command = preview["tasks"][1]["points"][0]["command"]
+    assert "dry-run/bin/emu" in command
+    assert str(fake_emu[1] / "ok" / "1" / "_1_0.5_.trace.zstd") in command
+
+    actual = s.submit("t/sched/x", ["build", "run"])
+    name = actual["runset"].rsplit("/", 1)[-1]
+    actual_tasks = [s.tasks[t["id"]] for t in actual["tasks"]]
+    for expected, real in zip(preview["tasks"], actual_tasks):
+        wanted = json.dumps(expected["spec"], sort_keys=True).replace("dry-run", name)
+        assert wanted == json.dumps(real.spec, sort_keys=True)
+    key = s._build_key(actual_tasks[0], Path(actual["runset_dir"]))
+    assert key == preview["tasks"][0]["bincache_key"]
+
+
+def test_same_workdir_builds_queue_at_dispatch_and_survive_restart(root, fake_emu, tmp_path):
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"])
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    service.recipe_set("t/sched/x", "build", {
+        "type": "script", "workdir": str(wd), "cores": 1, "mem_gb": 1, "cache": False,
+        "script": f"mkdir -p build && sleep 0.5 && cp {emu} build/emu\n",
+    })
+    s = sched()
+    a = s.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    b = s.submit("t/sched/x", ["build"], after=[a])["tasks"][0]["id"]
+    c = s.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    s.tick()
+    assert s.tasks[a].state == "running"
+    assert s.tasks[b].state == "queued" and s.tasks[b].note == "waiting for dependencies"
+    assert s.tasks[c].state == "queued" and s.tasks[c].note.startswith("waiting for build workdir")
+
+    restarted = Scheduler(Inbox(), placement=LocalPlacement())
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        restarted.tick()
+        active = [t for t in restarted.tasks.values() if t.kind == "build"
+                  and any(j.state in ("launching", "running") for j in t.jobs)]
+        assert len(active) <= 1
+        if all(restarted.tasks[t].state == "succeeded" for t in (a, b, c)):
+            break
+        time.sleep(0.05)
+    assert all(restarted.tasks[t].state == "succeeded" for t in (a, b, c)), restarted.tick_errors
+    assert restarted.tasks[b].jobs[0].launched >= restarted.tasks[a].finished
+    assert restarted.tasks[c].jobs[0].launched >= restarted.tasks[b].finished
+
+    recipes.patch_own(Tree().get("t/sched/x"), "build", {"cache": True})
+    d = restarted.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    e = restarted.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    run_until(restarted, lambda: all(restarted.tasks[t].state == "succeeded" for t in (d, e)))
+    assert restarted.tasks[d].outputs["cache_hit"] and restarted.tasks[e].outputs["cache_hit"]
+
+
+def test_different_workdirs_build_in_parallel(root, fake_emu, tmp_path):
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"])
+    for name in ("wd-a", "wd-b"):
+        (tmp_path / name).mkdir()
+    s = sched()
+    ids = []
+    for name in ("wd-a", "wd-b"):
+        service.recipe_set("t/sched/x", "build", {
+            "type": "script", "workdir": str(tmp_path / name), "cores": 1, "mem_gb": 1, "cache": False,
+            "script": f"mkdir -p build && sleep 0.5 && cp {emu} build/emu\n",
+        })
+        ids.append(s.submit("t/sched/x", ["build"])["tasks"][0]["id"])
+    s.tick()
+    assert all(s.tasks[t].state == "running" for t in ids)
+    assert sum(any(j.state in ("launching", "running") for j in s.tasks[t].jobs) for t in ids) == 2
+    run_until(s, lambda: all(s.tasks[t].state == "succeeded" for t in ids))
+
+
 def test_relaunch_refreshes_scripts_and_build_key(root, fake_emu, tmp_path):
     emu, _ = fake_emu
     make_node(fake_emu, ["ok_1_0.5"], steps={"st": {"cmd": "bash ${scripts}/stats.sh ${out}"}})

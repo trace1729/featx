@@ -99,6 +99,13 @@ def node_context(ref: str, max_runsets: int = 3, *, include_archived: bool = Fal
                          include_archived=include_archived, archived_only=archived_only)
 
 
+def node_brief(ref: str, max_runsets: int = 3, *, include_archived: bool = False,
+               archived_only: bool = False) -> dict:
+    tree = Tree()
+    return context.brief(tree, tree.get(ref), max_runsets=max_runsets,
+                         include_archived=include_archived, archived_only=archived_only)
+
+
 def node_update(ref: str, **fields) -> dict:
     entry = Tree().update(ref, **fields)
     return context.node_summary(entry)
@@ -160,6 +167,28 @@ def script_read(ref: str, name: str) -> str:
 def worktree_create(ref: str, **kw) -> dict:
     entry = worktree.create(Tree(), ref, **kw)
     return {"path": entry.rel, **entry.node.git.model_dump()}
+
+
+def worktree_set_base(ref: str, base: str, sub: str = "") -> dict:
+    tree = Tree()
+    entry = tree.get(ref)
+    if not entry.node.git:
+        raise TreeError(f"{entry.rel} has no worktree")
+    with store.file_lock(config.lock_path()):
+        tree.scan()
+        entry = tree.get(entry.node.id)
+        git = entry.node.git
+        if sub:
+            if sub not in git.submodule_worktrees:
+                raise TreeError(f"{entry.rel} has no {sub!r} submodule worktree")
+            target = git.submodule_worktrees[sub]
+        else:
+            target = git
+        path = target.path if sub else git.worktree
+        worktree.validate_base(path, base, label=f"{sub or 'worktree'} base")
+        target.base = base
+        tree.save(entry)
+    return worktree.status(entry.node)
 
 
 def worktree_rename_branch(ref: str, to: str | None = None, dry_run: bool = False) -> dict:
