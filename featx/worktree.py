@@ -2,7 +2,8 @@
 (prefix "" by default, so node wpe/overlay/smoke works on branch wpe/overlay/smoke).
 
 Only branches featx created (`managed`) are renamed by `node mv` and deleted by
-`node rm --drop-worktrees`; adopted worktrees keep their user branch. Records written
+`node rm --drop-worktrees`; adopted worktrees keep their user branch *and their checkout*.
+Records written
 before `managed` existed count as featx's when they carry the old "featx/" prefix.
 
 Creation goes through featx/bin/add-worktree.sh (vendored util/add-worktree-with-shared-submodules.sh) (submodules shared by
@@ -278,31 +279,48 @@ def _prune_dirs(paths: list[Path]) -> None:
             d = d.parent
 
 
+def adopted_parts(git) -> list[str]:
+    """Which parts of a worktree featx only adopted (`managed is False`).
+
+    An adopted checkout belongs to the user, not to the node: `node rm` must not delete it,
+    and that holds for an adopted submodule worktree living inside a featx-created one."""
+    parts = ["worktree"] if git.managed is False else []
+    parts += [f"submodule {name}" for name, sub in git.submodule_worktrees.items() if sub.managed is False]
+    return parts
+
+
 def remove(node: Node, delete_branch: bool = False, force_branch: bool = False) -> dict:
     """Remove a node's worktree (after rm). Uncommitted work is preserved as a patch
     under the trash dir before deletion. delete_branch also drops the featx branches of the
     superproject and submodule worktrees (unmerged ones only with force_branch), the
-    forwarding symlinks of earlier moves and the empty dirs left under wt_root."""
+    forwarding symlinks of earlier moves and the empty dirs left under wt_root.
+
+    A checkout featx only adopted is kept instead of deleted (see `adopted_parts`); the
+    report then carries `kept` and no branch is dropped."""
     git = node.git
     if not git:
         return {}
     wt = Path(git.worktree)
     out: dict = {"worktree": str(wt)}
-    if wt.is_dir():
-        patch_dir = config.tree_root() / ".trash" / "worktree-patches"
-        patch_dir.mkdir(parents=True, exist_ok=True)
-        tag = f"{store.today()}-{node.id[-6:]}"
-        diff = run_git(["-C", str(wt), "diff", "HEAD"], check=False)
-        if diff:
-            (patch_dir / f"{tag}.patch").write_text(diff + "\n")
-        for name, sub in git.submodule_worktrees.items():
-            sdiff = run_git(["-C", sub.path, "diff", "HEAD"], check=False)
-            if sdiff:
-                (patch_dir / f"{tag}-{name}.patch").write_text(sdiff + "\n")
-        shutil.rmtree(wt, ignore_errors=True)
-    run_git(["-C", git.repo, "worktree", "prune"], check=False)
-    for sub in git.submodule_worktrees.values():
-        run_git(["-C", sub.repo, "worktree", "prune"], check=False)
+    adopted = adopted_parts(git)
+    if adopted:
+        out["kept"] = "adopted (not created by featx): " + ", ".join(adopted)
+    else:
+        if wt.is_dir():
+            patch_dir = config.tree_root() / ".trash" / "worktree-patches"
+            patch_dir.mkdir(parents=True, exist_ok=True)
+            tag = f"{store.today()}-{node.id[-6:]}"
+            diff = run_git(["-C", str(wt), "diff", "HEAD"], check=False)
+            if diff:
+                (patch_dir / f"{tag}.patch").write_text(diff + "\n")
+            for name, sub in git.submodule_worktrees.items():
+                sdiff = run_git(["-C", sub.path, "diff", "HEAD"], check=False)
+                if sdiff:
+                    (patch_dir / f"{tag}-{name}.patch").write_text(sdiff + "\n")
+            shutil.rmtree(wt, ignore_errors=True)
+        run_git(["-C", git.repo, "worktree", "prune"], check=False)
+        for sub in git.submodule_worktrees.values():
+            run_git(["-C", sub.repo, "worktree", "prune"], check=False)
     if delete_branch:
         branches = {}
         if managed(git):     # adopted worktrees sit on a user branch: never deleted
@@ -311,9 +329,10 @@ def remove(node: Node, delete_branch: bool = False, force_branch: bool = False) 
             if managed(sub):
                 branches[sub.repo] = _drop_branch(sub.repo, sub.branch, sub.base, force_branch)
         out["branches"] = branches
-        old = [Path(m["git"]["worktree"]["from"]) for m in node.moves
-               if isinstance(m.get("git", {}).get("worktree"), dict)]
-        _prune_dirs([wt, *old])
+        if not adopted:
+            old = [Path(m["git"]["worktree"]["from"]) for m in node.moves
+                   if isinstance(m.get("git", {}).get("worktree"), dict)]
+            _prune_dirs([wt, *old])
     return out
 
 

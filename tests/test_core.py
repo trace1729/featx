@@ -230,6 +230,57 @@ def test_rm_drop_worktrees_cleans_branches_and_dirs(root, tmp_path):
     assert rep["worktrees"][0]["branches"] == {str(sup): "absent", str(sub): "deleted"}
 
 
+def test_rm_keeps_adopted_worktree(root, tmp_path):
+    """`node rm --drop-worktrees` must not delete a checkout the node only adopted."""
+    from featx.model import GitInfo
+    repo = tmp_path / "repo"
+    _git("init", "-q", "-b", "main", str(repo))
+    _git("commit", "-q", "--allow-empty", "-m", "base", cwd=repo)
+    wt = tmp_path / "wt" / "user" / "checkout"
+    _git("worktree", "add", "-q", "-b", "user/topic", str(wt), "main", cwd=repo)
+    (wt / "dirty.txt").write_text("work in progress\n")
+
+    e = Tree().add("adopted", parents=True)
+    e.node.git = GitInfo(repo=str(repo), base="main", branch="user/topic", worktree=str(wt), managed=False)
+    store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+
+    rep = service.node_rm("adopted", force=True, drop_worktrees=True, drop_branches=True)
+    assert rep["worktrees"][0]["kept"].startswith("adopted")
+    assert not (config.tree_root() / "adopted").exists()          # the node record is gone
+    assert wt.is_dir() and (wt / "dirty.txt").read_text() == "work in progress\n"
+    assert "user/topic" in _git_branches(repo)                    # branch untouched too
+
+
+def test_rm_keeps_worktree_shared_with_another_node(root, tmp_path):
+    """Two nodes can record one checkout; removing one must not delete it under the other."""
+    from featx.model import GitInfo
+    repo = tmp_path / "repo"
+    _git("init", "-q", "-b", "main", str(repo))
+    _git("commit", "-q", "--allow-empty", "-m", "base", cwd=repo)
+    wt = tmp_path / "wt" / "shared"
+    _git("worktree", "add", "-q", "-b", "featx/owner", str(wt), "main", cwd=repo)
+
+    for rel in ("owner", "dup"):
+        e = Tree().add(rel)
+        path = str(wt) if rel == "owner" else str(wt) + "/"    # trailing slash must not defeat the guard
+        e.node.git = GitInfo(repo=str(repo), base="main", branch=f"featx/{rel}", worktree=path,
+                             managed=True)
+        store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
+
+    rep = service.node_rm("dup", force=True, drop_worktrees=True)
+    assert "owner" in rep["worktrees"][0]["kept"]
+    assert not (config.tree_root() / "dup").exists()
+    assert wt.is_dir() and (config.tree_root() / "owner").exists()
+    assert "featx/owner" in _git_branches(repo)
+
+
+def _git_branches(repo):
+    import subprocess
+    out = subprocess.run(["git", "-C", str(repo), "branch", "--format=%(refname:short)"],
+                         check=True, stdout=subprocess.PIPE, text=True).stdout
+    return out.split()
+
+
 def test_branch_naming_ownership_and_conflicts(root, tmp_path):
     from featx import worktree
     from featx.model import GitInfo

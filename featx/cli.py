@@ -230,7 +230,8 @@ def node_mv(src: str, dst: str, parents: bool = typer.Option(False, "-p", "--par
 @guarded
 def node_rm(ref: str, force: bool = typer.Option(False, "-f", "--force"),
             drop_worktrees: bool = typer.Option(False, help="also delete worktrees (diffs saved to trash) "
-                                                "and featx branches without own commits"),
+                                                "and featx branches without own commits; adopted checkouts "
+                                                "and worktrees another node records are kept"),
             drop_branches: bool = typer.Option(False, help="with --drop-worktrees: delete branches with "
                                                "unmerged commits too")):
     """Soft delete into tree/.trash (featx gc --apply purges)."""

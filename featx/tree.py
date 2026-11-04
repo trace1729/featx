@@ -347,7 +347,9 @@ class Tree:
            drop_branches: bool = False) -> dict:
         """Soft delete: the subtree moves to tree/.trash/<stamp>-<name> (gc purges it).
         Refuses with active tasks; refuses with runsets or worktrees unless force.
-        drop_worktrees also deletes featx branches without own commits; drop_branches all of them."""
+        drop_worktrees also deletes featx branches without own commits; drop_branches all of them.
+        A worktree another node still records is never dropped, and adopted checkouts are kept;
+        both are reported under `kept`."""
         with store.file_lock(config.lock_path()):
             self.scan()
             entry = self.get(ref)
@@ -358,6 +360,7 @@ class Tree:
             has_wt = [e for e in sub if e.node.git]
             if (has_runsets or has_wt) and not force:
                 raise TreeError("subtree has runsets or worktrees; pass --force (data goes to .trash)")
+            shared = self.worktrees_elsewhere(sub) if drop_worktrees else {}
             trash = config.tree_root() / ".trash"
             trash.mkdir(exist_ok=True)
             dst = trash / f"{store.today()}-{store.new_id()[-6:]}-{entry.rel.replace('/', '__')}"
@@ -365,13 +368,35 @@ class Tree:
             report = {"removed": entry.rel, "trash": str(dst), "worktrees": []}
             if drop_worktrees:
                 from . import worktree as wt
+                seen: set[str] = set()
                 for e in has_wt:
+                    path = e.node.git.worktree
+                    key = os.path.normpath(path)
+                    if key in shared:
+                        report["worktrees"].append({"worktree": path,
+                                                    "kept": f"also recorded by {shared[key]}"})
+                        continue
+                    if key in seen:     # two nodes of the subtree point at one checkout
+                        continue
+                    seen.add(key)
                     report["worktrees"].append(wt.remove(e.node, delete_branch=True,
                                                          force_branch=drop_branches))
             store.append_jsonl(config.root() / "tree-log.jsonl",
                                {"time": store.now_iso(), "op": "rm", **report})
             self.scan()
             return report
+
+    def worktrees_elsewhere(self, sub: list[Entry]) -> dict[str, str]:
+        """Normalized worktree path -> rel of a node outside `sub` that records the same checkout.
+
+        Two nodes can end up on one worktree (e.g. a node created with `worktree create --adopt`
+        pointing at another node's checkout); removing one must not delete it under the other."""
+        inside = {e.node.id for e in sub}
+        out: dict[str, str] = {}
+        for e in self.by_rel.values():
+            if e.node.id not in inside and e.node.git is not None:
+                out.setdefault(os.path.normpath(e.node.git.worktree), e.rel)
+        return out
 
     def new_runset(self, entry: Entry, *, purpose: str = "", derived_from: str | None = None) -> tuple[Runset, Path]:
         with store.file_lock(config.lock_path()):

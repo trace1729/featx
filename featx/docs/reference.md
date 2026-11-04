@@ -629,7 +629,9 @@ only confirmed orphans and emits one `orphan` event per kill. REST: `POST /reap 
   and its submodule branches, e.g. an old `featx/<path>` to `<path>`.
 - `featx node rm NODE -f --drop-worktrees` deletes worktrees and featx branches without their
   own commits. Branches
-  with commits are kept unless you also pass `--drop-branches`.
+  with commits are kept unless you also pass `--drop-branches`. A checkout featx only adopted
+  (`worktree create --adopt`) is kept, and so is a worktree another node also records; both are
+  reported under `kept` in the command output.
 
 A build needs the node's **own** worktree (`${worktree}`). A run with `--bin` doesn't. Compilation
 outputs are not per-runset: builds in one workdir are queued and serialized at dispatch, while
