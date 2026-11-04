@@ -457,6 +457,14 @@ def test_worktree_changes_and_diff(root, tmp_path):
         service.worktree_diff("c", "TraceRTL", "a.txt")
 
 
+def test_short_commit_keeps_refs_whole():
+    from featx import worktree
+    assert worktree.short_commit("8ce3d7db42b1a8f0bbc288b2fee78debd90ba38b") == "8ce3d7db42b1"
+    assert worktree.short_commit("8ce3d7db42b1") == "8ce3d7db42b1"
+    assert worktree.short_commit("ssh_origin/kunminghu-v3") == "ssh_origin/kunminghu-v3"
+    assert worktree.short_commit("") == "" and worktree.short_commit(None) == ""
+
+
 def test_worktree_base_validation_and_repair(root, tmp_path):
     import json
     from typer.testing import CliRunner

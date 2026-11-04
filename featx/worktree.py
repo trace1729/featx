@@ -81,6 +81,12 @@ def resolved_base(repo: str, base: str) -> str:
     return run_git(["-C", repo, "rev-parse", "--verify", f"{base}^{{commit}}"], check=False).strip() or base
 
 
+def short_commit(value: str | None) -> str:
+    """Abbreviate a commit SHA for display; a ref or any other string is shown as it is."""
+    text = value or ""
+    return text[:12] if len(text) > 12 and all(c in "0123456789abcdef" for c in text) else text
+
+
 def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = None,
            branch: str | None = None, path: str | None = None,
            submodules: list[str] | None = None, sub_base: dict[str, str] | None = None,

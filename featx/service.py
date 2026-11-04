@@ -375,7 +375,7 @@ def _code_repo_specs(git, rec: dict, mode: str, other: dict | None) -> list[dict
         missing = [c for c in commits if Path(path).is_dir() and run_git(
             ["-C", path, "cat-file", "-t", c], check=False).strip() != "commit"]
         if missing:
-            spec["error"] = NOT_IN_BASE if mode == "base" and not base else f"commit {missing[0][:12]} is no longer in this repo"
+            spec["error"] = NOT_IN_BASE if mode == "base" and not base else f"commit {worktree.short_commit(missing[0])} is no longer in this repo"
         specs.append(spec)
     return specs
 

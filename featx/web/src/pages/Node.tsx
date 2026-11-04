@@ -650,6 +650,8 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
   }
   const g = ctx.git;
   const base = q.data?.base ?? g.base;
+  // a legacy node (or a daemon that has not reloaded yet) may still carry a ref here
+  const baseIsSha = /^[0-9a-f]{40}$/i.test(base);
   return (
     <div>
       <div className="kv">
@@ -657,7 +659,7 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
         <span className="mono">{g.worktree}</span>
         <span>{t("repo")}</span>
         <span className="mono">{g.repo}</span>
-        <span>{t("base commit")}</span>
+        <span>{t(baseIsSha ? "base commit" : "base ref")}</span>
         <span className="mono" title={base}>{shortCommit(base)}</span>
         <span>{t("branch / checkout")}</span>
         <span className="mono">

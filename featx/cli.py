@@ -16,7 +16,7 @@ from typing import List, Optional
 import typer
 import yaml
 
-from . import config, docs, files, leaderboard, service, store
+from . import config, docs, files, leaderboard, service, store, worktree
 from .lang import tr
 from .client import ApiError, Client, DaemonDown, daemon_alive, daemon_info
 from .sched.eta import fmt_duration
@@ -159,11 +159,11 @@ def _node_brief_text(data: dict) -> None:
         typer.echo(f"Notes:\n{data['notes']}")
     git = data.get("git")
     if git:
-        typer.echo(f"Git: {git.get('branch')}; base {(git.get('base') or '')[:12]}; "
-                   f"HEAD {(git.get('head') or '')[:12]}; {git.get('dirty', 0)} uncommitted change(s)")
+        typer.echo(f"Git: {git.get('branch')}; base {worktree.short_commit(git.get('base')) or '<unset>'}; "
+                   f"HEAD {worktree.short_commit(git.get('head'))}; {git.get('dirty', 0)} uncommitted change(s)")
         for name, sub in (git.get("submodules") or {}).items():
-            typer.echo(f"  {name}: {sub.get('branch')}; base {(sub.get('base') or '')[:12] or '<unset>'}; "
-                       f"HEAD {(sub.get('head') or '')[:12]}; {sub.get('dirty', 0)} uncommitted change(s)")
+            typer.echo(f"  {name}: {sub.get('branch')}; base {worktree.short_commit(sub.get('base')) or '<unset>'}; "
+                       f"HEAD {worktree.short_commit(sub.get('head'))}; {sub.get('dirty', 0)} uncommitted change(s)")
     typer.echo(f"Runsets: {data['runset_count']} ({data['archived_count']} archived)")
     for rs in data["runsets"]:
         typer.echo(f"  {rs['ref']}: {rs['purpose'] or '-'}")
@@ -364,14 +364,14 @@ def worktree_changes(ref: str, as_json: bool = typer.Option(False, "--json")):
         out(result)
         return
     for name, repo in result["repos"].items():
-        typer.echo(f"{name or 'worktree'}: base {(repo.get('base') or '')[:12] or '<unset>'}")
+        typer.echo(f"{name or 'worktree'}: base {worktree.short_commit(repo.get('base')) or '<unset>'}")
         if repo.get("error"):
             typer.echo(f"  error: {repo['error']}")
             continue
         typer.echo(f"  {repo.get('ahead', 0)} commit(s) since base; "
                    f"+{repo.get('added', 0)} -{repo.get('deleted', 0)}")
         for commit in repo.get("commits", []):
-            typer.echo(f"  {commit['sha'][:12]} {commit['subject']}")
+            typer.echo(f"  {worktree.short_commit(commit['sha'])} {commit['subject']}")
         for file in repo.get("files", []):
             typer.echo(f"  {file['status']} {file['path']} +{file['added'] or 0} -{file['deleted'] or 0}")
         if repo.get("untracked_total"):

@@ -10,6 +10,7 @@ import {
   fmtCount,
   fmtDuration,
   fmtValue,
+  shortCommit,
   metricLabel,
   parseCsv,
   parseOverrides,
@@ -72,6 +73,12 @@ describe("formatting", () => {
     expect(metricLabel("pk.self.mean_abs_err_pct")).toContain("err");
     expect(countsText({ succeeded: 2, running: 1 })).toBe("1 running · 2 succeeded");
     expect(splitRunset("wpe/overlay/smoke/20261012-2")).toEqual({ node: "wpe/overlay/smoke", name: "20261012-2" });
+  });
+  it("shortens commit SHAs but never refs", () => {
+    expect(shortCommit("8ce3d7db42b1a8f0bbc288b2fee78debd90ba38b")).toBe("8ce3d7db42b1");
+    expect(shortCommit("8ce3d7db42b1")).toBe("8ce3d7db42b1");
+    expect(shortCommit("ssh_origin/kunminghu-v3")).toBe("ssh_origin/kunminghu-v3");
+    expect(shortCommit(null)).toBe("");
   });
 });
 

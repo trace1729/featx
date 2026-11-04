@@ -58,8 +58,10 @@ export function fmtTime(iso: string | undefined): string {
   return iso.replace("T", " ").replace(/([+-]\d\d:\d\d|Z)$/, "").slice(5, 16);
 }
 
+/** A commit SHA's first 12 characters; a ref or other text is shown unchanged. */
 export function shortCommit(sha: string | null | undefined): string {
-  return (sha ?? "").slice(0, 12);
+  const text = sha ?? "";
+  return text.length > 12 && /^[0-9a-f]+$/i.test(text) ? text.slice(0, 12) : text;
 }
 
 /** Copy text to the clipboard. The UI may be served over plain http, where navigator.clipboard
