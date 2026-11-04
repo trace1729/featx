@@ -102,10 +102,19 @@ def runset_summary(entry: Entry, rs, tasks: dict) -> dict:
     return out
 
 
+RUNSET_DIGEST_KEYS = ("ref", "purpose", "created", "sealed", "derived_from", "archived", "tasks",
+                      "post", "review")
+ANCESTOR_DIGEST_KEYS = ("path", "kind", "verdict", "status", "hypothesis")
+
+
 def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: bool = False,
-          archived_only: bool = False) -> dict:
+          archived_only: bool = False, detail: str = "full") -> dict:
+    """detail="summary" replaces each runset's submit-time echo (params, code, overrides,
+    problem-log tail) with its digest; `featx result REF` carries that detail on demand."""
     if max_runsets < 0:
         raise ValueError("max_runsets must be non-negative")
+    if detail not in ("full", "summary"):
+        raise ValueError(f"detail must be full|summary (got {detail!r})")
     tasks = taskstore.load_all()
     scripts_dir = entry.dir / "scripts"
     scripts = sorted(p.name for p in scripts_dir.iterdir()) if scripts_dir.is_dir() else []
@@ -118,14 +127,21 @@ def build(tree: Tree, entry: Entry, *, max_runsets: int = 3, include_archived: b
     summaries = []
     for rs in shown:
         summary = runset_summary(entry, rs, tasks)
+        if detail == "summary":
+            summary = {k: summary[k] for k in RUNSET_DIGEST_KEYS}
         flat = params_mod.flatten(rs.recipes or {})
         # this runset's value of every differing key (absent: its stage has no such key)
         summary["differing_values"] = {k: flat[k] for k in differing if k in flat}
         summaries.append(summary)
+    ancestors = [node_summary(a) for a in tree.ancestors(entry)]
+    if detail == "summary":
+        # the chain is for orientation; the prose (comment/notes/tags/evidence) is one
+        # `featx node show <ancestor>` away and often the largest part of the payload
+        ancestors = [{k: a[k] for k in ANCESTOR_DIGEST_KEYS} for a in ancestors]
     return {
         "node": node_summary(entry),
         "dir": str(entry.dir),
-        "ancestors": [node_summary(a) for a in tree.ancestors(entry)],
+        "ancestors": ancestors,
         "children": [node_summary(c) for c in tree.children(entry)],
         "notes": entry.node.notes,
         "git": worktree.status(entry.node) if entry.node.git else None,

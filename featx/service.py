@@ -93,17 +93,23 @@ def node_add(rel: str, *, hypothesis: str = "", tags: list[str] | None = None, p
 
 
 def node_context(ref: str, max_runsets: int = 3, *, include_archived: bool = False,
-                 archived_only: bool = False) -> dict:
+                 archived_only: bool = False, detail: str = "summary") -> dict:
     tree = Tree()
     return context.build(tree, tree.get(ref), max_runsets=max_runsets,
-                         include_archived=include_archived, archived_only=archived_only)
+                         include_archived=include_archived, archived_only=archived_only,
+                         detail=detail)
 
 
 def node_brief(ref: str, max_runsets: int = 3, *, include_archived: bool = False,
-               archived_only: bool = False) -> dict:
+               archived_only: bool = False, recipes: bool = False) -> dict:
     tree = Tree()
-    return context.brief(tree, tree.get(ref), max_runsets=max_runsets,
-                         include_archived=include_archived, archived_only=archived_only)
+    entry = tree.get(ref)
+    out = context.brief(tree, entry, max_runsets=max_runsets,
+                        include_archived=include_archived, archived_only=archived_only)
+    if recipes:     # the usual reason to escalate to --full: the effective recipe values
+        from .recipes import RECIPE_KINDS, effective      # the parameter shadows the module name
+        out["recipes"] = {kind: effective(tree, entry, kind) for kind in RECIPE_KINDS}
+    return out
 
 
 def node_update(ref: str, **fields) -> dict:

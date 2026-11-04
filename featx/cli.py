@@ -178,9 +178,10 @@ def _node_brief_text(data: dict) -> None:
 @node_app.command("show")
 @guarded
 def node_show(ref: str, runsets: int = typer.Option(3, help="latest N runsets (0 hides runsets)"),
-              full: bool = typer.Option(False, "--full", help="include the complete node context"),
+              full: bool = typer.Option(False, "--full", help="complete context (runset digests)"),
+              recipes: bool = typer.Option(False, "--recipes", help="add the effective build/run/post recipes"),
               as_json: bool = typer.Option(False, "--json", help="emit JSON instead of text/YAML")):
-    """Show the research record and recent runs; use --full for recipes and complete context."""
+    """Show the research record and recent runs; --full for context, --recipes for recipe values."""
     if full:
         data = service.node_context(ref, runsets)
         if as_json:
@@ -188,8 +189,14 @@ def node_show(ref: str, runsets: int = typer.Option(3, help="latest N runsets (0
         else:
             typer.echo(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
         return
-    data = service.node_brief(ref, runsets)
-    out(data) if as_json else _node_brief_text(data)
+    data = service.node_brief(ref, runsets, recipes=recipes)
+    if as_json:
+        out(data)
+        return
+    _node_brief_text(data)
+    if recipes and data.get("recipes"):
+        typer.echo("Recipes:")
+        typer.echo(yaml.safe_dump(data["recipes"], sort_keys=False, allow_unicode=True).rstrip())
 
 
 @node_app.command("set")

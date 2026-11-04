@@ -40,6 +40,10 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
   recent runs. `--json` emits that brief view as JSON; `--full` selects the complete context as
   YAML, and `--full --json` selects the complete JSON context used by MCP. `--runsets 0` hides
   runsets. Hypothesis, verdict, verdict note, evidence, and comment stay in the concise view.
+  `--recipes` adds the effective build/run/post recipes without `--full`. `--full` carries runset
+  digests (ref, purpose, tasks, post, review) and compact ancestors; `featx result REF` has the
+  per-runset params/code/overrides, and `GET /nodes/context?detail=summary` gives the digest
+  (the UI default stays `full`).
 - **Ref forms**: a node is its path (`wpe/overlay/smoke`) or its id. A runset is
   `<node path>/<YYYYMMDD-n>` or a runset id prefix (≥ 6 characters).
 
@@ -431,8 +435,9 @@ labels, dialogs and hints are translated; user content, logs, commands, paths,
 recipe/metric keys and this reference remain unchanged. Unknown labels fall back
 to English. worktree and note keep their original terminology.
 
-MCP parity: `node_show(node, runsets=3, full=False)` matches `featx node show`;
-`full=True` includes the complete context, also available through `node_context`.
+MCP parity: `node_show(node, runsets=3, full=False, recipes=False)` matches `featx node show`;
+`full=True` includes the complete context, also available through `node_context`, whose runset
+entries are digests unless `detail="full"`.
 `node_create` returns an additive `warnings` list when the hypothesis is blank.
 `result_get`, `runsets_list` and node summaries expose computed review state.
 `node_update(rm_tags=[...])` removes tags; `node_move(dry_run=True,

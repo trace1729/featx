@@ -164,9 +164,10 @@ def build_app(d: Daemon) -> "FastAPI":
 
     @app.get("/nodes/context")
     def node_context(ref: str, max_runsets: int = 3, include_archived: bool = False,
-                     archived_only: bool = False):
+                     archived_only: bool = False, detail: str = "full"):
+        """detail: full (default, the UI shows every runset section) | summary (runset digests)."""
         return service.node_context(ref, max_runsets, include_archived=include_archived,
-                                    archived_only=archived_only)
+                                    archived_only=archived_only, detail=detail)
 
     @app.post("/nodes/update")
     def node_update(body: dict = Body(...)):
