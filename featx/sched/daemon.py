@@ -262,10 +262,23 @@ def build_app(d: Daemon) -> "FastAPI":
                                     states=state.split(",") if state else None, limit=limit)
 
     @app.get("/tasks/{tid}")
-    def task(tid: str, spec: bool = False):
+    def task(tid: str, spec: bool = False, detail: str = "full", state: str | None = None,
+             limit: int = 50):
+        """detail: full (default, the UI renders every job) | summary | jobs (filtered, capped)."""
+        if detail not in ("full", "summary", "jobs"):
+            raise SchedError(f"detail must be full|summary|jobs (got {detail!r})")
         with sched.lock:
             t = sched.get(tid)
-            out = sched.task_view(t, jobs=True)
+            out = sched.task_summary(t) if detail == "summary" else sched.task_view(t, jobs=True)
+            if detail == "jobs":
+                jobs = out.pop("jobs", [])
+                wanted = [name for name in (state or "").split(",") if name]
+                if wanted:
+                    jobs = [job for job in jobs if job["state"] in wanted]
+                out["jobs_total"] = len(jobs)
+                out["jobs_truncated"] = limit > 0 and len(jobs) > limit
+                out["jobs"] = jobs[:limit] if limit > 0 else jobs
+                out["jobs_hint"] = f"featx task show {tid} --jobs [--state ...] [--limit N]"
             if spec:
                 out["spec"] = t.spec
             return out

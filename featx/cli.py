@@ -475,8 +475,17 @@ def ps(all_: bool = typer.Option(False, "-a", "--all", help="include finished ta
 
 @task_app.command("show")
 @guarded
-def task_show(tid: str, spec: bool = typer.Option(False, "--spec", help="include the resolved recipe")):
-    out(client().get(f"/tasks/{tid}", spec=spec))
+def task_show(tid: str, spec: bool = typer.Option(False, "--spec", help="include the resolved recipe"),
+              jobs: bool = typer.Option(False, "--jobs", help="list jobs (default: counts + failures)"),
+              state: Optional[str] = typer.Option(None, "--state", help="with --jobs: failed,running,..."),
+              limit: int = typer.Option(50, "--limit", help="with --jobs: max rows (0 = no cap)")):
+    """One task: state, counts, ETA, and its failed jobs; --jobs for every job."""
+    data = client().get(f"/tasks/{tid}", spec=spec, detail="jobs" if jobs else "summary",
+                        state=state, limit=limit if jobs else 0)
+    if "jobs_total" not in data:
+        typer.secho("featx: this daemon predates detail=summary|jobs (restart featxd to enable it)",
+                    fg=typer.colors.YELLOW, err=True)
+    out(data)
 
 
 @app.command()

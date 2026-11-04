@@ -1333,6 +1333,8 @@ class Scheduler:
             return {"task": task.id, "max_design_relaunches": task.max_design_relaunches}
 
     # ================================================================ views
+    SUMMARY_JOBS = 5          # failed jobs a task summary lists before deferring to --jobs
+
     def task_view(self, task: Task, tree: Tree | None = None, *, jobs: bool = False) -> dict:
         tree = tree or self._tree()
         out = {"id": task.id, "kind": task.kind, "node": self._rel(tree, task), "runset": task.runset_name,
@@ -1350,10 +1352,27 @@ class Scheduler:
         if task.kind == "run" and task.spec.get("executor") == "perf_trigger" and task.jobs:
             out["perf_trigger"] = task.jobs[0].progress
         if jobs:
-            out["jobs"] = [{"name": j.name, "state": j.state, "host": j.host, "attempt": j.attempt, "rc": j.rc,
-                            "progress": j.progress, "failure": j.failure,
-                            "eta_s": self.job_eta(task, j)} for j in task.jobs]
+            out["jobs"] = [self.job_view(task, job) for job in task.jobs]
         return out
+
+    def task_summary(self, task: Task, tree: Tree | None = None) -> dict:
+        """`task_view` without the per-job list: counts plus failures, and how to get the rest.
+
+        A 145-point run carries 145 job records (98% of its payload); a caller that needs one
+        failing job or the ETA should not have to pull all of them."""
+        out = self.task_view(task, tree)
+        failed = [job for job in task.jobs if job.state == "failed"]
+        out["jobs_total"] = len(task.jobs)
+        if failed:
+            out["jobs_failed"] = [self.job_view(task, job) for job in failed[:self.SUMMARY_JOBS]]
+        out["jobs_truncated"] = len(failed) > self.SUMMARY_JOBS
+        out["jobs_hint"] = f"featx task show {task.id} --jobs [--state failed|running] [--limit N]"
+        return out
+
+    def job_view(self, task: Task, job: Job) -> dict:
+        return {"name": job.name, "state": job.state, "host": job.host, "attempt": job.attempt,
+                "rc": job.rc, "progress": job.progress, "failure": job.failure,
+                "eta_s": self.job_eta(task, job)}
 
     def job_eta(self, task: Task, job: Job) -> float | None:
         if job.state in ("succeeded", "failed", "cancelled"):

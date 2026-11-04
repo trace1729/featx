@@ -225,12 +225,18 @@ def task_priority(task: str, priority: int, runset: bool = True) -> dict:
 
 @tool
 def task_status(task: str | None = None, node: str | None = None, active_only: bool = True,
-                states: list[str] | None = None) -> Any:
-    """One task (with per-job states, attempts, hosts, progress, ETA) or the task list filtered by
-    node prefix and state. States: queued|running|succeeded|failed|cancelled, plus `blocked`
-    (design-blocked or cancelled by a dependency failure)."""
+                states: list[str] | None = None, detail: str = "summary",
+                job_limit: int = 50) -> Any:
+    """One task or the task list filtered by node prefix and state. States:
+    queued|running|succeeded|failed|cancelled, plus `blocked` (design-blocked or cancelled by a
+    dependency failure).
+
+    detail="summary" (default) returns counts, ETA and only the failed jobs
+    (`jobs_total`, `jobs_truncated`, `jobs_hint`); detail="jobs" lists jobs, filtered by
+    `states` and capped by `job_limit` (0 = no cap)."""
     if task:
-        return _c().get(f"/tasks/{task}")
+        return _c().get(f"/tasks/{task}", detail=detail,
+                        state=",".join(states) if states else None, limit=job_limit)
     return _c().get("/tasks", active=active_only, node=node,
                     state=",".join(states) if states else None, limit=100)
 

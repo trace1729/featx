@@ -449,9 +449,22 @@ The CLI exits 0 only when all requested tasks succeeded, otherwise 1.
 `--json` returns the same result structure as MCP. For general event monitoring,
 use `featx events --wait 600` / MCP `events_wait`.
 
+`featx task show TASK` is a summary: state, per-state `counts`, ETA, and only the failed
+jobs (`jobs_total`, `jobs_truncated`, and a runnable `jobs_hint`). `--jobs [--state
+failed,running] [--limit N]` lists jobs instead (0 = no cap); MCP `task_status` takes
+`detail="summary"|"jobs"`. REST `/tasks/{id}` stays full by default because the UI renders
+every job, and accepts `detail=summary|jobs` plus `state`/`limit`.
+
 After upgrading the event endpoint, use `featx daemon stop` then
 `featx daemon start` and reconnect the MCP client. Running jobs are re-adopted
 on daemon startup.
+
+`featx daemon stop` sends TERM and waits 30 s; if the process is still there it sends KILL and
+says so. A synchronous API handler stuck in a blocking call (e.g. an NFS read) makes uvicorn's
+shutdown wait on task cancellation forever, so `featxd` arms a watchdog when shutdown starts and
+leaves with `os._exit` after 20 s; `stop` writes the `stopped` mark for such hard exits. If
+`daemon start` reports "already running" for a daemon whose API is unreachable, it also warns
+that the process is half-stopped: run `featx daemon stop`.
 
 ## plugins — Post plugins
 

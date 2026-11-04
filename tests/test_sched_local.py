@@ -541,3 +541,28 @@ def test_priority_takes_freed_cores_first(root, fake_emu, monkeypatch):
     s.tick()
     assert s.tasks[old].counts() == {"launching": 2, "queued": 1}
     s.cancel(old)
+
+
+def test_task_summary_drops_the_job_list_and_keeps_the_failures(root):
+    """A 145-point run must not cost 30 KB to check for one failure."""
+    import json
+
+    from featx.model import Job, Task
+
+    e = Tree().add("t/summary", parents=True)
+    jobs = [Job(name=f"bench_{i}", rel=f"run/bench_{i}", state="succeeded") for i in range(140)]
+    jobs += [Job(name=f"bad_{i}", rel=f"run/bad_{i}", state="failed", rc=1,
+                 failure={"class": "design", "summary": "assert"}) for i in range(8)]
+    t = Task(id="T1", kind="run", name="run", node_id=e.node.id, runset_id="R1",
+             runset_name="20261104-1", spec={"I": 1000000}, jobs=jobs)
+    s = sched()
+
+    v = s.task_summary(t)
+    assert "jobs" not in v and v["jobs_total"] == 148
+    assert len(v["jobs_failed"]) == s.SUMMARY_JOBS and v["jobs_truncated"] is True
+    assert v["jobs_failed"][0]["failure"]["class"] == "design" and v["counts"]["failed"] == 8
+    assert "--jobs" in v["jobs_hint"]
+    assert len(json.dumps(v)) < 2048, "summary must stay small regardless of the point count"
+
+    full = s.task_view(t, jobs=True)
+    assert len(full["jobs"]) == 148 and "jobs_total" not in full and "jobs_hint" not in full
