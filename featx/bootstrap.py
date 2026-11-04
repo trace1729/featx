@@ -5,6 +5,7 @@ and the API token."""
 from __future__ import annotations
 
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -18,6 +19,35 @@ BASE_PORT = 8765
 def default_port() -> int:
     """8765 + uid % 200: users sharing a daemon host get different ports by default."""
     return BASE_PORT + os.getuid() % 200
+
+
+def default_daemon_host() -> str:
+    """Return this host's routable IPv4 address for the daemon endpoint.
+
+    The UDP connect only asks the kernel which interface would be used; it does
+    not send traffic.  This avoids storing a cluster hostname that may not
+    resolve from clients or sandboxed sessions.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError:
+        return "127.0.0.1"
+    try:
+        sock.connect(("8.8.8.8", 80))
+        address = sock.getsockname()[0]
+        if address:
+            return address
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    try:
+        for family, _, _, _, sockaddr in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            if family == socket.AF_INET and sockaddr[0] and not sockaddr[0].startswith("127."):
+                return sockaddr[0]
+    except OSError:
+        pass
+    return "127.0.0.1"
 
 
 def init(root: str | None = None, site: str | None = None, repo: str | None = None,
@@ -50,6 +80,8 @@ def init(root: str | None = None, site: str | None = None, repo: str | None = No
         keys.setdefault("git", {})["repo"] = str(Path(repo).expanduser().resolve())
     if daemon_host:
         keys.setdefault("daemon", {})["host"] = daemon_host
+    elif existing is None:
+        keys.setdefault("daemon", {})["host"] = default_daemon_host()
     if port is not None:
         keys.setdefault("daemon", {})["port"] = int(port)
     elif existing is None:
