@@ -650,15 +650,26 @@ def log_show(target: str):
 # ================================================================== results
 @app.command()
 @guarded
-def result(ref: str, as_json: bool = typer.Option(False, "--json")):
-    """Runset summary: tasks, binary, post summary.json metrics and reports."""
-    r = service.result_get(ref)
+def result(ref: str, as_json: bool = typer.Option(False, "--json"),
+           full: bool = typer.Option(False, "--full", help="everything (recipes, overrides, reports, ...)"),
+           provenance: bool = typer.Option(False, "--provenance", help="per-repository provenance"),
+           recipes: bool = typer.Option(False, "--recipes", help="the recipe snapshot taken at submit"),
+           overrides: bool = typer.Option(False, "--overrides", help="the raw submit --set overrides"),
+           reports: bool = typer.Option(False, "--reports", help="post report/summary text")):
+    """Runset summary: tasks, failures, binary, post metrics; sections on request."""
+    sections = [name for name, on in (("provenance", provenance), ("recipes", recipes),
+                                      ("overrides", overrides), ("reports", reports)) if on]
+    r = service.result_get(ref, detail="full" if full else "summary", sections=sections)
     if as_json:
         out(r)
         return
     typer.echo(f"{r['ref']}  ({'sealed' if r['sealed'] else 'open'})  {r['purpose']}")
     for t in r["tasks"]:
         typer.echo(f"  {t['kind']:5s} {t['state']:9s} {t['counts']}  {t.get('failure') or ''}")
+    if r.get("failures_total"):
+        typer.echo(f"  failures: {r['failures_total']}")
+        for f in r["failures"]:
+            typer.echo(f"    {f['task']:5s} {f['point']}  rc={f['rc']}  {f.get('failure') or ''}")
     if (r.get("review") or {}).get("needed"):
         typer.secho("  Review needed: record the verdict and evidence for this completed runset",
                     fg=typer.colors.YELLOW)
@@ -676,12 +687,14 @@ def result(ref: str, as_json: bool = typer.Option(False, "--json")):
         typer.echo("  overrides:")
         for line in yaml.safe_dump(r["overrides"], sort_keys=False).rstrip().splitlines():
             typer.echo(f"    {line}")
-    for step, summ in r["post"].items():
+    for step, summ in (r.get("post") or {}).items():
         typer.echo(f"  post/{step}:")
         for k, v in list(summ.items())[:25]:
             typer.echo(f"    {k} = {v}")
-    for step, md in r["reports"].items():
+    for step, md in (r.get("reports") or {}).items():
         typer.echo(f"\n--- post/{step} report ---\n{md[:4000]}")
+    if r.get("sections_hint"):
+        typer.secho(f"  more: {r['sections_hint']}", fg=typer.colors.BRIGHT_BLACK)
 
 
 @app.command()

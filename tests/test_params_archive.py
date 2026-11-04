@@ -109,10 +109,13 @@ def test_stage_params_reads_legacy_and_broken_snapshots():
 
 def test_result_get_exposes_recipes_overrides_and_params(root, fake_emu):
     s, first, second, rs1, rs2 = _two_runsets(fake_emu)
-    r = service.result_get(second["runset"])
+    r = service.result_get(second["runset"], detail="full")
     assert r["overrides"]["run"]["W"] == 2000000
     assert r["recipes"]["run"]["W"] == 2000000
     assert r["params"]["run"]["W"] == 2000000
+    # the default digest keeps params and drops the submit-time echo
+    short = service.result_get(second["runset"])
+    assert short["params"]["run"]["W"] == 2000000 and "recipes" not in short
 
 
 def test_archive_filters_lists_and_is_refused_while_tasks_are_active(root, fake_emu):

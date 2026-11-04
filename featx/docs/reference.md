@@ -55,6 +55,13 @@ only the values that differ between the listed runsets, on one line (`+N` counts
 tooltip has every headline value and the differing recipe keys); "same" means nothing differs.
 The Runset page's jobs tab filters jobs by state (chips with counts, kept in `?jobs=`).
 
+`featx result` (and MCP `result_get`) is a digest by default: tasks, `post` metrics, `code`,
+`review`, and `failures` (failed points, capped) — the submit-time echo is dropped
+(per-submodule `provenance`, `recipes`, `overrides`, report text, the benchmark-name list) and
+replaced by counts plus `sections_hint`. `--provenance`, `--recipes`, `--overrides` and
+`--reports` add one section back, `--full` returns everything; `GET /result` stays full by
+default for the UI and takes `detail=summary|full` plus `sections=provenance,recipes,...`.
+
 **Archive.** Archived runsets are hidden by default from the node runsets list,
 `node_context`, `tree_list`'s latest runset and the leaderboard. Data and binaries are kept and
 `featx gc` does not change. It is refused while the runset has active tasks. The node page can

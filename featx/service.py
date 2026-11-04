@@ -542,10 +542,24 @@ def problem_log_append(target: str, *, problem: str, solution: str, code: str = 
 
 
 # ---------------------------------------------------------------- result
-def result_get(ref: str) -> dict:
+RESULT_SECTIONS = ("provenance", "recipes", "overrides", "reports")
+FAILED_POINTS_SHOWN = 20
+
+
+def result_get(ref: str, *, detail: str = "summary", sections: list[str] | None = None) -> dict:
+    """Runset summary. detail="summary" keeps what a review decides on — tasks, post metrics,
+    code, review state, failures — and replaces the submit-time echo (recipes/overrides, the
+    per-submodule provenance, 145 benchmark names, report text) with counts plus a hint;
+    `sections` adds any of RESULT_SECTIONS back."""
+    if detail not in ("full", "summary"):
+        raise ValueError(f"detail must be full|summary (got {detail!r})")
+    bad = [name for name in sections or [] if name not in RESULT_SECTIONS]
+    if bad:
+        raise ValueError(f"unknown section(s) {bad}; pick from {list(RESULT_SECTIONS)}")
     tree = Tree()
     entry, rs = tree.find_runset(ref)
-    out = context.runset_summary(entry, rs, taskstore.load_all())
+    tasks = taskstore.load_all()
+    out = context.runset_summary(entry, rs, tasks)
     out["bin"] = rs.bin
     out["provenance"] = rs.provenance
     out["recipes"] = rs.recipes
@@ -559,6 +573,47 @@ def result_get(ref: str) -> dict:
                     reports[step.name] = (step / name).read_text(errors="replace")[:20000]
                     break
     out["reports"] = reports
+    failed = []
+    for tid in rs.tasks:
+        task = tasks.get(tid)
+        for job in (task.jobs if task else []):
+            if job.state == "failed":
+                failure = job.failure or {}
+                failed.append({"task": task.kind, "point": job.name, "rc": job.rc,
+                               "failure": failure.get("signature") or failure.get("summary")})
+    out["failures"] = failed[:FAILED_POINTS_SHOWN]
+    out["failures_total"] = len(failed)
+    if detail == "summary":
+        full = {name: out[name] for name in RESULT_SECTIONS}
+        out["provenance"] = _provenance_digest(full["provenance"] or {})
+        for name in ("recipes", "overrides", "reports"):
+            out.pop(name)
+        digest_run_params(out)
+        for name in sections or []:
+            out[name] = full[name]
+        missing = " ".join(f"--{n}" for n in RESULT_SECTIONS if n not in out)
+        out["sections_hint"] = f"featx result {ref} {missing}".rstrip()
+    return out
+
+
+def digest_run_params(out: dict) -> None:
+    """`benchmarks` is a list of names, one per benchmark; the summary keeps only the count."""
+    run = (out.get("params") or {}).get("run")
+    if isinstance(run, dict) and isinstance(run.get("benchmarks"), list):
+        run["benchmarks"] = len(run["benchmarks"])
+
+
+def _provenance_digest(prov: dict) -> dict:
+    """Per-repo provenance shrinks to where the code was and whether anything is dirty."""
+    subs = prov.get("submodules") or {}
+    out = {"super": prov.get("super") or {}}
+    if subs:
+        out["submodules"] = len(subs)
+        out["submodules_dirty"] = sorted(name for name, rec in subs.items() if (rec or {}).get("dirty"))
+    if prov.get("saved_patches"):
+        out["saved_patches"] = len(prov["saved_patches"])
+    if set(prov) - {"super", "submodules", "saved_patches"}:
+        out["keys"] = sorted(set(prov) - {"super", "submodules", "saved_patches"})
     return out
 
 

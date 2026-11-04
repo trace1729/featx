@@ -202,8 +202,12 @@ def build_app(d: Daemon) -> "FastAPI":
                       note=body.get("note", ""))
 
     @app.get("/result")
-    def result(ref: str):
-        return service.result_get(ref)
+    def result(ref: str, detail: str = "full", sections: str = ""):
+        """detail: full (default, the UI shows every section) | summary (plus `sections`)."""
+        if detail not in ("full", "summary"):
+            raise SchedError(f"detail must be full|summary (got {detail!r})")
+        return service.result_get(ref, detail=detail,
+                                  sections=[name for name in sections.split(",") if name])
 
     # ---------------------------------------------------------- recipes
     @app.get("/recipes")

@@ -311,11 +311,16 @@ def problem_log_append(target: str, problem: str, solution: str, code: str = "",
 
 
 @tool
-def result_get(runset: str) -> dict:
-    """Runset result: task states, binary, provenance, metrics, reports and computed review state.
+def result_get(runset: str, detail: str = "summary",
+               sections: list[str] | None = None) -> dict:
+    """Runset result: task states, failures, binary, metrics and computed review state.
     review.needed means all tasks are terminal and verdict is open or evidence is empty.
-    Record your own conclusion with node_update; this read never mutates research fields."""
-    return service.result_get(runset)
+    Record your own conclusion with node_update; this read never mutates research fields.
+
+    detail="summary" (default) digests the submit-time echo (per-submodule provenance, recipe
+    snapshot, `--set` overrides, report text) and reports `failures`; pass sections
+    ["provenance","recipes","overrides","reports"] or detail="full" to get them back."""
+    return service.result_get(runset, detail=detail, sections=sections)
 
 
 @tool
