@@ -14,8 +14,9 @@ import { PriorityControl } from "./Tasks";
 import { useI18n } from "../i18n";
 
 const ACTIVE = ["queued", "running", "launching"];
-const TABS = ["jobs", "code", "post", "files", "problem log", "provenance"] as const;
+const TABS = ["jobs", "code", "results", "details"] as const;
 type Tab = (typeof TABS)[number];
+const RUNSET_TAB_ALIASES: Record<string, Tab> = { post: "results", files: "results", "problem log": "details", provenance: "details" };
 
 function jobPct(job: JobView, target?: number): number | null {
   if (job.state === "succeeded") return 100;
@@ -506,7 +507,8 @@ export function RunsetPage() {
     else next.delete(k);
     setSp(next, { replace: true });
   };
-  const tab = (TABS as readonly string[]).includes(sp.get("tab") ?? "") ? (sp.get("tab") as Tab) : "jobs";
+  const requestedTab = sp.get("tab") ?? "";
+  const tab = (TABS as readonly string[]).includes(requestedTab) ? (requestedTab as Tab) : RUNSET_TAB_ALIASES[requestedTab] ?? "jobs";
   const jobStates = (sp.get("jobs") ?? "").split(",").filter(Boolean);
   const rsq = useQuery({ queryKey: ["result", ref], queryFn: () => api.get<RunsetSummary>("/result", { ref }), refetchInterval: 5000 });
   const briefs = rsq.data?.tasks ?? [];
@@ -554,10 +556,6 @@ export function RunsetPage() {
           {t("derived from")} <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
         </p>
       )}
-      {rs.review?.needed && <div className="notice" role="status">
-        <b>{t("Review needed")}</b> · {t("Review the verdict and evidence for this completed runset")}{" "}
-        <Link to={`/node/${node}#verdict-evidence`}>{t("Edit verdict and evidence")}</Link>
-      </div>}
       <div className="row" style={{ margin: "10px 0" }}>
         {tasks.map((task, i) => (
           <span key={task.id} className="row" style={{ gap: 4 }}>
@@ -603,16 +601,22 @@ export function RunsetPage() {
         </div>
       )}
       {tab === "code" && <CodeTab rs={rs} />}
-      {tab === "post" && <PostTab rs={rs} />}
-      {tab === "files" && <FileBrowser dir={rs.dir} depth={3} />}
-      {tab === "problem log" && <ProblemLogTab rs={rs} task={pick} />}
-      {tab === "provenance" && (
+      {tab === "results" && (
         <div>
-          <h3>{t("binary")}</h3>
-          <Json value={rs.bin ?? null} />
-          <h3>{t("provenance")}</h3>
-          <Json value={rs.provenance ?? {}} />
-          <p className="muted mono small">{rs.dir}</p>
+          <section className="tab-section"><h2>{t("post")}</h2><PostTab rs={rs} /></section>
+          <section className="tab-section"><h2>{t("files")}</h2><FileBrowser dir={rs.dir} depth={3} /></section>
+        </div>
+      )}
+      {tab === "details" && (
+        <div>
+          <section className="tab-section"><h2>{t("problem log")}</h2><ProblemLogTab rs={rs} task={pick} /></section>
+          <section className="tab-section">
+            <h2>{t("provenance")}</h2>
+            <h3>{t("binary")}</h3>
+            <Json value={rs.bin ?? null} />
+            <Json value={rs.provenance ?? {}} />
+            <p className="muted mono small">{rs.dir}</p>
+          </section>
         </div>
       )}
     </div>

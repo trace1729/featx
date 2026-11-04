@@ -52,13 +52,13 @@ it("has Chinese entries for literal translation keys across the UI", () => {
 it("preserves language preference, English behavior and unknown-template fallback", () => {
   function Probe() {
     const { t } = useI18n();
-    return <><LanguageToggle /><p>{t("Review needed")}</p><p>{t("unknown {name}", { name: "user input" })}</p></>;
+    return <><LanguageToggle /><p>{t("Overrides")}</p><p>{t("unknown {name}", { name: "user input" })}</p></>;
   }
   localStorage.setItem("featx.language", "zh");
   render(<I18nProvider><Probe /></I18nProvider>);
-  expect(screen.getByText("待评审")).toBeTruthy();
+  expect(screen.getByText("覆盖配置")).toBeTruthy();
   expect(screen.getByText("unknown user input")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "EN" }));
-  expect(screen.getByText("Review needed")).toBeTruthy();
+  expect(screen.getByText("Overrides")).toBeTruthy();
   expect(localStorage.getItem("featx.language")).toBe("en");
 });

@@ -40,13 +40,13 @@ featx 是一个面向香山的功能探索和实验任务调度的系统：它�
 
 ### 实验完成后的评审
 
-创建节点时建议填写 hypothesis，留空也可继续。runset 的任务全部成功、失败或取消后，如果节点结论仍为 `open`，或尚未记录 evidence，`featx result` 和 Web UI 会提示“待评审”。点击提示可进入节点编辑结论与证据，也可手动执行：
+创建节点时建议填写 hypothesis，留空也可继续。runset 的任务全部成功、失败或取消后，如果节点结论仍为 `open`，或尚未记录 evidence，`featx result` 会提示 `Review needed`。Web UI 不在 runset 或事件页面显示“待评审”标签；可在节点页面直接编辑结论与证据，也可手动执行：
 
 ```bash
 featx node set <node> --verdict inconclusive --evidence <node>/<runset>
 ```
 
-请根据实验选择结论；任务状态不会自动改写 verdict 或 evidence。两项均记录后，刷新即可清除提醒。
+请根据实验选择结论；任务状态不会自动改写 verdict 或 evidence。两项均记录后，刷新即可清除 CLI 提醒。
 Web UI 支持 EN / 中文切换并保存浏览器偏好；用户内容、日志、命令、路径、配方与指标键保持原样，worktree 和 note 保留原术语。CLI 和参考文档不在本轮中文化范围内。
 
 ## 安装方式
@@ -162,8 +162,8 @@ featx ui
 
 按照输出建立 SSH tunnel，然后在浏览器打开 `/ui/`。Web UI 可以查看树、任务、runset、实时日志、后处理报告和容量配置。
 
-- 节点页：runsets 表新增参数列（只在一行里显示各 runset 之间不同的关键参数，其余计为 `+N`，完整值在悬停提示里）和代码列（构建记录的 HEAD，加上“+N 未提交”标签）；勾选两个 runset 可对比代码；可用“显示已归档”切换隐藏的 runset。
-- runset 页：参数卡片（build/run/post 三列，标出 `--set` 覆盖项，可展开完整 recipe）；代码页签（代码记录表：每个仓库的 HEAD、未提交改动、已保存/未保存的未跟踪文件；对比节点基线 = 该 runset 相对基线分支新增的改动，上一个 runset / 另一个 runset = 那之后的改动，当前 worktree = 该 runset 之后 worktree 的改动；显示漂移和“代码来自 runset”）；job 状态筛选（各状态带计数，含“全部”）；归档 / 取消归档按钮。
+- 节点页：节点详情默认收起，recipes / scripts / worktree / notes 集中在 settings 页；runsets 表新增参数列（只在一行里显示各 runset 之间不同的关键参数，其余计为 `+N`，完整值在悬停提示里）和代码列（构建记录的 HEAD，加上“+N 未提交”标签）；勾选两个 runset 可对比代码，勾选任意数量可批量归档；可用“显示已归档”切换隐藏的 runset。
+- runset 页：post 与 files 合并为 results，problem log 与 provenance 合并为 details；参数卡片（build/run/post 三列，标出 `--set` 覆盖项，可展开完整 recipe）；代码页签（代码记录表：每个仓库的 HEAD、未提交改动、已保存/未保存的未跟踪文件；对比节点基线 = 该 runset 相对基线分支新增的改动，上一个 runset / 另一个 runset = 那之后的改动，当前 worktree = 该 runset 之后 worktree 的改动；显示漂移和“代码来自 runset”）；job 状态筛选（各状态带计数，含“全部”）；归档 / 取消归档按钮。
 - 任务页：按状态筛选（queued、running、blocked、succeeded、failed、cancelled）；被依赖失败自动取消的任务计入 blocked。
 - 未跟踪文件折叠为目录树（默认收起，显示“N 个文件在 K 个目录”）。
 

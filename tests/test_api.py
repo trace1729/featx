@@ -1,9 +1,13 @@
 """REST app (FastAPI TestClient), CLI (direct mode), MCP tool registration, perf_keys script."""
 
 import json
+import os
+import socket
 import subprocess
 import sys
+import time
 
+import httpx
 import yaml
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -28,6 +32,52 @@ def test_rest_auth_and_errors(root):
     assert r.status_code == 400   # no points / no binary
     assert c.get("/events", headers=h).json() == []
     assert c.get("/status", headers=h).json()["tasks"]["queued"] == 0
+
+
+def test_daemon_stop_interrupts_event_long_poll(root):
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env["FEATX_URL"] = url
+    proc = subprocess.Popen([sys.executable, "-m", "featx.sched.daemon",
+                             "--bind", "127.0.0.1", "--port", str(port)],
+                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    waiter = stopper = None
+    try:
+        deadline = time.monotonic() + 15
+        while True:
+            if proc.poll() is not None:
+                raise AssertionError(proc.stdout.read())
+            try:
+                if httpx.get(url + "/health", timeout=0.2, trust_env=False).status_code == 200:
+                    break
+            except httpx.TransportError:
+                pass
+            if time.monotonic() >= deadline:
+                raise AssertionError("isolated featxd did not become ready")
+            time.sleep(0.1)
+        waiter = subprocess.Popen([sys.executable, "-c",
+                                   "from featx import client; client.Client().get('/events', "
+                                   "unacked=False, wait=3600, timeout=3700)"],
+                                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        assert waiter.poll() is None
+        stopper = subprocess.Popen([sys.executable, "-m", "featx.cli", "daemon", "stop"],
+                                   env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert proc.wait(timeout=15) == 0
+        stdout, stderr = stopper.communicate(timeout=5)
+        assert stopper.returncode == 0, stdout + stderr
+        assert "stopped" in stdout
+        assert json.loads((root / "daemon.json").read_text())["stopped"] > 0
+    finally:
+        for child in (waiter, stopper, proc):
+            if child is not None and child.poll() is None:
+                child.kill()
+        for child in (waiter, stopper, proc):
+            if child is not None:
+                child.wait()
 
 
 def test_submit_dry_run_rest(root, fake_emu):

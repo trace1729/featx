@@ -127,7 +127,7 @@ describe("App", () => {
     expect((call[1].headers as Record<string, string>)["X-Featx-Token"]).toBe("t0k");
   });
 
-  it("does not show a creation form just for opening the worktree tab", async () => {
+  it("does not show a creation form just for opening the worktree section", async () => {
     setToken("t0k");
     renderAt("/node/wpe?tab=worktree");
     const open = await screen.findByRole("button", { name: "Create worktree…" });
@@ -138,11 +138,16 @@ describe("App", () => {
     expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
   });
 
-  it("keeps a single node header when leaving the scripts tab", async () => {
+  it("combines advanced node sections under one settings tab", async () => {
     setToken("t0k");
     renderAt("/node/wpe?tab=scripts");
     await screen.findByText(/Child nodes inherit them/);
-    fireEvent.click(screen.getByRole("button", { name: "worktree" }));
+    for (const name of ["runsets", "submit", "settings"]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    for (const name of ["recipes", "scripts", "worktree", "notes"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+      expect(screen.getByRole("heading", { name })).toBeTruthy();
+    }
+    expect(screen.getByRole("button", { name: "settings" }).classList.contains("active")).toBe(true);
     await screen.findByRole("button", { name: "Create worktree…" });
     expect(document.querySelectorAll(".crumbs").length).toBe(1);
   });
@@ -151,6 +156,14 @@ describe("App", () => {
     setToken("t0k");
     renderAt("/node/wpe?tab=submit");
     await screen.findByText("spec17 — SPEC17");
+    const form = document.querySelector(".submit-form")!;
+    expect(form).not.toBeNull();
+    expect(screen.getByText("stages (required)", { selector: "label" })).toBeTruthy();
+    const optional = screen.getByRole("group", { name: "Optional parameters" });
+    for (const label of ["purpose", "priority", "binary", "points", "post steps", "overrides"]) {
+      expect(within(optional).getByText(label, { selector: "label" })).toBeTruthy();
+    }
+    expect(form.querySelector("[title]")).toBeNull();
     const select = (option: string) => screen.getAllByRole("combobox").find((el) => el.textContent?.includes(option))!;
     fireEvent.change(select("exec"), { target: { value: "exec" } });
     const workload = select("spec17");
@@ -202,6 +215,7 @@ describe("App", () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({ evidence: ["wpe/overlay/20261012-2", "note a"] });
     renderAt("/node/wpe");
+    fireEvent.click(await screen.findByText("Node details"));
     fireEvent.click(await screen.findByRole("button", { name: "remove evidence 2" }));
     await waitFor(() => expect(writes()).toEqual([["/nodes/update", { ref: "wpe", evidence: ["wpe/overlay/20261012-2"] }]]));
     fireEvent.click(screen.getAllByRole("button", { name: "edit" })[0]);
@@ -213,10 +227,12 @@ describe("App", () => {
     await waitFor(() => expect(writes()[2]).toEqual(["/nodes/update", { ref: "wpe", add_evidence: ["new note"] }]));
   });
 
-  it("saves the comment", async () => {
+  it("saves the comment from the collapsed node details", async () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({ comment: "old idea" });
     renderAt("/node/wpe");
+    expect(screen.queryByDisplayValue("old idea")).toBeNull();
+    fireEvent.click(await screen.findByText("Node details"));
     const box = await screen.findByDisplayValue("old idea");
     fireEvent.change(box, { target: { value: "maybe the prefetcher" } });
     expect(screen.getByText("unsaved")).toBeTruthy();
@@ -372,6 +388,22 @@ describe("App", () => {
     expect(screen.queryByText("1,000,000")).toBeNull();
   });
 
+  it("groups runset outputs and details into fewer tabs", async () => {
+    setToken("t0k");
+    renderAt("/runset/wpe/overlay/20261013-1?tab=post");
+    const results = await screen.findByRole("button", { name: "results" });
+    expect(results.classList.contains("active")).toBe(true);
+    for (const name of ["jobs", "code", "details"]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    for (const name of ["post", "files", "problem log", "provenance"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(screen.getByRole("heading", { name: "post" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "files" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "details" }));
+    expect(await screen.findByRole("heading", { name: "problem log" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "provenance" })).toBeTruthy();
+  });
+
   it("shows the runset code tab and can compare against the worktree", async () => {
     setToken("t0k");
     extra["/runsets"] = [{ ...(FIXTURES["/result"] as object), ref: "wpe/overlay/20261012-2", archived: false }];
@@ -453,6 +485,38 @@ describe("App", () => {
     renderAt("/runset/wpe/overlay/20261013-1");
     fireEvent.click(await screen.findByRole("button", { name: "archive" }));
     await waitFor(() => expect(writes()).toEqual([["/runsets/archive", { ref: "wpe/overlay/20261013-1", archived: true }]]));
+  });
+
+  it("archives multiple selected runsets from the node", async () => {
+    setToken("t0k");
+    const summaries = ["20261013-1", "20261013-2"].map((name) => ({
+      ...(FIXTURES["/result"] as object), ref: `wpe/${name}`, name, archived: false,
+    }));
+    extra["/nodes/context"] = withNode({}, { runsets: summaries, runset_count: 2, archived_count: 0 });
+    renderAt("/node/wpe");
+    await screen.findByText("20261013-1");
+    fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));
+    fireEvent.click(screen.getByLabelText("select wpe/20261013-2"));
+    fireEvent.click(screen.getByRole("button", { name: "archive (2)" }));
+    await waitFor(() => expect(writes()).toEqual([
+      ["/runsets/archive", { ref: "wpe/20261013-1", archived: true }],
+      ["/runsets/archive", { ref: "wpe/20261013-2", archived: true }],
+    ]));
+  });
+
+  it("does not archive a selection with active tasks", async () => {
+    setToken("t0k");
+    const rs = {
+      ...(FIXTURES["/result"] as object), ref: "wpe/20261013-1", name: "20261013-1", archived: false,
+      tasks: [{ id: "T1", kind: "run", name: "run", state: "running", counts: {}, failure: null }],
+    };
+    extra["/nodes/context"] = withNode({}, { runsets: [rs], runset_count: 1, archived_count: 0 });
+    renderAt("/node/wpe");
+    await screen.findByText("20261013-1");
+    fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));
+    fireEvent.click(screen.getByRole("button", { name: "archive (1)" }));
+    expect(await screen.findByText("runset wpe/20261013-1 has active tasks; cancel them or wait")).toBeTruthy();
+    expect(writes()).toEqual([]);
   });
 
   it("filters the task list by state and compares two runsets", async () => {
@@ -537,17 +601,20 @@ describe("Chinese lifecycle workflow", () => {
     await waitFor(() => expect(writes()[0]).toEqual(["/nodes", { path: "wpe/new", hypothesis: "", worktree: false, parents: true }]));
   });
 
-  it("links completed experiments to manual review and preserves API values", async () => {
+  it("hides review prompts while preserving manual review APIs", async () => {
     const ref = "wpe/overlay/20261013-1";
     const rs = { ...(FIXTURES["/result"] as Record<string, unknown>), review: { needed: true, complete: true, outcome: "succeeded", ref } };
     extra["/result"] = rs;
     extra["/nodes/context"] = withNode({ path: "wpe/overlay", hypothesis: "original user hypothesis" }, { runsets: [rs], runset_count: 1 });
     renderAt(`/runset/${ref}`);
-    expect(await screen.findByText("待评审")).toBeTruthy();
+    await screen.findByText("20261013-1", { exact: false });
+    expect(screen.queryByText("待评审")).toBeNull();
     expect(writes()).toEqual([]);
-    fireEvent.click(screen.getByRole("link", { name: "编辑结论和证据" }));
+    cleanup();
+    renderAt("/node/wpe/overlay#verdict-evidence");
     expect(await screen.findByDisplayValue("original user hypothesis")).toBeTruthy();
     expect(document.getElementById("verdict-evidence")).toBeTruthy();
+    expect(screen.queryByText("待评审")).toBeNull();
     expect(writes()).toEqual([]);
     const verdict = screen.getByRole("option", { name: "支持" }).closest("select")!;
     fireEvent.change(verdict, { target: { value: "supported" } });
@@ -555,10 +622,13 @@ describe("Chinese lifecycle workflow", () => {
     fireEvent.change(screen.getByPlaceholderText("runset 引用或 note（Ctrl+Enter 添加）"), { target: { value: ref } });
     fireEvent.click(screen.getByRole("button", { name: "添加证据" }));
     await waitFor(() => expect(writes()[1]).toEqual(["/nodes/update", { ref: "wpe/overlay", add_evidence: [ref] }]));
-    extra["/result"] = { ...rs, review: { needed: false, complete: true, outcome: "succeeded", ref } };
+    extra["/events"] = [
+      { seq: 1, time: "2026-10-13T10:00:00", type: "review_needed", node: "wpe/overlay", runset: "20261013-1", acked: false },
+      { seq: 2, time: "2026-10-13T10:01:00", type: "runset_done", state: "succeeded", node: "wpe/overlay", runset: "20261013-1", acked: false },
+    ];
     cleanup();
-    renderAt(`/runset/${ref}`);
-    await screen.findByText("20261013-1", { exact: false });
+    renderAt("/events");
+    expect(await screen.findByText("runset 完成")).toBeTruthy();
     expect(screen.queryByText("待评审")).toBeNull();
   });
 });

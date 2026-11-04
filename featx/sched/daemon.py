@@ -473,9 +473,11 @@ def main() -> None:
         # re-raises the signal; with the default handler that kills us before `finally` runs.
         signal.signal(signal.SIGTERM, _exit_on_term)
         try:
-            uvicorn.run(build_app(d), host=d.bind, port=d.port, log_level="warning")
+            uvicorn.run(build_app(d), host=d.bind, port=d.port, log_level="warning",
+                        timeout_graceful_shutdown=5)
         finally:
             d.stop.set()
+            d.inbox.close()
             th.join(timeout=30)
             hb.join(timeout=10)   # its last write must not land after the "stopped" mark
             info = store.read_json(config.daemon_json(), {})

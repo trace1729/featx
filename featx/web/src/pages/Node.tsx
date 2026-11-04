@@ -16,8 +16,9 @@ import { useI18n } from "../i18n";
 const VERDICTS = ["open", "supported", "refuted", "inconclusive"];
 const STATUSES = ["active", "parked", "done", "abandoned"];
 const KINDS = ["build", "run", "post"] as const;
-const TABS = ["runsets", "submit", "recipes", "scripts", "worktree", "notes"] as const;
+const TABS = ["runsets", "submit", "settings"] as const;
 type Tab = (typeof TABS)[number];
+const NODE_TAB_ALIASES: Record<string, Tab> = { recipes: "settings", scripts: "settings", worktree: "settings", notes: "settings" };
 
 function useInvalidateNode() {
   const qc = useQueryClient();
@@ -125,15 +126,29 @@ function CodeCell({ rs }: { rs: RunsetSummary }) {
 function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; showArchived: boolean; onShowArchived: (v: boolean) => void }) {
   const { t } = useI18n();
   const nav = useNavigate();
+  const act = useAction();
+  const invalidate = useInvalidateNode();
   const [selected, setSelected] = useState<string[]>([]);
   const shared = sharedTokens(ctx.runsets.map((rs) => paramTokens(rs.params, rs.code)));
   const extra = (ctx.params_differing ?? []).filter((k) => !coveredByTokens(k));
   const rank = (ref: string) => ctx.runsets.findIndex((r) => r.ref === ref);
   const toggle = (ref: string) => setSelected((old) => (old.includes(ref) ? old.filter((x) => x !== ref) : [...old, ref]));
+  const archiveRefs = selected.filter((ref) => !ctx.runsets.find((rs) => rs.ref === ref)?.archived);
   const compare = () => {
     const [a, b] = [...selected].sort((x, y) => rank(x) - rank(y));
     nav(`/runset/${b}?tab=code&against=${encodeURIComponent(a)}`);
   };
+  const archive = () => act.run(async () => {
+    const chosen = ctx.runsets.filter((rs) => archiveRefs.includes(rs.ref));
+    const active = chosen.find((rs) => rs.tasks.some((task) => ["queued", "launching", "running"].includes(task.state)));
+    if (active) throw new Error(t("runset {ref} has active tasks; cancel them or wait", { ref: active.ref }));
+    try {
+      for (const ref of archiveRefs) await api.post("/runsets/archive", { ref, archived: true });
+    } finally {
+      await invalidate();
+    }
+    setSelected([]);
+  });
   return (
     <div>
       <div className="row" style={{ marginBottom: 8 }}>
@@ -145,9 +160,11 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
             {t("compare")}
           </button>
         )}
+        {archiveRefs.length > 0 && <button disabled={act.busy} onClick={archive}>{t("archive")} ({archiveRefs.length})</button>}
         {selected.length > 0 && <button onClick={() => setSelected([])}>{t("clear selection")}</button>}
         {!ctx.runsets.length && <span className="muted">{t("no runsets yet: use the submit tab.")}</span>}
       </div>
+      <ErrorBox error={act.error} />
       {ctx.runsets.length > 0 && (
         <table>
           <thead>
@@ -171,7 +188,6 @@ function RunsetsTab({ ctx, showArchived, onShowArchived }: { ctx: NodeContext; s
                 <td className="mono">
                   <Link to={`/runset/${rs.ref}`} style={{ whiteSpace: "nowrap" }}>{rs.ref.slice(ctx.node.path.length + 1)}</Link> {rs.sealed && <Badge kind="sealed">{t("sealed")}</Badge>}
                   {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
-                  {rs.review?.needed && <a href="#verdict-evidence" className="badge warn">{t("Review needed")}</a>}
                   {rs.derived_from && (
                     <div className="muted small" title={rs.derived_from}>
                       {t("from")}{" "}
@@ -264,8 +280,8 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
   const post = ctx.recipes.post ?? {};
   const opts = (build.options ?? {}) as Record<string, unknown>;
   const current = (v: unknown) => t("inherit ({value})", { value: v === undefined || v === null ? t("unset") : String(v) });
-  const pick = (key: keyof QuickPresets, choices: [string, string][], now: unknown, title?: string) => (
-    <select value={quick[key]} title={title} onChange={(e) => setQuick({ ...quick, [key]: e.target.value })}>
+  const pick = (key: keyof QuickPresets, choices: [string, string][], now: unknown) => (
+    <select value={quick[key]} onChange={(e) => setQuick({ ...quick, [key]: e.target.value })}>
       <option value="">{current(now)}</option>
       {choices.map(([v, label]) => (
         <option key={v} value={v}>
@@ -307,117 +323,116 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
       nav(`/runset/${r.runset}`);
     });
   return (
-    <div className="form">
-      <label>{t("stages")}</label>
-      <div className="row">
-        {KINDS.map((k) => (
-          <label key={k}>
-            <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setForm({ kinds: e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k) })} /> {t(k)}
-          </label>
-        ))}
-        {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">{t("without build the run recipe's emu (or --bin) is used")}</span>}
-        <span className="spacer" />
-        <button className="link small" title={t("reset form")} onClick={() => setForm({ ...EMPTY_FORM })}>
-          {t("reset form")}
-        </button>
-      </div>
-      <label>{t("build")}</label>
-      <div className="row">
-        <span className="muted small">{t("tool")}</span>
-        {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
-        <span className="muted small">{t("mode")}</span>
-        {pick("mode", config.data?.effective.trace_enabled ? [["trace", "trace"], ["exec", "exec"]] : [["exec", "exec"]], build.mode, t("TRACERTL_MODE; the run follows the build"))}
-        <span className="muted small">chiseldb</span>
-        {pick("chiseldb", onOff, opts.chiseldb)}
-        <span className="muted small">chiselmap</span>
-        {pick("chiselmap", onOff, opts.chiselmap, t("WITH_CHISELMAP=1 (placeholder: no Makefile reads it yet)"))}
-      </div>
-      <label>{t("run")}</label>
-      <div className="row">
-        <span className="muted small">{t("workload")}</span>
-        {pick(
-          "workload",
-          workloads.map(([name, w]) => [name, w.description ? `${name} — ${w.description}` : name]),
-          run.workload,
-          "all its points unless points / benchmarks narrow them",
-        )}
-        {showCheckpoint && (
-          <>
-            <span className="muted small">{t("checkpoint")}</span>
-            <select
-              value={quick.checkpoint}
-              title={wlSpec ? t("exec runs: the SimPoint checkpoint set (run.checkpoint); spec{spec} sets only, as the workload is {workload}", { spec: wlSpec, workload: wlName }) : t("exec runs: the SimPoint checkpoint set (run.checkpoint)")}
-              onChange={(e) => setQuick({ ...quick, checkpoint: e.target.value })}
-            >
-              <option value="">{ckptInherit}</option>
-              {quick.checkpoint && !ckptGroups.some(([, sets]) => sets.some((c) => c.name === quick.checkpoint)) && <option value={quick.checkpoint}>{quick.checkpoint}</option>}
-              {ckptGroups.map(([spec, sets]) => (
-                <optgroup key={spec} label={`spec${spec}`}>
-                  {sets.map((c) => (
-                    <option key={c.name} value={c.name}>
-                      {c.name} ({c.n_points} {t("points")}{c.restorer_needed ? ", .gz" : ""}{c.has_insts ? "" : `, ${t("no insts")}`})
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            {checkpoints.isError && <span className="error small">{t("checkpoints:")} {(checkpoints.error as Error).message}</span>}
-            <Link className="small" to="/docs/checkpoints">{t("sets")}</Link>
-          </>
-        )}
-        <span className="muted small">{t("coverage")}</span>
-        <select
-          value={customCoverage ? "custom" : quick.coverage}
-          title={t("per benchmark, the heaviest points until their weights sum to c (0.3 = the -0.3c configs)")}
-          onChange={(e) => setQuick({ ...quick, coverage: e.target.value === "custom" ? "0.9" : e.target.value })}
-        >
-          <option value="">{current(run.coverage)}</option>
-          {COVERAGES.map((c) => (
-            <option key={c} value={c}>
-              {c === "full" ? t("full (all points)") : c}
-            </option>
+    <div className="submit-form">
+      <div className="form">
+        <label>{t("stages (required)")}</label>
+        <div className="row">
+          {KINDS.map((k) => (
+            <label key={k}>
+              <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setForm({ kinds: e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k) })} /> {t(k)}
+            </label>
           ))}
-          <option value="custom">{t("custom…")}</option>
-        </select>
-        {customCoverage && (
-          <input type="text" className="mono narrow" aria-label={t("coverage")} value={quick.coverage} onChange={(e) => setQuick({ ...quick, coverage: e.target.value })} />
-        )}
-        <span className="muted small">W</span>
-        <input type="text" className="mono narrow" value={quick.W} onChange={(e) => setQuick({ ...quick, W: e.target.value })} placeholder={String(run.W ?? "")} />
-        <span className="muted small">I</span>
-        <input type="text" className="mono narrow" value={quick.I} onChange={(e) => setQuick({ ...quick, I: e.target.value })} placeholder={String(run.I ?? "")} />
-        <Link className="small" to="/docs/run">{t("keys")}</Link>
+          {!kinds.includes("build") && kinds.includes("run") && <span className="muted small">{t("without build the run recipe's emu (or --bin) is used")}</span>}
+          <span className="spacer" />
+          <button className="link small" onClick={() => setForm({ ...EMPTY_FORM })}>
+            {t("reset form")}
+          </button>
+        </div>
+        <label>{t("build")}</label>
+        <div className="row">
+          <span className="muted small">{t("tool")}</span>
+          {pick("tool", [["gsim", "gsim"], ["verilator", "verilator"], ["script", "script"]], build.tool ?? build.type)}
+          <span className="muted small">{t("mode")}</span>
+          {pick("mode", config.data?.effective.trace_enabled ? [["trace", "trace"], ["exec", "exec"]] : [["exec", "exec"]], build.mode)}
+          <span className="muted small">chiseldb</span>
+          {pick("chiseldb", onOff, opts.chiseldb)}
+          <span className="muted small">chiselmap</span>
+          {pick("chiselmap", onOff, opts.chiselmap)}
+        </div>
+        <label>{t("run")}</label>
+        <div className="row">
+          <span className="muted small">{t("workload")}</span>
+          {pick(
+            "workload",
+            workloads.map(([name, w]) => [name, w.description ? `${name} — ${w.description}` : name]),
+            run.workload,
+          )}
+          {showCheckpoint && (
+            <>
+              <span className="muted small">{t("checkpoint")}</span>
+              <select value={quick.checkpoint} onChange={(e) => setQuick({ ...quick, checkpoint: e.target.value })}>
+                <option value="">{ckptInherit}</option>
+                {quick.checkpoint && !ckptGroups.some(([, sets]) => sets.some((c) => c.name === quick.checkpoint)) && <option value={quick.checkpoint}>{quick.checkpoint}</option>}
+                {ckptGroups.map(([spec, sets]) => (
+                  <optgroup key={spec} label={`spec${spec}`}>
+                    {sets.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.name} ({c.n_points} {t("points")}{c.restorer_needed ? ", .gz" : ""}{c.has_insts ? "" : `, ${t("no insts")}`})
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              {checkpoints.isError && <span className="error small">{t("checkpoints:")} {(checkpoints.error as Error).message}</span>}
+              <Link className="small" to="/docs/checkpoints">{t("sets")}</Link>
+            </>
+          )}
+          <span className="muted small">{t("coverage")}</span>
+          <select
+            value={customCoverage ? "custom" : quick.coverage}
+            onChange={(e) => setQuick({ ...quick, coverage: e.target.value === "custom" ? "0.9" : e.target.value })}
+          >
+            <option value="">{current(run.coverage)}</option>
+            {COVERAGES.map((c) => (
+              <option key={c} value={c}>
+                {c === "full" ? t("full (all points)") : c}
+              </option>
+            ))}
+            <option value="custom">{t("custom…")}</option>
+          </select>
+          {customCoverage && (
+            <input type="text" className="mono narrow" aria-label={t("coverage")} value={quick.coverage} onChange={(e) => setQuick({ ...quick, coverage: e.target.value })} />
+          )}
+          <span className="muted small">W</span>
+          <input type="text" className="mono narrow" value={quick.W} onChange={(e) => setQuick({ ...quick, W: e.target.value })} placeholder={String(run.W ?? "")} />
+          <span className="muted small">I</span>
+          <input type="text" className="mono narrow" value={quick.I} onChange={(e) => setQuick({ ...quick, I: e.target.value })} placeholder={String(run.I ?? "")} />
+          <Link className="small" to="/docs/run">{t("keys")}</Link>
+        </div>
+        <label>{t("post")}</label>
+        <div className="row">
+          <label>
+            <input type="checkbox" checked={inheritedSpecScore || quick.specScore === "on"} disabled={inheritedSpecScore} onChange={(e) => setQuick({ ...quick, specScore: e.target.checked ? "on" : "" })} /> spec-score
+          </label>
+          {inheritedSpecScore && <span className="muted small">{t("already in the post recipe")}</span>}
+          <Link className="small" to="/docs/plugins">
+            {t("plugins")}
+          </Link>
+        </div>
       </div>
-      <label>{t("post")}</label>
-      <div className="row">
-        <label title={t("SPEC score as perf_trigger --report computes it (spec-score plugin)")}>
-          <input type="checkbox" checked={inheritedSpecScore || quick.specScore === "on"} disabled={inheritedSpecScore} onChange={(e) => setQuick({ ...quick, specScore: e.target.checked ? "on" : "" })} /> spec-score
-        </label>
-        {inheritedSpecScore && <span className="muted small">{t("already in the post recipe")}</span>}
-        <Link className="small" to="/docs/plugins">
-          {t("plugins")}
-        </Link>
-      </div>
-      <label>{t("priority")}</label>
-      <div className="row">
-        <input type="number" className="mono narrow" value={priority} placeholder="0" onChange={(e) => setForm({ priority: e.target.value })} />
-        <span className="muted small">{t("higher launches first (FIFO within a priority); running jobs are never preempted")}</span>
-      </div>
-      <label>{t("purpose")}</label>
-      <input type="text" value={purpose} onChange={(e) => setForm({ purpose: e.target.value })} placeholder={t("what this runset is meant to show")} />
-      <label>{t("binary")}</label>
-      <input type="text" className="mono" value={bin} onChange={(e) => setForm({ bin: e.target.value })} placeholder={t("optional: bincache key, runset ref, or /abs/path/emu")} />
-      <label>{t("points")}</label>
-      <input type="text" className="mono" value={points} onChange={(e) => setForm({ points: e.target.value })} placeholder={t("optional subset, comma or space separated")} />
-      <label>{t("post steps")}</label>
-      <input type="text" className="mono" value={postSteps} onChange={(e) => setForm({ postSteps: e.target.value })} placeholder={t("optional subset of the post recipe's steps")} />
-      <label>{t("overrides")}</label>
-      <div>
-        <textarea className="mono" rows={4} value={overrides} onChange={(e) => setForm({ overrides: e.target.value })} placeholder={"run.W=20000000\nrun.I=20000000"} />
-        {parseError ? <div className="error">{parseError}</div> : overrides.trim() && <pre className="mono small">{JSON.stringify(parsed)}</pre>}
-      </div>
-      <span />
-      <div>
+      <fieldset className="optional-params">
+        <legend>{t("Optional parameters")}</legend>
+        <div className="form">
+          <label>{t("priority")}</label>
+          <div className="row">
+            <input type="number" className="mono narrow" value={priority} placeholder="0" onChange={(e) => setForm({ priority: e.target.value })} />
+          </div>
+          <label>{t("purpose")}</label>
+          <input type="text" value={purpose} onChange={(e) => setForm({ purpose: e.target.value })} placeholder={t("what this runset is meant to show")} />
+          <label>{t("binary")}</label>
+          <input type="text" className="mono" value={bin} onChange={(e) => setForm({ bin: e.target.value })} placeholder={t("bincache key, runset ref, or /abs/path/emu")} />
+          <label>{t("points")}</label>
+          <input type="text" className="mono" value={points} onChange={(e) => setForm({ points: e.target.value })} placeholder={t("comma or space separated")} />
+          <label>{t("post steps")}</label>
+          <input type="text" className="mono" value={postSteps} onChange={(e) => setForm({ postSteps: e.target.value })} placeholder={t("subset of the post recipe's steps")} />
+          <label>{t("overrides")}</label>
+          <div>
+            <textarea className="mono" rows={4} value={overrides} onChange={(e) => setForm({ overrides: e.target.value })} placeholder={"run.W=20000000\nrun.I=20000000"} />
+            {parseError ? <div className="error">{parseError}</div> : overrides.trim() && <pre className="mono small">{JSON.stringify(parsed)}</pre>}
+          </div>
+        </div>
+      </fieldset>
+      <div className="submit-actions">
         <button className="primary" disabled={act.busy || !!parseError || !kinds.length} onClick={submit}>
           {t("Submit")}
         </button>
@@ -763,7 +778,7 @@ function ChangesBadge({ path }: { path: string }) {
   const t = q.data?.total;
   if (!t || (!t.files && !t.ahead)) return null;
   return (
-    <Link to={`/node/${path}?tab=worktree`} title={translate("code that differs from the base (see the worktree tab)")}>
+    <Link to={`/node/${path}?tab=settings#worktree`} title={translate("code that differs from the base (see node settings)")}>
       <Badge kind="warn">
         {translate("code changed: {files} file{suffix}, +{added} −{deleted}", { files: t.files, suffix: language === "zh" || t.files === 1 ? "" : "s", added: t.added, deleted: t.deleted })}
         {t.ahead ? translate(", {count} commit{suffix} ahead", { count: t.ahead, suffix: language === "zh" || t.ahead === 1 ? "" : "s" }) : ""}
@@ -848,17 +863,22 @@ function Header({ ctx }: { ctx: NodeContext }) {
   const { t } = useI18n();
   const n = ctx.node;
   const nav = useNavigate();
+  const hash = useLocation().hash;
   const act = useAction();
   const invalidate = useInvalidateNode();
   const [hyp, setHyp] = useState(n.hypothesis);
   const [note, setNote] = useState(n.verdict_note);
   const [comment, setComment] = useState(n.comment ?? "");
   const [dialog, setDialog] = useState<"add" | "mv" | "rm" | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(hash === "#verdict-evidence");
   useEffect(() => {
     setHyp(n.hypothesis);
     setNote(n.verdict_note);
     setComment(n.comment ?? "");
   }, [n.hypothesis, n.verdict_note, n.comment]);
+  useEffect(() => {
+    if (hash === "#verdict-evidence") setDetailsOpen(true);
+  }, [hash]);
   const update = (fields: Record<string, unknown>) =>
     act.run(async () => {
       await api.post("/nodes/update", { ref: n.path, ...fields });
@@ -892,51 +912,54 @@ function Header({ ctx }: { ctx: NodeContext }) {
           {t("Remove…")}
         </button>
       </div>
-      <div className="card form" id="verdict-evidence" style={{ marginTop: 10 }}>
-        <label>{t("hypothesis")}</label>
-        <div className="row">
-          <textarea rows={2} style={{ flex: 1 }} value={hyp} onChange={(e) => setHyp(e.target.value)} />
-          <button disabled={hyp === n.hypothesis || act.busy} onClick={() => update({ hypothesis: hyp })}>
-            {t("Save")}
-          </button>
-        </div>
-        <label>{t("verdict")}</label>
-        <div className="row">
-          <select value={n.verdict} onChange={(e) => update({ verdict: e.target.value })}>
-            {VERDICTS.map((v) => (
-              <option key={v} value={v}>{t(v)}</option>
-            ))}
-          </select>
-          <input type="text" style={{ flex: 1 }} value={note} placeholder={t("verdict note")} onChange={(e) => setNote(e.target.value)} />
-          <button disabled={note === n.verdict_note || act.busy} onClick={() => update({ verdict_note: note })}>
-            {t("Save note")}
-          </button>
-          <label>{t("status")}</label>
-          <select value={n.status} onChange={(e) => update({ status: e.target.value })}>
-            {STATUSES.map((v) => (
-              <option key={v} value={v}>{t(v)}</option>
-            ))}
-          </select>
-        </div>
-        <label>{t("evidence")}</label>
-        <EvidenceList
-          evidence={n.evidence}
-          archived={new Set(ctx.archived_runsets ?? [])}
-          busy={act.busy}
-          save={(list) => update({ evidence: list })}
-          add={(ev) => update({ add_evidence: [ev] })}
-        />
-        <label>{t("comment")}</label>
-        <div className="row" style={{ alignItems: "flex-start" }}>
-          <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder={t("your thoughts on this node: ideas, doubts, what to try next")} onChange={(e) => setComment(e.target.value)} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <button disabled={comment === (n.comment ?? "") || act.busy} onClick={() => update({ comment })}>
+      <details className="node-details" id="verdict-evidence" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)}>
+        <summary>{t("Node details")}</summary>
+        <div className="card form">
+          <label>{t("hypothesis")}</label>
+          <div className="row">
+            <textarea rows={2} style={{ flex: 1 }} value={hyp} onChange={(e) => setHyp(e.target.value)} />
+            <button disabled={hyp === n.hypothesis || act.busy} onClick={() => update({ hypothesis: hyp })}>
               {t("Save")}
             </button>
-            {comment !== (n.comment ?? "") && <span className="muted small">{t("unsaved")}</span>}
+          </div>
+          <label>{t("verdict")}</label>
+          <div className="row">
+            <select value={n.verdict} onChange={(e) => update({ verdict: e.target.value })}>
+              {VERDICTS.map((v) => (
+                <option key={v} value={v}>{t(v)}</option>
+              ))}
+            </select>
+            <input type="text" style={{ flex: 1 }} value={note} placeholder={t("verdict note")} onChange={(e) => setNote(e.target.value)} />
+            <button disabled={note === n.verdict_note || act.busy} onClick={() => update({ verdict_note: note })}>
+              {t("Save note")}
+            </button>
+            <label>{t("status")}</label>
+            <select value={n.status} onChange={(e) => update({ status: e.target.value })}>
+              {STATUSES.map((v) => (
+                <option key={v} value={v}>{t(v)}</option>
+              ))}
+            </select>
+          </div>
+          <label>{t("evidence")}</label>
+          <EvidenceList
+            evidence={n.evidence}
+            archived={new Set(ctx.archived_runsets ?? [])}
+            busy={act.busy}
+            save={(list) => update({ evidence: list })}
+            add={(ev) => update({ add_evidence: [ev] })}
+          />
+          <label>{t("comment")}</label>
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <textarea rows={3} style={{ flex: 1, fontFamily: "inherit", fontSize: 13 }} value={comment} placeholder={t("your thoughts on this node: ideas, doubts, what to try next")} onChange={(e) => setComment(e.target.value)} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <button disabled={comment === (n.comment ?? "") || act.busy} onClick={() => update({ comment })}>
+                {t("Save")}
+              </button>
+              {comment !== (n.comment ?? "") && <span className="muted small">{t("unsaved")}</span>}
+            </div>
           </div>
         </div>
-      </div>
+      </details>
       <ErrorBox error={act.error} />
       {dialog === "add" && <AddNodeDialog parent={n.path} onClose={() => setDialog(null)} onDone={(p) => nav(`/node/${p}`)} />}
       {dialog === "mv" && <MoveDialog src={n.path} onClose={() => setDialog(null)} onDone={(dst) => nav(`/node/${dst}`, { replace: true })} />}
@@ -960,7 +983,8 @@ export function NodePage() {
   const notice = (useLocation().state as { notice?: string } | null)?.notice;
   const [sp, setSp] = useSearchParams();
   const [showArchived, setShowArchived] = usePersistentState("node:showArchived", false);
-  const tab = (TABS as readonly string[]).includes(sp.get("tab") ?? "") ? (sp.get("tab") as Tab) : "runsets";
+  const requestedTab = sp.get("tab") ?? "";
+  const tab = (TABS as readonly string[]).includes(requestedTab) ? (requestedTab as Tab) : NODE_TAB_ALIASES[requestedTab] ?? "runsets";
   const q = useQuery({
     queryKey: ["node", path, showArchived],
     queryFn: () => api.get<NodeContext>("/nodes/context", { ref: path, max_runsets: 50, include_archived: showArchived }),
@@ -977,10 +1001,14 @@ export function NodePage() {
       <Tabs tabs={TABS} value={tab} onChange={(t) => setSp({ tab: t }, { replace: true })} />
       {tab === "runsets" && <RunsetsTab ctx={ctx} showArchived={showArchived} onShowArchived={setShowArchived} />}
       {tab === "submit" && <SubmitTab ctx={ctx} />}
-      {tab === "recipes" && <RecipesTab ctx={ctx} />}
-      {tab === "scripts" && <ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} />}
-      {tab === "worktree" && <WorktreeTab ctx={ctx} />}
-      {tab === "notes" && <NotesTab key={`notes:${ctx.node.id}`} ctx={ctx} />}
+      {tab === "settings" && (
+        <div className="node-settings">
+          <section className="tab-section" id="recipes"><h2>{t("recipes")}</h2><RecipesTab ctx={ctx} /></section>
+          <section className="tab-section" id="scripts"><h2>{t("scripts")}</h2><ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} /></section>
+          <section className="tab-section" id="worktree"><h2>{t("worktree")}</h2><WorktreeTab ctx={ctx} /></section>
+          <section className="tab-section" id="notes"><h2>{t("notes")}</h2><NotesTab key={`notes:${ctx.node.id}`} ctx={ctx} /></section>
+        </div>
+      )}
       {ctx.children.length > 0 && (
         <>
           <h2>{t("Children")}</h2>

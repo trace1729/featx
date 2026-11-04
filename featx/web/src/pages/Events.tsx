@@ -7,7 +7,7 @@ import type { EventRow } from "../types";
 import { fmtTime } from "../util";
 import { useI18n } from "../i18n";
 
-const TYPES = ["failure", "retry", "budget_exhausted", "task_done", "runset_done", "review_needed", "submitted", "relaunched", "cancelled"];
+const TYPES = ["failure", "retry", "budget_exhausted", "task_done", "runset_done", "submitted", "relaunched", "cancelled"];
 
 function detail(e: EventRow, t: (text: string, values?: Record<string, string | number>) => string): string {
   if (e.type === "failure" || e.type === "retry") {
@@ -16,7 +16,6 @@ function detail(e: EventRow, t: (text: string, values?: Record<string, string | 
   }
   if (e.type === "task_done") return `${t(String(e.kind))} ${t(String(e.state))}`;
   if (e.type === "runset_done") return t("all tasks succeeded");
-  if (e.type === "review_needed") return t("Review the verdict and evidence for this completed runset");
   if (e.type === "budget_exhausted") return t("design relaunch budget used up ({count}); needs featx task unblock {task}", { count: Number(e.relaunches ?? 0), task: e.task ?? "" });
   if (e.type === "relaunched") return [Array.isArray(e.jobs) ? e.jobs.join(", ") : "", e.reason].filter(Boolean).join(" · ");
   return "";
@@ -39,7 +38,7 @@ export function EventsPage() {
       await api.post("/events/ack", body);
       await Promise.all([qc.invalidateQueries({ queryKey: ["events"] }), qc.invalidateQueries({ queryKey: ["status"] })]);
     });
-  const rows = [...(q.data ?? [])].sort((a, b) => b.seq - a.seq);
+  const rows = (q.data ?? []).filter((e) => e.type !== "review_needed").sort((a, b) => b.seq - a.seq);
   return (
     <div>
       <h1>{t("Events")}</h1>

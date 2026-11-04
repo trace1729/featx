@@ -57,7 +57,8 @@ The Runset page's jobs tab filters jobs by state (chips with counts, kept in `?j
 
 **Archive.** Archived runsets are hidden by default from the node runsets list,
 `node_context`, `tree_list`'s latest runset and the leaderboard. Data and binaries are kept and
-`featx gc` does not change. It is refused while the runset has active tasks.
+`featx gc` does not change. It is refused while the runset has active tasks. The node page can
+archive multiple selected runsets through the existing single-runset API.
 
 ```bash
 featx runset archive wpe/overlay/20261012-1 -m "duplicate of 20261012-2"

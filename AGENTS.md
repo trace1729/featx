@@ -146,7 +146,7 @@ featx node set <node> --verdict inconclusive \
 - All-terminal runsets need review when verdict is `open` or evidence is empty.
   Failure and cancellation also count; they never set verdict/evidence automatically.
 - Choose `supported`, `refuted`, or `inconclusive` from evidence. A non-open
-  verdict plus evidence clears **Review needed** on refresh.
+  verdict plus evidence clears the CLI **Review needed** reminder on refresh.
 
 ## 9. MCP operation map
 
@@ -181,7 +181,8 @@ featx ui
 - Built-in labels/dialogs/hints are localized; unknown labels fall back to English.
 - User content, Git refs, commands, paths, logs, recipe/metric keys, and reference
   documentation stay unchanged. CLI localization is outside this scope.
-- **Review needed** links to the existing verdict/evidence editor.
+- The Web UI hides review-needed badges, banners and event rows; use the node's
+  verdict/evidence editor.
 
 ## 11. Developing featx itself
 

@@ -220,20 +220,21 @@ Pages:
   `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
   reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
   only with "show incomplete" and are never ranked.
-- **Node**: hypothesis, verdict, evidence (add, edit, remove), a free-form comment, recipes
-  (own-layer editor and explain view), scripts, notes (Markdown, editable), runsets, submit form.
-  A "code changed" badge appears when the node worktree differs from its base; the worktree tab
-  lists the commits ahead, the changed/untracked files per repo (main + submodule worktrees) and
-  each file's diff against the merge-base. The runsets table has a parameters column (the keys the
+- **Node**: hypothesis, verdict, evidence and comment are collapsed under **Node details**;
+  recipes, scripts, worktree and notes are grouped under **settings**, with **runsets** and
+  **submit** as the other main tabs. A "code changed" badge appears when the node worktree differs
+  from its base; the worktree section lists the commits ahead, the changed/untracked files per repo
+  (main + submodule worktrees) and each file's diff against the merge-base. The runsets table has a parameters column (the keys the
   runsets differ on), a code column (snapshot id, files and +/− vs base), checkbox selection of two
-  runsets with **compare** (opens the newer one's code tab against the older), and a
-  "show archived (N)" toggle. Untracked files are folded: "untracked: N files in K dirs", then a
+  runsets with **compare** (opens the newer one's code tab against the older), multi-selection for
+  **archive**, and a "show archived (N)" toggle. Untracked files are folded: "untracked: N files in K dirs", then a
   directory tree with counts (single-child chains collapsed).
 - **Submit form**: kinds, binary, points, quick presets (build tool/mode/options, workload,
   coverage, `spec-score` post step), priority, overrides. The choices are remembered per node in
   the browser (kinds, presets and priority also seed other nodes); "reset form" clears them.
-- **Runset**: stage chips, per-point progress and ETA, live log tail, post report, file browser,
-  problem log, cancel/relaunch/resubmit/unblock. A **parameters** card shows the build/run/post
+- **Runset**: stage chips, per-point progress and ETA, live log tail, post report and file browser
+  under **results**, problem log and provenance under **details**, plus cancel/relaunch/resubmit/
+  unblock. A **parameters** card shows the build/run/post
   headline values from the recipe snapshots, marks the `--set` overrides and can show the full
   recipe YAML. A **code** tab shows the build snapshot against the node base, the previous
   snapshot, the worktree now or another runset, with the snapshot ids, a drift warning, a
@@ -404,16 +405,16 @@ Fixes found while building and verifying featx are recorded in `problem-analysis
 
 A hypothesis is recommended when creating a node, but leaving it empty does not
 block creation. Once every runset task has succeeded, failed or been cancelled,
-`featx result` and the web UI show **Review needed** if the node verdict is still
-`open` or evidence is empty. Follow the UI link to the node editor, or record your
-own conclusion explicitly:
+`featx result` shows **Review needed** if the node verdict is still `open` or
+evidence is empty. The web UI does not show review-needed badges, banners or event
+rows; use the node editor, or record your own conclusion explicitly:
 
 ```bash
 featx node set <node> --verdict inconclusive --evidence <node>/<runset>
 ```
 
 Task outcomes never write verdict or evidence. Recording both fields clears the
-reminder on refresh. `review_needed` events are emitted on completion, not during
+CLI reminder on refresh. `review_needed` events are emitted on completion, not during
 recovery or read-only queries; existing sealing and archive rules are unchanged.
 
 The web UI supports EN / 中文 and remembers the browser preference. Built-in labels

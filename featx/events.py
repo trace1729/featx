@@ -11,9 +11,15 @@ from . import config, store
 class Inbox:
     def __init__(self) -> None:
         self.cond = threading.Condition()
+        self.closed = False
         self.events: list[dict] = store.read_jsonl(config.events_path())
         self.seq = max((e.get("seq", 0) for e in self.events), default=0)
         self.acked: set[int] = set(store.read_json(self._acks_path(), {"acked": []})["acked"])
+
+    def close(self) -> None:
+        with self.cond:
+            self.closed = True
+            self.cond.notify_all()
 
     @staticmethod
     def _acks_path():
@@ -52,7 +58,7 @@ class Inbox:
             while True:
                 found = self.query(**query)
                 left = deadline - time.time()
-                if found or left <= 0:
+                if found or left <= 0 or self.closed:
                     return found
                 self.cond.wait(min(left, 5.0))
 
