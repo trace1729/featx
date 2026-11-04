@@ -191,8 +191,7 @@ def worktree_set_base(ref: str, base: str, sub: str = "") -> dict:
         else:
             target = git
         path = target.path if sub else git.worktree
-        worktree.validate_base(path, base, label=f"{sub or 'worktree'} base")
-        target.base = base
+        target.base = worktree.validate_base(path, base, label=f"{sub or 'worktree'} base")
         tree.save(entry)
     return worktree.status(entry.node)
 
@@ -351,8 +350,9 @@ def _code_repo_specs(git, rec: dict, mode: str, other: dict | None) -> list[dict
         head = info.get("head")
         if not head:
             continue
+        base = worktree.resolved_base(path, base)
         lost: list[str] = []
-        spec = {"name": name, "path": path, "base": base, "info": info, "merge_base": None,
+        spec = {"name": name, "path": path, "base": base, "info": info,
                 "b": (head, _patch_bytes(rec, info, lost)), "lost": lost}
         if mode == "worktree":
             spec["a"], spec["b"] = spec["b"], None      # b = the live worktree, recorded on demand
@@ -362,18 +362,15 @@ def _code_repo_specs(git, rec: dict, mode: str, other: dict | None) -> list[dict
             if not Path(path).is_dir():
                 spec["error"] = NOT_IN_BASE
         elif mode == "base":
-            mb = info.get("merge_base") or ""
-            if not mb:
-                mb = run_git(["-C", path, "merge-base", base, head], check=False).strip()
-            spec.update(a=(mb, None), merge_base=mb)
-            if not mb:
-                spec["error"] = f"no merge-base between {base[:12]} and {head[:12]}"
+            # Old records used merge-base to preserve their original comparison point. New
+            # records have a base commit and need no such fallback.
+            base = info.get("merge_base") or base
+            spec.update(a=(base, None), base=base)
         else:
             spec["a"] = (prev.get("head"), _patch_bytes(other, prev, lost)) if prev.get("head") else (None, None)
             if not prev.get("head"):
                 spec["error"] = "the compared runset recorded nothing for this repo"
-        # recorded HEADs may since have been rebased away and pruned (the root cause of a
-        # failed merge-base too, so it takes precedence over that)
+        # Recorded commits may since have been rebased away and pruned.
         commits = [s[0] for s in (spec.get("a"), spec.get("b")) if s and s[0]]
         missing = [c for c in commits if Path(path).is_dir() and run_git(
             ["-C", path, "cat-file", "-t", c], check=False).strip() != "commit"]
@@ -476,10 +473,7 @@ def runset_code(ref: str, against: str = "base") -> dict:
             continue
 
         def shape(trees, ta, tb, commits, uncommitted, extra, spec=spec):
-            # ahead/behind count against the base branch only in the base view; otherwise
-            # against the compared side
             out = worktree._diff_shape(spec["path"], ta, tb, base=spec["base"] if mode == "base" else "",
-                                       merge_base=spec["merge_base"] if mode == "base" else None,
                                        commits=commits, env=trees.env, uncommitted=uncommitted)
             return {**out, **extra, **({"note": spec["note"]} if spec.get("note") else {})}
         repos[spec["name"]] = _with_trees(spec, shape)

@@ -151,8 +151,10 @@ featx submit backend/rob/feature1 run --bin <emu> \
 featx submit backend/rob/feature1 --dry-run
 featx node show backend/rob/feature1                # 简洁研究记录；--json 输出 JSON
 featx node show backend/rob/feature1 --full --json # 完整节点上下文
-featx worktree changes backend/rob/feature1         # 基线以来的已提交和未提交改动
+featx worktree changes backend/rob/feature1         # base commit 以来的已提交和未提交改动
 ```
+
+worktree 的 base ref 只在创建时解析一次，并以完整 commit SHA 保存；上游分支之后移动不会改变节点的比较基线。JSON 返回完整的 base/HEAD SHA，CLI 文本和 Web UI 统一显示前 12 位。只有需要纠正记录或把旧节点的 ref 落成 commit 时，才使用 `featx worktree set-base NODE REF [--sub NAME]`。
 
 查看 Web UI：
 
@@ -162,8 +164,8 @@ featx ui
 
 按照输出建立 SSH tunnel，然后在浏览器打开 `/ui/`。Web UI 可以查看树、任务、runset、实时日志、后处理报告和容量配置。
 
-- 节点页：节点详情默认收起，recipes / scripts / worktree / notes 集中在 settings 页；runsets 表新增参数列（只在一行里显示各 runset 之间不同的关键参数，其余计为 `+N`，完整值在悬停提示里）和代码列（构建记录的 HEAD，加上“+N 未提交”标签）；勾选两个 runset 可对比代码，勾选任意数量可批量归档；可用“显示已归档”切换隐藏的 runset。
-- runset 页：post 与 files 合并为 results，problem log 与 provenance 合并为 details；参数卡片（build/run/post 三列，标出 `--set` 覆盖项，可展开完整 recipe）；代码页签（代码记录表：每个仓库的 HEAD、未提交改动、已保存/未保存的未跟踪文件；对比节点基线 = 该 runset 相对基线分支新增的改动，上一个 runset / 另一个 runset = 那之后的改动，当前 worktree = 该 runset 之后 worktree 的改动；显示漂移和“代码来自 runset”）；job 状态筛选（各状态带计数，含“全部”）；归档 / 取消归档按钮。
+- 节点页：runsets / submit / worktree / notes 四个页签，节点详情默认展开；配方和脚本收在 submit 页签内（默认折叠）；节点标题只显示名称、点击复制完整路径（runset 标题同理，复制完整 ref）；runsets 表新增参数列（只在一行里显示各 runset 之间不同的关键参数，其余计为 `+N`，完整值在悬停提示里）和代码列（构建记录的 HEAD，加上“+N 未提交”标签）；勾选两个 runset 可对比代码，勾选任意数量可批量归档；可用“显示已归档”切换隐藏的 runset。
+- runset 页：post 与 files 合并为 results，problem log 与 provenance 合并为 details；参数卡片（build/run/post 三列，标出 `--set` 覆盖项，可展开完整 recipe）；代码页签（代码记录表：每个仓库的 HEAD、未提交改动、已保存/未保存的未跟踪文件；对比节点基线 = 该 runset 相对 base commit 的改动，上一个 runset / 另一个 runset = 那之后的改动，当前 worktree = 该 runset 之后 worktree 的改动；显示漂移和“代码来自 runset”）；job 状态筛选（各状态带计数，含“全部”）；归档 / 取消归档按钮。
 - 任务页：按状态筛选（queued、running、blocked、succeeded、failed、cancelled）；被依赖失败自动取消的任务计入 blocked。
 - 未跟踪文件折叠为目录树（默认收起，显示“N 个文件在 K 个目录”）。
 

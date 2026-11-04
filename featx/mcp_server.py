@@ -194,7 +194,7 @@ def script_read(node: str, name: str) -> str:
 @tool
 def worktree_create(node: str, base: str | None = None, adopt_path: str | None = None,
                     sub_base: dict[str, str] | None = None) -> dict:
-    """Create or adopt a worktree; sub_base maps submodule names to their base refs."""
+    """Create or adopt a worktree; base refs are resolved once and saved as full commit SHAs."""
     if adopt_path:
         return service.worktree_create(node, path=adopt_path, adopt=True, base=base, sub_base=sub_base)
     return service.worktree_create(node, base=base, sub_base=sub_base)
@@ -202,7 +202,7 @@ def worktree_create(node: str, base: str | None = None, adopt_path: str | None =
 
 @tool
 def worktree_set_base(node: str, base: str, submodule: str = "") -> dict:
-    """Validate and replace a worktree or registered submodule comparison base."""
+    """Explicitly repair or migrate a comparison base, saving the resolved full commit."""
     return service.worktree_set_base(node, base, submodule)
 
 

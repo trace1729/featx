@@ -58,6 +58,37 @@ export function fmtTime(iso: string | undefined): string {
   return iso.replace("T", " ").replace(/([+-]\d\d:\d\d|Z)$/, "").slice(5, 16);
 }
 
+export function shortCommit(sha: string | null | undefined): string {
+  return (sha ?? "").slice(0, 12);
+}
+
+/** Copy text to the clipboard. The UI may be served over plain http, where navigator.clipboard
+ * does not exist, so fall back to a hidden textarea. */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the textarea */
+  }
+  try {
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.setAttribute("readonly", "");
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand?.("copy") ?? false;
+    document.body.removeChild(el);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export function ago(ts: number | undefined, translate: (text: string) => string = (s) => s): string {
   if (!ts) return translate("never");
   const d = Date.now() / 1000 - ts;

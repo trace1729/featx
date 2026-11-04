@@ -31,11 +31,12 @@ Every `## <topic> — <title>` section below is a help topic. Read one with
   (active|parked|done|abandoned), `evidence` (a list: `--evidence` adds, `--rm-evidence` removes;
   the API also accepts the full list), `tags`, `notes` (Markdown, the Notes tab) and `comment`
   (free-form thoughts). Other keys (git, moves, created) cannot be changed this way.
-- **Code changes**: `node_context.git` reports `ahead` and `files_changed` against the base;
-  `featx worktree changes NODE [--json]` lists committed and working-tree changes against each
-  repository's merge-base. The UI worktree tab and `GET /worktrees/changes?ref=NODE` expose the
-  same data, and `GET /worktrees/diff?ref=NODE&sub=&path=` returns one file's diff. Submodule
-  gitlinks are excluded from the superproject and shown separately.
+- **Code changes**: `node_context.git` reports the current full HEAD, `ahead` and `files_changed`
+  against the base commit; `featx worktree changes NODE [--json]` lists committed and
+  working-tree changes against that same commit. The UI worktree tab and
+  `GET /worktrees/changes?ref=NODE` expose the same data, and
+  `GET /worktrees/diff?ref=NODE&sub=&path=` returns one file's diff. Submodule gitlinks are
+  excluded from the superproject and shown separately.
 - **Node display**: `featx node show NODE` is a concise text view of the research record and
   recent runs. `--json` emits that brief view as JSON; `--full` selects the complete context as
   YAML, and `--full --json` selects the complete JSON context used by MCP. `--runsets 0` hides
@@ -87,8 +88,8 @@ changes, saved as `<runset>/code/<repo>.patch` (`super.patch`, `<sub with / as _
 patch holds the tracked edits and the small untracked (not ignored) files. Untracked files that
 look like build output are not saved but listed as `omitted`: a wholly untracked directory of
 more than 50 files (e.g. `build-vlt-1027/`), files over 1 MiB, symlinks, and anything beyond
-200 files / 8 MiB in total. `provenance.code` in `experiment.yaml` holds per repo `head`,
-`branch`, `base`, `merge_base`, `patch`, `files/added/deleted`, `untracked` and `omitted`, and
+200 files / 8 MiB in total. `provenance.code` in `experiment.yaml` holds per repo full `head` and
+`base` commit SHAs, `branch`, `patch`, `files/added/deleted`, `untracked` and `omitted`, and
 `provenance.drift` says when it no longer matches the binary:
 
 - `after submit`: the tree moved before the build launched, so it was re-recorded and re-keyed;
@@ -111,7 +112,7 @@ curl -H "X-Featx-Token: $TOKEN" "$URL/runsets/code?ref=wpe/overlay/20261012-1&ag
 `drift`, `source_runset` and `total`; `GET /runsets/code/diff?ref&against&sub&path` returns one
 file's diff. The `against` sides:
 
-- `base`: what the runset's code adds on top of the node's base branch (merge-base → runset);
+- `base`: what the runset's code adds on top of the node base commit (base → runset);
 - `prev` / a runset ref: what changed from that runset's code to this one's;
 - `worktree`: what the live worktree changed since this runset's code (runset → worktree now).
 
@@ -119,7 +120,9 @@ file's diff. The `against` sides:
 build (`--bin`) points at the runset whose bincache entry built that binary; an imported
 `ext-` binary has no code view. Older runsets (and the few built with the short-lived
 `refs/featx/runsets/*` snapshots) use the HEADs recorded at submit plus `src-patches/*.patch`
-(tracked changes only; their untracked files were never saved). MCP: `runset_code`.
+(tracked changes only; their untracked files were never saved). Old code records may also carry
+`merge_base`; it is used only as that record's saved historical comparison point, never recomputed
+or shown as separate node state. MCP: `runset_code`.
 
 ## launch — Launching a run directly
 
@@ -642,12 +645,14 @@ only confirmed orphans and emits one `orphan` event per kill. REST: `POST /reap 
   `a` and `a/b`), create is refused before anything changes. Pass `--branch NAME` in that case.
 - `--adopt --path DIR` registers an existing worktree. featx then never renames or deletes its branch.
 - Root and explicitly configured submodule bases are validated with `git rev-parse --verify`
-  before create/adoption saves anything. Set one with `--base REF` and `--sub-base NAME=REF`;
-  repair one later with `featx worktree set-base NODE REF [--sub NAME]`. An unresolved ref is an
-  error instead of a later misleading code display. `worktree status` includes merge-bases.
-- `featx worktree changes NODE [--json]` shows committed and uncommitted changes against the
-  merge-base. “Clean” in APIs means no uncommitted changes, not no branch changes; detached
-  submodule HEADs are normal. The web labels state these meanings explicitly.
+  before create/adoption saves anything. Set one with `--base REF` and `--sub-base NAME=REF`; the
+  ref is resolved once and stored as a full commit SHA, so later movement of `main`,
+  `ssh_origin/main` or another input ref does not change the node. A legacy node that still stores
+  a ref resolves it read-only (and so follows that ref) until `featx worktree set-base NODE REF
+  [--sub NAME]` saves the commit.
+- `featx worktree status` and `featx worktree changes NODE [--json]` use that base. JSON
+  carries full SHAs; CLI text and the Web UI show the first 12 characters. “Clean” means no
+  uncommitted changes, not no branch changes; detached submodule HEADs are normal.
 - `featx node mv` moves worktrees and renames the branches featx created. On a name clash it
   keeps the old branch name and reports it.
 - `featx worktree rename-branch NODE [--to NAME] [--dry-run]` renames a featx-created branch

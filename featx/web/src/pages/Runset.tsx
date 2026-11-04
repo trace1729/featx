@@ -6,10 +6,10 @@ import { api } from "../api";
 import { ChangesView, DiffView } from "../components/Changes";
 import { FileBrowser, FileView, Markdown } from "../components/FileViewer";
 import { LogTail } from "../components/LogTail";
-import { Badge, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
+import { Badge, CopyTitle, ErrorBox, Eta, Json, Loading, Progress, StateBadge, Tabs, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
 import type { CodeView, JobView, RecordRepo, RunsetSummary, TaskView } from "../types";
-import { countsText, fmtCount, fmtTime, fmtValue, overrideKeys, splitRunset } from "../util";
+import { countsText, fmtCount, fmtTime, fmtValue, overrideKeys, shortCommit, splitRunset } from "../util";
 import { PriorityControl } from "./Tasks";
 import { useI18n } from "../i18n";
 
@@ -337,7 +337,7 @@ function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; l
                   {r.shared ? <span className="muted"> ({t("shared")})</span> : null}
                 </td>
                 <td className="mono muted">{r.branch ?? ""}</td>
-                <td className="mono" title={r.head ?? undefined}>{(r.head ?? "").slice(0, 12)}</td>
+                <td className="mono" title={r.head ?? undefined}>{shortCommit(r.head)}</td>
                 <td>
                   {r.patch ? (
                     <span className="badge warn">
@@ -366,7 +366,7 @@ function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; l
       </table>
       {clean.length > 0 && (
         <div className="muted small">
-          {t("clean")} ({clean.length}): <span className="mono">{clean.map(([name, r]) => `${name}@${(r.head ?? "").slice(0, 8)}`).join(", ")}</span>
+          {t("clean")} ({clean.length}): <span className="mono">{clean.map(([name, r]) => `${name}@${shortCommit(r.head)}`).join(", ")}</span>
         </div>
       )}
     </div>
@@ -375,7 +375,7 @@ function RecordTable({ record, legacy }: { record: Record<string, RecordRepo>; l
 
 /** What a diff mode shows, as one hint line under the selector. */
 const AGAINST_HINT: Record<string, string> = {
-  base: "merge-base with the node base branch → this runset's code: what this runset adds",
+  base: "node base commit → this runset's code: what this runset adds",
   prev: "previous runset → this runset: what changed since it",
   runset: "the chosen runset → this runset",
   worktree: "this runset → the worktree now: what changed since this runset ran",
@@ -541,9 +541,7 @@ export function RunsetPage() {
         <Link to={`/node/${node}`}>{node}</Link> /
       </div>
       <div className="row">
-        <h1 style={{ margin: 0 }} className="mono">
-          {name}
-        </h1>
+        <CopyTitle text={rs.ref}>{name}</CopyTitle>
         {rs.sealed && <Badge kind="sealed">{t("sealed")}</Badge>}
         {rs.archived && <Badge kind="warn">{t("archived")}</Badge>}
         <span>{rs.purpose}</span>
@@ -553,7 +551,10 @@ export function RunsetPage() {
       </div>
       {rs.derived_from && (
         <p className="muted">
-          {t("derived from")} <Link to={`/runset/${rs.derived_from}`}>{rs.derived_from}</Link>
+          {t("derived from")}{" "}
+          <Link to={`/runset/${rs.derived_from}`} title={rs.derived_from}>
+            {rs.derived_from.startsWith(`${node}/`) ? rs.derived_from.slice(node.length + 1) : rs.derived_from}
+          </Link>
         </p>
       )}
       <div className="row" style={{ margin: "10px 0" }}>

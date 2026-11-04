@@ -88,11 +88,13 @@ function writes(): [string, Record<string, unknown>][] {
 
 const CTX = FIXTURES["/nodes/context"] as { node: Record<string, unknown> } & Record<string, unknown>;
 const withNode = (node: Record<string, unknown>, more: Record<string, unknown> = {}) => ({ ...CTX, ...more, node: { ...CTX.node, ...node } });
-const GIT = { repo: "/repo", base: "main", branch: "wpe", worktree: "/wt/wpe" };
+const BASE = "0123456789abcdef0123456789abcdef01234567";
+const HEAD = "d00d1e00d00d1e00d00d1e00d00d1e00d00d1e00";
+const GIT = { repo: "/repo", base: BASE, branch: "wpe", worktree: "/wt/wpe" };
 const CHANGES = {
   repos: {
-    "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc123", ahead: 1, behind: 0, added: 3, deleted: 1,
-      commits: [{ sha: "d00d1e", author: "me", when: "1 hour ago", subject: "try a wider window" }],
+    "": { path: "/wt/wpe", base: BASE, exists: true, ahead: 1, added: 3, deleted: 1,
+      commits: [{ sha: HEAD, author: "me", when: "1 hour ago", subject: "try a wider window" }],
       files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] },
   },
   total: { files: 1, added: 3, deleted: 1, ahead: 1 },
@@ -138,18 +140,42 @@ describe("App", () => {
     expect(calls.filter(([, init]) => init?.method && init.method !== "GET")).toEqual([]);
   });
 
-  it("combines advanced node sections under one settings tab", async () => {
+  it("shows worktree and notes as their own tabs, with recipes and scripts folded into submit", async () => {
     setToken("t0k");
-    renderAt("/node/wpe?tab=scripts");
-    await screen.findByText(/Child nodes inherit them/);
-    for (const name of ["runsets", "submit", "settings"]) expect(screen.getByRole("button", { name })).toBeTruthy();
-    for (const name of ["recipes", "scripts", "worktree", "notes"]) {
-      expect(screen.queryByRole("button", { name })).toBeNull();
-      expect(screen.getByRole("heading", { name })).toBeTruthy();
-    }
-    expect(screen.getByRole("button", { name: "settings" }).classList.contains("active")).toBe(true);
+    renderAt("/node/wpe?tab=worktree");
     await screen.findByRole("button", { name: "Create worktree…" });
+    for (const name of ["runsets", "submit", "worktree", "notes"]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "settings" })).toBeNull();
     expect(document.querySelectorAll(".crumbs").length).toBe(1);
+    // old links keep working: ?tab=scripts lands on submit with the section present
+    cleanup();
+    renderAt("/node/wpe?tab=scripts");
+    const folded = () => [...document.querySelectorAll("details.tab-section")].map((d) => (d as HTMLDetailsElement).id);
+    await waitFor(() => expect(folded()).toEqual(["recipes", "scripts"]));
+    for (const id of folded()) expect((document.getElementById(id) as HTMLDetailsElement).open).toBe(false);
+    fireEvent.click(screen.getByText("scripts", { selector: "summary" }));
+    expect((document.getElementById("scripts") as HTMLDetailsElement).open).toBe(true);
+    await screen.findByText(/Child nodes inherit them/);
+  });
+
+  it("shows a node's own name only and copies the full path from the title", async () => {
+    setToken("t0k");
+    extra["/nodes/context"] = withNode(
+      { path: "wpe/overlay" },
+      { ancestors: [{ path: "wpe" }], children: [{ path: "wpe/overlay/after", verdict: "open", hypothesis: "h" }] },
+    );
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: write }, configurable: true });
+    renderAt("/node/wpe/overlay");
+    const title = await screen.findByRole("heading", { level: 1 });
+    expect(title.textContent).toContain("overlay");
+    expect(title.textContent).not.toContain("wpe/overlay");
+    fireEvent.click(title);
+    await waitFor(() => expect(write).toHaveBeenCalledWith("wpe/overlay"));
+    // a child row shows its own segment, with the full path in the tooltip
+    const child = screen.getByRole("link", { name: "after" });
+    expect(child.getAttribute("title")).toBe("wpe/overlay/after");
+    expect(screen.queryByText("wpe/overlay/after")).toBeNull();
   });
 
   it("turns the submit presets into overrides and the CLI line", async () => {
@@ -215,7 +241,6 @@ describe("App", () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({ evidence: ["wpe/overlay/20261012-2", "note a"] });
     renderAt("/node/wpe");
-    fireEvent.click(await screen.findByText("Node details"));
     fireEvent.click(await screen.findByRole("button", { name: "remove evidence 2" }));
     await waitFor(() => expect(writes()).toEqual([["/nodes/update", { ref: "wpe", evidence: ["wpe/overlay/20261012-2"] }]]));
     fireEvent.click(screen.getAllByRole("button", { name: "edit" })[0]);
@@ -227,13 +252,13 @@ describe("App", () => {
     await waitFor(() => expect(writes()[2]).toEqual(["/nodes/update", { ref: "wpe", add_evidence: ["new note"] }]));
   });
 
-  it("saves the comment from the collapsed node details", async () => {
+  it("shows the node details open by default and saves the comment", async () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({ comment: "old idea" });
     renderAt("/node/wpe");
-    expect(screen.queryByDisplayValue("old idea")).toBeNull();
-    fireEvent.click(await screen.findByText("Node details"));
     const box = await screen.findByDisplayValue("old idea");
+    const details = document.querySelector("details.node-details") as HTMLDetailsElement;
+    expect(details.open).toBe(true);
     fireEvent.change(box, { target: { value: "maybe the prefetcher" } });
     expect(screen.getByText("unsaved")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Save" }).find((b) => !(b as HTMLButtonElement).disabled)!);
@@ -290,13 +315,16 @@ describe("App", () => {
   it("shows the worktree's code changes and a file diff", async () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({}, { git: GIT });
-    extra["/worktrees/status"] = { worktree: "/wt/wpe", branch: "wpe", exists: true, head: "d00d1e", dirty: 0 };
+    extra["/worktrees/status"] = { worktree: "/wt/wpe", branch: "wpe", base: BASE, exists: true, head: HEAD, dirty: 0 };
     extra["/worktrees/changes"] = CHANGES;
     extra["/worktrees/diff"] = { sub: "", path: "src/core.scala", diff: "--- a/src/core.scala\n+++ b/src/core.scala\n@@ -1 +1 @@\n-old\n+new", truncated: false };
     renderAt("/node/wpe?tab=worktree");
-    expect(await screen.findByText(/code changed: 1 file, \+3 −1, 1 commit ahead/)).toBeTruthy();
+    expect(await screen.findByText(/code changed: 1 file, \+3 −1, 1 commit since base/)).toBeTruthy();
     expect(await screen.findByText("Committed + working-tree changes vs base")).toBeTruthy();
     expect(await screen.findByText("no uncommitted changes")).toBeTruthy();
+    expect(screen.getByText(BASE.slice(0, 12)).getAttribute("title")).toBe(BASE);
+    expect(screen.getAllByText(HEAD.slice(0, 12)).length).toBe(2);
+    expect(screen.queryByText(/merge-base|behind/)).toBeNull();
     expect(await screen.findByText(/Submodule gitlinks are excluded/)).toBeTruthy();
     expect(await screen.findByText("try a wider window")).toBeTruthy();
     fireEvent.click(screen.getByText("src/core.scala"));
@@ -308,9 +336,9 @@ describe("App", () => {
   it("folds the untracked files into a collapsed directory tree", async () => {
     setToken("t0k");
     extra["/nodes/context"] = withNode({}, { git: GIT });
-    extra["/worktrees/status"] = { worktree: "/wt/wpe", branch: "wpe", exists: true, head: "d00d1e", dirty: 0 };
+    extra["/worktrees/status"] = { worktree: "/wt/wpe", branch: "wpe", base: BASE, exists: true, head: HEAD, dirty: 0 };
     extra["/worktrees/changes"] = {
-      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 0, behind: 0, files: [],
+      repos: { "": { path: "/wt/wpe", base: BASE, exists: true, ahead: 0, files: [],
         untracked: ["a/b/c/one.txt", "a/b/c/two.txt", "top.txt"], untracked_total: 3, untracked_truncated: false } },
       total: { files: 0, added: 0, deleted: 0, ahead: 0 },
     };
@@ -413,8 +441,8 @@ describe("App", () => {
       record: { "": { head: "abcdef1234567890", branch: "wpe", dirty: true, shared: false, files: 2, added: 9, deleted: 1,
         patch: "super.patch", untracked: 1, omitted: [{ path: "build-vlt/", files: 51, reason: "directory of more than 50 files" }], unsaved_untracked: 0 },
         difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: false, shared: true, files: 0, added: 0, deleted: 0, patch: null, untracked: 0, omitted: [], unsaved_untracked: 0 } },
-      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
-        commits: [{ sha: "d00d1e", author: "me", when: "1 hour ago", subject: "try a wider window" }],
+      repos: { "": { path: "/wt/wpe", base: BASE, exists: true, ahead: 1,
+        commits: [{ sha: HEAD, author: "me", when: "1 hour ago", subject: "try a wider window" }],
         files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] } },
       total: { files: 1, added: 3, deleted: 1, ahead: 1 },
     };
@@ -426,8 +454,8 @@ describe("App", () => {
     expect(record.textContent).toContain("abcdef123456");
     expect(record.textContent).toContain("2 files +9 −1");
     expect(record.textContent).toContain("1 not saved: build-vlt/");
-    expect(record.textContent).toContain("clean (1): difftest@99f77ff4");
-    expect(screen.getByTestId("against-hint").textContent).toContain("what this runset adds");
+    expect(record.textContent).toContain("clean (1): difftest@99f77ff45576");
+    expect(screen.getByTestId("against-hint").textContent).toContain("node base commit");
     fireEvent.change(screen.getByLabelText("against"), { target: { value: "worktree" } });
     await waitFor(() => {
       const urls = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([u]) => u);
@@ -444,10 +472,10 @@ describe("App", () => {
       record: { "": { head: "7a1cd62e2bbddc80", branch: "wpe", dirty: false, patch: null, untracked: 0, omitted: [], unsaved_untracked: 0 },
         difftest: { head: "99f77ff455766d18", branch: "HEAD", dirty: true, patch: "difftest.patch", files: 1, added: 3, deleted: 1,
           untracked: 0, omitted: [], unsaved_untracked: 2 } },
-      repos: { "": { path: "/wt/wpe", base: "main", exists: true, merge_base: "abc", ahead: 1, behind: 0,
+      repos: { "": { path: "/wt/wpe", base: BASE, exists: true, ahead: 1,
         commits: [{ sha: "7a1cd62", author: "me", when: "1 day ago", subject: "squash the migration" }],
         files: [{ status: "M", path: "src/core.scala", old_path: null, added: 3, deleted: 1, uncommitted: false }], untracked: [] },
-        difftest: { path: "/wt/wpe/difftest", base: "", exists: true, ahead: 0, behind: 0, commits: [], files: [], untracked: [] } },
+        difftest: { path: "/wt/wpe/difftest", base: "", exists: true, ahead: 0, commits: [], files: [], untracked: [] } },
       total: { files: 1, added: 3, deleted: 1, ahead: 1 },
     };
     renderAt("/runset/wpe/overlay/20261013-1?tab=code");
@@ -567,7 +595,7 @@ describe("App", () => {
     expect(cell.textContent).toBe("rW=1M +1");
     expect(cell.getAttribute("title")).toBe("run: spec06 · W=1M\n\nrun.dump_db = true");
     // the code column: HEAD plus a label for the uncommitted changes the build saved
-    expect(screen.getByText("01234567")).toBeTruthy();
+    expect(screen.getByText("0123456789ab")).toBeTruthy();
     expect(screen.getByRole("link", { name: /\+2 uncommitted/ }).getAttribute("href")).toBe("/runset/wpe/20261013-2?tab=code");
     expect(screen.queryByText(/build\.artifact/)).toBeNull();
     fireEvent.click(screen.getByLabelText("select wpe/20261013-1"));

@@ -126,6 +126,10 @@ dialog h2 { margin-top: 0; }
 .node-details > .card { margin-bottom: 0; }
 .tab-section { margin-bottom: 18px; }
 .tab-section > h2 { margin-top: 0; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+details.tab-section > summary { padding-bottom: 6px; border-bottom: 1px solid var(--line); font-weight: 600; cursor: pointer; }
+details.tab-section > summary:hover { color: var(--accent); }
+h1.copyable { cursor: pointer; }
+h1.copyable:hover { color: var(--accent); }
 .login { max-width: 460px; margin: 12vh auto; }
 .cm-editor { border: 1px solid var(--line); border-radius: 6px; font-size: 12px; max-width: 100%; }
 

@@ -132,7 +132,7 @@ def tree(root: Optional[str] = typer.Argument(None, help="subtree root"),
 def node_add(path: str, hypothesis: str = typer.Option("", "-H", "--hypothesis"),
              tag: List[str] = typer.Option([], "--tag"), parents: bool = typer.Option(False, "-p", "--parents"),
              worktree: bool = typer.Option(False, "-w", "--worktree", help="also create the node worktree"),
-             base: Optional[str] = typer.Option(None, help="worktree base ref (default git.base)")):
+             base: Optional[str] = typer.Option(None, help="base ref, saved as a full commit (default git.base)")):
     """Create a node, e.g. `featx node add wpe/real/after-anchor -p -H '...' -w`."""
     if not hypothesis.strip():
         typer.secho("featx: a hypothesis is recommended; add one with -H or edit it later on the node page",
@@ -159,12 +159,11 @@ def _node_brief_text(data: dict) -> None:
         typer.echo(f"Notes:\n{data['notes']}")
     git = data.get("git")
     if git:
-        typer.echo(f"Git: {git.get('head')} {git.get('branch')} @ {git.get('base')}; "
-                   f"merge-base {git.get('merge_base', '<none>')}; "
-                   f"{git.get('dirty', 0)} uncommitted change(s)")
+        typer.echo(f"Git: {git.get('branch')}; base {(git.get('base') or '')[:12]}; "
+                   f"HEAD {(git.get('head') or '')[:12]}; {git.get('dirty', 0)} uncommitted change(s)")
         for name, sub in (git.get("submodules") or {}).items():
-            typer.echo(f"  {name}: {sub.get('head')} {sub.get('branch')} @ {sub.get('base') or '<unset>'}; "
-                       f"merge-base {sub.get('merge_base', '<none>')}; {sub.get('dirty', 0)} uncommitted change(s)")
+            typer.echo(f"  {name}: {sub.get('branch')}; base {(sub.get('base') or '')[:12] or '<unset>'}; "
+                       f"HEAD {(sub.get('head') or '')[:12]}; {sub.get('dirty', 0)} uncommitted change(s)")
     typer.echo(f"Runsets: {data['runset_count']} ({data['archived_count']} archived)")
     for rs in data["runsets"]:
         typer.echo(f"  {rs['ref']}: {rs['purpose'] or '-'}")
@@ -334,7 +333,7 @@ def worktree_create(ref: str, base: Optional[str] = None, branch: Optional[str] 
 @guarded
 def worktree_set_base(ref: str, base: str,
                       sub: Optional[str] = typer.Option(None, "--sub", help="registered submodule name")):
-    """Set and validate a worktree or submodule comparison base."""
+    """Explicitly repair or migrate a comparison base; the ref is saved as a commit."""
     c = via_daemon()
     body = {"ref": ref, "base": base, "sub": sub or ""}
     out(c.post("/worktrees/base", body) if c else service.worktree_set_base(ref, base, sub or ""))
@@ -359,21 +358,20 @@ def worktree_status(ref: str):
 @wt_app.command("changes")
 @guarded
 def worktree_changes(ref: str, as_json: bool = typer.Option(False, "--json")):
-    """Committed and working-tree changes against each repository's merge-base."""
+    """Committed and working-tree changes against each repository's base commit."""
     result = service.worktree_changes(ref)
     if as_json:
         out(result)
         return
     for name, repo in result["repos"].items():
-        typer.echo(f"{name or 'worktree'}: base {repo.get('base') or '<unset>'}, "
-                   f"merge-base {repo.get('merge_base', '<none>')}")
+        typer.echo(f"{name or 'worktree'}: base {(repo.get('base') or '')[:12] or '<unset>'}")
         if repo.get("error"):
             typer.echo(f"  error: {repo['error']}")
             continue
-        typer.echo(f"  ahead {repo.get('ahead', 0)}, behind {repo.get('behind', 0)}; "
+        typer.echo(f"  {repo.get('ahead', 0)} commit(s) since base; "
                    f"+{repo.get('added', 0)} -{repo.get('deleted', 0)}")
         for commit in repo.get("commits", []):
-            typer.echo(f"  {commit['sha']} {commit['subject']}")
+            typer.echo(f"  {commit['sha'][:12]} {commit['subject']}")
         for file in repo.get("files", []):
             typer.echo(f"  {file['status']} {file['path']} +{file['added'] or 0} -{file['deleted'] or 0}")
         if repo.get("untracked_total"):

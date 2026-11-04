@@ -6,19 +6,20 @@ import { api } from "../api";
 import { AddNodeDialog, MoveDialog, RemoveDialog } from "../components/NodeDialogs";
 import { ChangesView } from "../components/Changes";
 import { Markdown } from "../components/FileViewer";
-import { Badge, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
+import { Badge, CopyTitle, Dialog, ErrorBox, Loading, StateBadge, Tabs, VerdictMark, useAction } from "../components/ui";
 import { YamlEditor } from "../components/YamlEditor";
 import type { Changes, CheckpointSet, ConfigView, NodeContext, RunsetSummary } from "../types";
-import { NO_PRESETS, checkpointGroups, coveredByTokens, deepMerge, paramTokens, sharedTokens, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
+import { NO_PRESETS, checkpointGroups, coveredByTokens, deepMerge, paramTokens, sharedTokens, shortCommit, fmtTime, fmtValue, loadStored, metricLabel, parseCsv, parseOverrides, presetOverrides, saveStored, setFlags, usePersistentState } from "../util";
 import type { QuickPresets } from "../util";
 import { useI18n } from "../i18n";
 
 const VERDICTS = ["open", "supported", "refuted", "inconclusive"];
 const STATUSES = ["active", "parked", "done", "abandoned"];
 const KINDS = ["build", "run", "post"] as const;
-const TABS = ["runsets", "submit", "settings"] as const;
+const TABS = ["runsets", "submit", "worktree", "notes"] as const;
 type Tab = (typeof TABS)[number];
-const NODE_TAB_ALIASES: Record<string, Tab> = { recipes: "settings", scripts: "settings", worktree: "settings", notes: "settings" };
+// recipes and scripts live inside the submit tab now; old ?tab= links keep working
+const NODE_TAB_ALIASES: Record<string, Tab> = { recipes: "submit", scripts: "submit", settings: "runsets" };
 
 function useInvalidateNode() {
   const qc = useQueryClient();
@@ -111,7 +112,7 @@ function CodeCell({ rs }: { rs: RunsetSummary }) {
   ].filter(Boolean).join("\n");
   return (
     <span className="mono small" style={{ whiteSpace: "nowrap" }} title={title}>
-      <span className={code.legacy ? "muted" : undefined}>{code.head.slice(0, 8)}</span>
+      <span className={code.legacy ? "muted" : undefined}>{shortCommit(code.head)}</span>
       {u ? (
         <Link to={`/runset/${rs.ref}?tab=code`} className="badge warn" style={{ marginLeft: 4 }}>
           +{u.files} {t("uncommitted")} <span className="diff-add">+{u.added}</span> <span className="diff-del">−{u.deleted}</span>
@@ -253,6 +254,10 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
   const nav = useNavigate();
   const qc = useQueryClient();
   const act = useAction();
+  // folded sections stay unmounted until opened, so their editors and fetches only run on demand
+  const hash = useLocation().hash;
+  const [showRecipes, setShowRecipes] = useState(hash === "#recipes");
+  const [showScripts, setShowScripts] = useState(hash === "#scripts");
   const [stored, setStored] = usePersistentState<SubmitForm>(`submit:${ctx.node.path}`, initialForm());
   const form: SubmitForm = { ...EMPTY_FORM, ...stored, quick: { ...NO_PRESETS, ...stored.quick } };
   const { kinds, bin, points, postSteps, overrides, purpose, priority, quick } = form;
@@ -445,6 +450,14 @@ function SubmitTab({ ctx }: { ctx: NodeContext }) {
         </span>
         <ErrorBox error={act.error} />
       </div>
+      <details className="tab-section" id="recipes" open={showRecipes} onToggle={(e) => setShowRecipes(e.currentTarget.open)}>
+        <summary>{t("recipes")}</summary>
+        {showRecipes && <RecipesTab ctx={ctx} />}
+      </details>
+      <details className="tab-section" id="scripts" open={showScripts} onToggle={(e) => setShowScripts(e.currentTarget.open)}>
+        <summary>{t("scripts")}</summary>
+        {showScripts && <ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} />}
+      </details>
     </div>
   );
 }
@@ -567,12 +580,12 @@ function ScriptsTab({ ctx }: { ctx: NodeContext }) {
 interface WtStatus {
   worktree: string;
   branch: string;
+  base: string;
   exists: boolean;
   head?: string;
   dirty?: number;
-  merge_base?: string;
   error?: string;
-  submodules?: Record<string, { branch: string; path: string; head: string; dirty: number; base: string; merge_base?: string; ahead?: number; error?: string }>;
+  submodules?: Record<string, { branch: string; path: string; head: string; dirty: number; base: string; ahead?: number; error?: string }>;
 }
 
 function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => void }) {
@@ -586,8 +599,8 @@ function CreateWorktreeDialog({ path, onClose }: { path: string; onClose: () => 
       <div className="form">
         <label>{t("repo")}</label>
         <input type="text" className="mono" autoFocus value={repo} onChange={(e) => setRepo(e.target.value)} placeholder={t("default: git.repo from featx.yaml")} />
-        <label>{t("base")}</label>
-        <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder={t("default: git.base from featx.yaml")} />
+        <label>{t("base ref")}</label>
+        <input type="text" className="mono" value={base} onChange={(e) => setBase(e.target.value)} placeholder={t("default: git.base from featx.yaml; resolved at creation")} />
       </div>
       <p className="muted small">{t("Creates the worktree and branch featx/{path} (and the configured submodule worktrees). This takes a while.", { path })}</p>
       <ErrorBox error={act.error} />
@@ -636,25 +649,24 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
     );
   }
   const g = ctx.git;
+  const base = q.data?.base ?? g.base;
   return (
     <div>
       <div className="kv">
         <span>worktree</span>
         <span className="mono">{g.worktree}</span>
+        <span>{t("repo")}</span>
+        <span className="mono">{g.repo}</span>
+        <span>{t("base commit")}</span>
+        <span className="mono" title={base}>{shortCommit(base)}</span>
         <span>{t("branch / checkout")}</span>
         <span className="mono">
-          {g.branch === "HEAD" ? t("detached at pinned commit {head}", { head: q.data?.head ?? "" }) : g.branch}
-        </span>
-        <span>{t("repo / base")}</span>
-        <span className="mono">
-          {g.repo} @ {g.base}
+          {g.branch === "HEAD" ? t("detached at pinned commit {head}", { head: shortCommit(q.data?.head) }) : g.branch}
         </span>
         {q.data && (
           <>
-            <span>head</span>
-            <span className="mono">{q.data.head}</span>
-            <span>merge-base</span>
-            <span className="mono">{q.data.merge_base ?? t("unavailable")}</span>
+            <span>HEAD</span>
+            <span className="mono" title={q.data.head}>{shortCommit(q.data.head)}</span>
             <span>{t("uncommitted state")}</span>
             <span>
               {!q.data.exists ? (
@@ -672,7 +684,23 @@ function WorktreeTab({ ctx }: { ctx: NodeContext }) {
       {q.data?.submodules && Object.keys(q.data.submodules).length > 0 && (
         <>
           <h3>{t("submodule worktrees")}</h3>
-          <pre className="mono">{YAML.stringify(q.data.submodules)}</pre>
+          <table className="small">
+            <thead><tr><th>{t("repo")}</th><th>{t("branch")}</th><th>{t("base commit")}</th><th>HEAD</th><th>{t("uncommitted")}</th></tr></thead>
+            <tbody>
+              {Object.entries(q.data.submodules).map(([name, s]) => (
+                <Fragment key={name}>
+                  <tr>
+                    <td className="mono" title={s.path}>{name}</td>
+                    <td className="mono">{s.branch}</td>
+                    <td className="mono" title={s.base}>{shortCommit(s.base)}</td>
+                    <td className="mono" title={s.head}>{shortCommit(s.head)}</td>
+                    <td>{s.dirty}</td>
+                  </tr>
+                  {s.error && <tr><td colSpan={5} className="notice small">{s.error}</td></tr>}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
         </>
       )}
       <ErrorBox error={q.error} />
@@ -778,10 +806,10 @@ function ChangesBadge({ path }: { path: string }) {
   const t = q.data?.total;
   if (!t || (!t.files && !t.ahead)) return null;
   return (
-    <Link to={`/node/${path}?tab=settings#worktree`} title={translate("code that differs from the base (see node settings)")}>
+    <Link to={`/node/${path}?tab=worktree`} title={translate("code that differs from the base (see the worktree tab)")}>
       <Badge kind="warn">
         {translate("code changed: {files} file{suffix}, +{added} −{deleted}", { files: t.files, suffix: language === "zh" || t.files === 1 ? "" : "s", added: t.added, deleted: t.deleted })}
-        {t.ahead ? translate(", {count} commit{suffix} ahead", { count: t.ahead, suffix: language === "zh" || t.ahead === 1 ? "" : "s" }) : ""}
+        {t.ahead ? translate(", {count} commit{suffix} since base", { count: t.ahead, suffix: language === "zh" || t.ahead === 1 ? "" : "s" }) : ""}
       </Badge>
     </Link>
   );
@@ -870,7 +898,7 @@ function Header({ ctx }: { ctx: NodeContext }) {
   const [note, setNote] = useState(n.verdict_note);
   const [comment, setComment] = useState(n.comment ?? "");
   const [dialog, setDialog] = useState<"add" | "mv" | "rm" | null>(null);
-  const [detailsOpen, setDetailsOpen] = useState(hash === "#verdict-evidence");
+  const [detailsOpen, setDetailsOpen] = useState(true);
   useEffect(() => {
     setHyp(n.hypothesis);
     setNote(n.verdict_note);
@@ -895,9 +923,9 @@ function Header({ ctx }: { ctx: NodeContext }) {
         ))}
       </div>
       <div className="row">
-        <h1 style={{ margin: 0 }}>
-          <VerdictMark verdict={n.verdict} /> <span className="mono">{n.path}</span>
-        </h1>
+        <CopyTitle text={n.path}>
+          <VerdictMark verdict={n.verdict} /> {n.path.split("/").pop()}
+        </CopyTitle>
         <Badge>{t(n.kind)}</Badge>
         {n.tags.map((t) => (
           <Badge key={t} kind="tag">
@@ -1001,13 +1029,15 @@ export function NodePage() {
       <Tabs tabs={TABS} value={tab} onChange={(t) => setSp({ tab: t }, { replace: true })} />
       {tab === "runsets" && <RunsetsTab ctx={ctx} showArchived={showArchived} onShowArchived={setShowArchived} />}
       {tab === "submit" && <SubmitTab ctx={ctx} />}
-      {tab === "settings" && (
-        <div className="node-settings">
-          <section className="tab-section" id="recipes"><h2>{t("recipes")}</h2><RecipesTab ctx={ctx} /></section>
-          <section className="tab-section" id="scripts"><h2>{t("scripts")}</h2><ScriptsTab key={`scripts:${ctx.node.id}`} ctx={ctx} /></section>
-          <section className="tab-section" id="worktree"><h2>{t("worktree")}</h2><WorktreeTab ctx={ctx} /></section>
-          <section className="tab-section" id="notes"><h2>{t("notes")}</h2><NotesTab key={`notes:${ctx.node.id}`} ctx={ctx} /></section>
-        </div>
+      {tab === "worktree" && (
+        <section className="tab-section" id="worktree">
+          <WorktreeTab ctx={ctx} />
+        </section>
+      )}
+      {tab === "notes" && (
+        <section className="tab-section" id="notes">
+          <NotesTab key={`notes:${ctx.node.id}`} ctx={ctx} />
+        </section>
       )}
       {ctx.children.length > 0 && (
         <>
@@ -1015,7 +1045,11 @@ export function NodePage() {
           <ul>
             {ctx.children.map((c) => (
               <li key={c.path}>
-                <VerdictMark verdict={c.verdict} /> <Link to={`/node/${c.path}`}>{c.path}</Link> <span className="muted">{c.hypothesis}</span>
+                <VerdictMark verdict={c.verdict} />{" "}
+                <Link to={`/node/${c.path}`} title={c.path}>
+                  {c.path.slice(ctx.node.path.length + 1)}
+                </Link>{" "}
+                <span className="muted">{c.hypothesis}</span>
               </li>
             ))}
           </ul>

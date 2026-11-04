@@ -32,7 +32,7 @@ def kind_for_depth(depth: int) -> str:
 
 class SubWorktree(BaseModel):
     repo: str                 # the submodule's main checkout (where `git worktree add` runs)
-    base: str
+    base: str                 # full commit SHA; legacy records may contain a ref
     branch: str
     path: str
     managed: bool | None = None   # featx created the branch (None = recorded before the field)
@@ -40,7 +40,7 @@ class SubWorktree(BaseModel):
 
 class GitInfo(BaseModel):
     repo: str
-    base: str
+    base: str                 # full commit SHA; legacy records may contain a ref
     branch: str
     worktree: str
     submodule_worktrees: dict[str, SubWorktree] = Field(default_factory=dict)

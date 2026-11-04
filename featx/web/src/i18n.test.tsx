@@ -20,7 +20,7 @@ function files(dir: string): string[] {
 it("has Chinese entries for literal translation keys across the UI", () => {
   const missing = new Set<string>();
   const dynamic = new Set(["TABS", "TYPES", "STATUSES", "VERDICTS", "STATE_CHIPS", "JOB_STATES", "STATE_ORDER", "KINDS", "AGAINST_HINT", "known"]);
-  const rawAllowed = new Set(["featx", "· tick", "st", "stdout", "EN", "CLI: featx help", "seq", "cat", "chiseldb", "chiselmap", "W", "I", "spec-score", "featx submit", "· featx recipe set", "-f FILE", "featx worktree create", "worktree", "head", "merge-base", "· featx node update", "--notes …", "ETA", "rc", "post/", "HEAD", "bin", "checkpoint", "trace", "exec", "compare/collect-cache:"]);
+  const rawAllowed = new Set(["featx", "· tick", "st", "stdout", "EN", "CLI: featx help", "seq", "cat", "chiseldb", "chiselmap", "W", "I", "spec-score", "featx submit", "· featx recipe set", "-f FILE", "featx worktree create", "worktree", "· featx node update", "--notes …", "ETA", "rc", "post/", "HEAD", "bin", "checkpoint", "trace", "exec", "compare/collect-cache:"]);
   const inspect = (node: ts.Node) => {
     if (ts.isJsxText(node) && /[a-z]/i.test(node.text) && !rawAllowed.has(node.text.trim())) missing.add(`untranslated JSX: ${node.text.trim()}`);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && dynamic.has(node.name.text) && node.initializer) {

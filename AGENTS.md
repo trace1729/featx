@@ -49,7 +49,7 @@ featx result <node>/<YYYYMMDD-n> [--json]
 
 - `node show` is the concise research record; `--runsets 0` hides runsets and negative
   counts are invalid.
-- `worktree changes` lists committed + uncommitted changes against each merge-base.
+- `worktree changes` lists committed + uncommitted changes against the base commit.
 - Gitlinks get their own submodule section; detached submodule HEADs are normal.
 
 ## 4. Start and configure an exploration
@@ -73,8 +73,9 @@ featx recipe set <node> post -f post.yaml   # replaces the node layer
 
 Recipe precedence: defaults → workload → root → ancestors → node → submit `--set`.
 
-- Validate base refs before registration; do not invent a submodule base. Repair
-  later with `featx worktree set-base <node> <ref> [--sub TraceRTL]`.
+- Resolve base refs before registration and save full commit SHAs; do not invent a submodule base.
+  Later branch movement does not change the base. Use `featx worktree set-base <node> <ref>
+  [--sub TraceRTL]` only for explicit repair or migration of a legacy ref.
 - Keep source unchanged during recording/compilation to avoid binary drift.
 - Inline `key.path=value` merges; `null` deletes an inherited key; lists replace.
 - Exec needs matching checkpoint/reference/restorer; trace needs matching trace

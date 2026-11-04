@@ -78,10 +78,11 @@ export interface RunsetSummary {
 
 export interface GitInfo {
   repo: string;
+  /** Full commit SHA; the server resolves refs in legacy records. */
   base: string;
   branch: string;
   worktree: string;
-  submodule_worktrees?: Record<string, { repo: string; branch: string; path: string }>;
+  submodule_worktrees?: Record<string, { repo: string; base: string; branch: string; path: string }>;
 }
 
 export interface NodeContext {
@@ -336,12 +337,11 @@ export interface CodeFile {
 
 export interface CodeRepo {
   path: string;
+  /** Full comparison commit SHA; the UI displays a consistent short form. */
   base: string;
   exists: boolean;
   error?: string;
-  merge_base?: string;
   ahead?: number;
-  behind?: number;
   commits?: { sha: string; author: string; when: string; subject: string }[];
   files?: CodeFile[];
   untracked?: string[];

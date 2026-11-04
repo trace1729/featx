@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { useI18n } from "../i18n";
 import { Badge, ErrorBox, Loading } from "./ui";
-import { foldUntracked, untrackedDirCount, type UntrackedNode } from "../util";
+import { foldUntracked, shortCommit, untrackedDirCount, type UntrackedNode } from "../util";
 import type { Changes, CodeRepo } from "../types";
 
 export type DiffFetcher = (sub: string, path: string) => Promise<{ diff: string; truncated: boolean }>;
@@ -133,13 +133,12 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
     <div className="card">
       <h3 style={{ marginTop: 0 }}>
         {title}{" "}
-        <span className="muted small mono">
-          {vs ? `${t("vs")} ${vs}` : r.base ? `${t("vs")} ${r.base}` : ""}
-          {r.merge_base ? ` (merge-base ${r.merge_base})` : ""}
+        <span className="muted small mono" title={vs ? undefined : r.base}>
+          {vs ? `${t("vs")} ${vs}` : r.base ? `${t("vs")} ${shortCommit(r.base)}` : ""}
         </span>
       </h3>
       <div className="muted small">
-        {t("{ahead} commit(s) ahead, {behind} behind · {files} file(s) changed, +{added} −{deleted}", { ahead: r.ahead ?? 0, behind: r.behind ?? 0, files: files.length, added: r.added ?? 0, deleted: r.deleted ?? 0 })}
+        {t("{ahead} commit(s) · {files} file(s) changed, +{added} −{deleted}", { ahead: r.ahead ?? 0, files: files.length, added: r.added ?? 0, deleted: r.deleted ?? 0 })}
         {total > 0 && t(" · {count} untracked", { count: total })}
       </div>
       {r.note && <div className="muted small">{r.note}</div>}
@@ -150,7 +149,7 @@ export function RepoChangesView({ r, sub, scope, fetchDiff, rootLabel = "worktre
           <tbody>
             {r.commits!.map((c) => (
               <tr key={c.sha}>
-                <td className="mono">{c.sha}</td>
+                <td className="mono" title={c.sha}>{shortCommit(c.sha)}</td>
                 <td>{c.subject}</td>
                 <td className="muted">{c.author}</td>
                 <td className="muted">{c.when}</td>

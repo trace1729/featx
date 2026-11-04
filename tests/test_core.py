@@ -418,6 +418,7 @@ def test_worktree_changes_and_diff(root, tmp_path):
     (repo / ".gitmodules").write_text('[submodule "shared"]\n\tpath = shared\n\turl = x\n')
     _git("add", ".", cwd=repo)
     _git("commit", "-q", "-m", "base", cwd=repo)
+    base = worktree.validate_base(str(repo), "main")
     _git("worktree", "add", "-q", "-b", "c", str(wt), "main", cwd=repo)
     (wt / "a.txt").write_text("one\ntwo\n")
     _git("commit", "-q", "-am", "add two", cwd=wt)
@@ -427,15 +428,17 @@ def test_worktree_changes_and_diff(root, tmp_path):
     (wt / "b.txt").write_text("new\nmore\n")              # uncommitted
     (wt / "u.txt").write_text("untracked\n")
     os.symlink(tmp_path, wt / "shared")                   # a shared submodule symlink: not a change
-    _git("commit", "-q", "--allow-empty", "-m", "upstream", cwd=repo)   # base moves on
+    _git("commit", "-q", "--allow-empty", "-m", "upstream", cwd=repo)   # the original ref moves on
     e = Tree().add("c")
-    e.node.git = GitInfo(repo=str(repo), base="main", branch="c", worktree=str(wt))
+    e.node.git = GitInfo(repo=str(repo), base=base, branch="c", worktree=str(wt))
     store.write_yaml(e.dir / "node.yaml", e.node.model_dump())
 
     ch = service.worktree_changes("c")
     r = ch["repos"][""]
-    assert (r["ahead"], r["behind"]) == (2, 1)
+    assert r["ahead"] == 2 and r["base"] == base
+    assert "merge_base" not in r and "behind" not in r
     assert [c["subject"] for c in r["commits"]] == ["add b", "add two"]
+    assert all(len(c["sha"]) == 40 for c in r["commits"])
     files = {f["path"]: f for f in r["files"]}
     assert set(files) == {"a.txt", "b.txt"}
     assert files["b.txt"]["status"] == "A" and files["b.txt"]["added"] == 2 and files["b.txt"]["uncommitted"]
@@ -443,7 +446,8 @@ def test_worktree_changes_and_diff(root, tmp_path):
     assert r["untracked"] == ["u.txt"]
     assert ch["total"] == {"files": 3, "added": 3, "deleted": 0, "ahead": 2}
     st = service.worktree_status("c")
-    assert st["ahead"] == 2 and st["files_changed"] == 2 and st["merge_base"]
+    assert st["ahead"] == 2 and st["files_changed"] == 2 and st["base"] == base
+    assert len(st["head"]) == 40 and "merge_base" not in st and "behind" not in st
     d = service.worktree_diff("c", "", "a.txt")["diff"]
     assert "+two" in d and "a/a.txt" in d
     assert "+untracked" in service.worktree_diff("c", "", "u.txt")["diff"]
@@ -456,13 +460,15 @@ def test_worktree_changes_and_diff(root, tmp_path):
 def test_worktree_base_validation_and_repair(root, tmp_path):
     import json
     from typer.testing import CliRunner
-    from featx import cli
+    from featx import cli, worktree
 
     repo, wt = tmp_path / "repo", tmp_path / "wt"
     sub, sub_wt = tmp_path / "sub", wt / "TraceRTL"
     for path in (repo, sub):
         _git("init", "-q", "-b", "main", str(path))
         _git("commit", "-q", "--allow-empty", "-m", "base", cwd=path)
+    root_base = worktree.validate_base(str(repo), "main")
+    sub_base = worktree.validate_base(str(sub), "main")
     _git("worktree", "add", "-q", "-b", "feature", str(wt), "main", cwd=repo)
     _git("worktree", "add", "-q", "--detach", str(sub_wt), "main", cwd=sub)
     Tree().add("adopt")
@@ -477,25 +483,41 @@ def test_worktree_base_validation_and_repair(root, tmp_path):
     assert Tree().get("adopt").node.git is None
     service.worktree_create("adopt", repo=str(repo), path=str(wt), base="main", adopt=True,
                             submodules=["TraceRTL"], sub_base={"TraceRTL": "main"})
+    recorded = Tree().get("adopt").node.git
+    assert recorded.base == root_base
+    assert recorded.submodule_worktrees["TraceRTL"].base == sub_base
     status = service.worktree_status("adopt")
-    assert status["merge_base"] and status["submodules"]["TraceRTL"]["merge_base"]
-    assert status["submodules"]["TraceRTL"]["base"] == "main"
+    assert status["base"] == root_base and status["submodules"]["TraceRTL"]["base"] == sub_base
+    assert len(status["head"]) == 40 and len(status["submodules"]["TraceRTL"]["head"]) == 40
+    assert "merge_base" not in status and "merge_base" not in status["submodules"]["TraceRTL"]
+    entry = Tree().get("adopt")
+    entry.node.git.submodule_worktrees["TraceRTL"].base = "main"       # legacy stored ref
+    Tree().save(entry)
+    assert service.worktree_status("adopt")["submodules"]["TraceRTL"]["base"] == sub_base
+    assert service.worktree_set_base("adopt", "main", "TraceRTL")["submodules"]["TraceRTL"]["ahead"] == 0
     with pytest.raises(TreeError, match="does not resolve"):
         service.worktree_set_base("adopt", "missing", "TraceRTL")
-    assert Tree().get("adopt").node.git.submodule_worktrees["TraceRTL"].base == "main"
-    assert service.worktree_set_base("adopt", "main", "TraceRTL")["submodules"]["TraceRTL"]["ahead"] == 0
+    assert Tree().get("adopt").node.git.submodule_worktrees["TraceRTL"].base == sub_base
 
     result = CliRunner().invoke(cli.app, ["worktree", "changes", "adopt", "--json"])
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["total"]["ahead"] == 0
+    payload = json.loads(result.output)
+    assert payload["total"]["ahead"] == 0 and payload["repos"][""]["base"] == root_base
+    assert "merge_base" not in payload["repos"][""] and "behind" not in payload["repos"][""]
     text = CliRunner().invoke(cli.app, ["worktree", "changes", "adopt"])
     assert "Submodule gitlinks are excluded" in text.output
+    assert root_base[:12] in text.output and "merge-base" not in text.output and "behind" not in text.output
 
     Tree().add("create")
     dest = tmp_path / "new-worktree"
     with pytest.raises(TreeError, match="does not resolve"):
         service.worktree_create("create", repo=str(repo), path=str(dest), base="missing", submodules=[])
     assert not dest.exists() and Tree().get("create").node.git is None
+    created = service.worktree_create("create", repo=str(repo), path=str(dest), base="main", submodules=[])
+    assert created["base"] == root_base and Tree().get("create").node.git.base == root_base
+    _git("commit", "-q", "--allow-empty", "-m", "upstream", cwd=repo)
+    assert service.worktree_status("create")["base"] == root_base
+    assert service.worktree_changes("create")["repos"][""]["base"] == root_base
 
 
 def test_result_summary_digests_submit_time_echo_and_lists_failures(root):

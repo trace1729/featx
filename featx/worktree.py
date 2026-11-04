@@ -74,6 +74,13 @@ def validate_base(repo: str, base: str, *, label: str = "base") -> str:
     return commit
 
 
+def resolved_base(repo: str, base: str) -> str:
+    """Full commit for a stored base; legacy records may still contain a ref."""
+    if not base:
+        return ""
+    return run_git(["-C", repo, "rev-parse", "--verify", f"{base}^{{commit}}"], check=False).strip() or base
+
+
 def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = None,
            branch: str | None = None, path: str | None = None,
            submodules: list[str] | None = None, sub_base: dict[str, str] | None = None,
@@ -89,7 +96,7 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
     wt_path = Path(path) if path else default_path(entry.rel)
     submodules = gset.get("submodule_worktrees", []) if submodules is None else submodules
     sub_base = sub_base or {}
-    validate_base(repo, base)
+    base = validate_base(repo, base)
 
     if adopt:
         if not wt_path.is_dir():
@@ -99,10 +106,11 @@ def create(tree: Tree, ref: str, *, repo: str | None = None, base: str | None = 
         for sub in submodules:
             sp = wt_path / sub
             if sp.is_dir() and not sp.is_symlink() and (sp / ".git").exists():
-                if sub_base.get(sub):
-                    validate_base(str(sp), sub_base[sub], label=f"{sub} base")
+                sub_base_ref = sub_base.get(sub, "")
+                if sub_base_ref:
+                    sub_base_ref = validate_base(str(sp), sub_base_ref, label=f"{sub} base")
                 info.submodule_worktrees[sub] = SubWorktree(
-                    repo=str(Path(repo) / sub), base=sub_base.get(sub, ""),
+                    repo=str(Path(repo) / sub), base=sub_base_ref,
                     branch=run_git(["-C", str(sp), "rev-parse", "--abbrev-ref", "HEAD"]), path=str(sp),
                     managed=False)
     else:
@@ -133,11 +141,11 @@ def _sub_worktree(repo: str, base: str, wt: Path, sub: str, branch: str, sub_bas
     sub_repo = Path(repo) / sub
     if not (sub_repo / ".git").exists():
         raise TreeError(f"submodule {sub} not checked out in {repo}")
-    # Default base: the commit the superproject's base branch records for this submodule.
+    # Default base: the commit the superproject's base records for this submodule.
     if not sub_base:
         line = run_git(["-C", repo, "ls-tree", base, sub])
         sub_base = line.split()[2] if line else "HEAD"
-    validate_base(str(sub_repo), sub_base, label=f"{sub} base")
+    sub_base = validate_base(str(sub_repo), sub_base, label=f"{sub} base")
     dst = wt / sub
     if dst.is_symlink():
         dst.unlink()
@@ -340,39 +348,37 @@ def status(node: Node) -> dict:
     git = node.git
     if not git:
         return {}
-    out = {"worktree": git.worktree, "branch": git.branch, "repo": git.repo, "base": git.base,
-           "exists": Path(git.worktree).is_dir()}
+    out = {"worktree": git.worktree, "branch": git.branch, "repo": git.repo,
+           "base": resolved_base(git.repo, git.base), "exists": Path(git.worktree).is_dir()}
     if out["exists"]:
-        out["head"] = run_git(["-C", git.worktree, "rev-parse", "--short", "HEAD"], check=False)
+        out["head"] = run_git(["-C", git.worktree, "rev-parse", "--verify", "HEAD"], check=False)
         porcelain = run_git(["-C", git.worktree, "status", "--porcelain", "--ignore-submodules=all"],
                             check=False)
         out["dirty"] = len(porcelain.splitlines())
         subs = {}
         for name, sub in git.submodule_worktrees.items():
             porcelain = run_git(["-C", sub.path, "status", "--porcelain"], check=False)
-            item = {"branch": sub.branch, "path": sub.path, "base": sub.base,
-                    "head": run_git(["-C", sub.path, "rev-parse", "--short", "HEAD"], check=False),
+            item = {"branch": sub.branch, "path": sub.path, "base": resolved_base(sub.path, sub.base),
+                    "head": run_git(["-C", sub.path, "rev-parse", "--verify", "HEAD"], check=False),
                     "dirty": len(porcelain.splitlines())}
-            mb = run_git(["-C", sub.path, "merge-base", sub.base, "HEAD"], check=False)
-            if mb:
-                item["merge_base"] = mb[:12]
-                ahead = run_git(["-C", sub.path, "rev-list", "--count", f"{mb}..HEAD"], check=False)
-                item["ahead"] = int(ahead or 0)
+            ahead = run_git(["-C", sub.path, "rev-list", "--count", f"{item['base']}..HEAD"],
+                            check=False).strip()
+            if ahead:
+                item["ahead"] = int(ahead)
             else:
-                item["error"] = f"no merge-base between {sub.base} and HEAD"
+                item["error"] = f"base {item['base'] or '<unset>'} is unavailable in {sub.path}"
             subs[name] = item
         out["submodules"] = subs
-        mb = run_git(["-C", git.worktree, "merge-base", git.base, "HEAD"], check=False)
-        if mb:
-            out["merge_base"] = mb[:12]
-            ahead = run_git(["-C", git.worktree, "rev-list", "--count", f"{mb}..HEAD"], check=False)
-            out["ahead"] = int(ahead or 0)
+        ahead = run_git(["-C", git.worktree, "rev-list", "--count", f"{out['base']}..HEAD"],
+                        check=False).strip()
+        if ahead:
+            out["ahead"] = int(ahead)
             changed = run_git(["-C", git.worktree, "diff", "--name-only", "-z", "--ignore-submodules=all",
-                               mb], check=False)
+                               out["base"]], check=False)
             skip = _submodule_paths(git.worktree)
             out["files_changed"] = len([p for p in changed.split("\0") if p and p not in skip])
         else:
-            out["error"] = f"no merge-base between {git.base} and HEAD"
+            out["error"] = f"base {out['base'] or '<unset>'} is unavailable in {git.worktree}"
     return out
 
 
@@ -426,26 +432,20 @@ def _z_entries(raw: str, numstat: bool) -> list[tuple[list[str], list[str]]]:
 
 
 def _diff_shape(path: str, a: str, b: str | None = None, *, base: str = "",
-                merge_base: str | None = None, with_untracked: bool = False,
-                commits: tuple[str, str] | None = None, env: dict | None = None,
-                uncommitted: set[str] | None = None) -> dict:
-    """Changes of `b` (None = the working tree) against `a`: commits ahead, files changed and
-    totals. Shared by the live worktree view (a = merge-base, b = None) and the runset code
-    view, where a and b are trees rebuilt from HEAD + saved patch (`env` points git at their
-    throwaway object dir), `commits` the HEADs behind them and `uncommitted` the paths the
-    b side's patch touches."""
+                with_untracked: bool = False, commits: tuple[str, str] | None = None,
+                env: dict | None = None, uncommitted: set[str] | None = None) -> dict:
+    """Changes of `b` (None = the working tree) against `a`: commits, files and totals. Shared
+    by the live worktree view (a = base, b = None) and the runset code view, where a and b
+    are trees rebuilt from HEAD + saved patch (`env` points git at their throwaway object dir),
+    `commits` the commit IDs for both sides and `uncommitted` the paths the b patch touches."""
     out: dict = {"path": path, "base": base, "exists": Path(path).is_dir()}
     if not out["exists"]:
         return out
-    if merge_base is not None:
-        out["merge_base"] = merge_base[:12]
     ca, cb = commits or (a, b or "HEAD")
     git = lambda *args: run_git(["-C", path, *args], check=False, env=env)  # noqa: E731
-    # behind/ahead are relative to the tracked base branch when we know it (the live view and
-    # the code view against `base`), else to the diff's left side.
-    counts = git("rev-list", "--left-right", "--count", f"{base or ca}...{cb}").split()
-    out["behind"], out["ahead"] = (int(counts[0]), int(counts[1])) if len(counts) == 2 else (0, 0)
-    log = git("log", f"-{MAX_COMMITS}", "--format=%h%x09%an%x09%ar%x09%s", f"{ca}..{cb}")
+    ahead = git("rev-list", "--count", f"{base or ca}..{cb}").strip()
+    out["ahead"] = int(ahead or 0)
+    log = git("log", f"-{MAX_COMMITS}", "--format=%H%x09%an%x09%ar%x09%s", f"{ca}..{cb}")
     out["commits"] = [dict(zip(("sha", "author", "when", "subject"), line.split("\t", 3)))
                       for line in log.splitlines() if line]
     skip = _submodule_paths(path)
@@ -483,17 +483,17 @@ def _repo_changes(path: str, base: str) -> dict:
     out = {"path": path, "base": base, "exists": Path(path).is_dir()}
     if not out["exists"]:
         return out
-    mb = run_git(["-C", path, "merge-base", base, "HEAD"], check=False)
-    if not mb:
-        out["error"] = f"no merge-base between {base} and HEAD"
+    commit = run_git(["-C", path, "rev-parse", "--verify", f"{base}^{{commit}}"], check=False).strip()
+    if not commit:
+        out["error"] = f"base {base or '<unset>'} does not resolve to a commit in {path}"
         return out
-    return _diff_shape(path, mb, base=base, merge_base=mb, with_untracked=True)
+    out["base"] = commit
+    return _diff_shape(path, commit, base=commit, with_untracked=True)
 
 
 def changes(node: Node) -> dict:
-    """Code that differs from the base: commits ahead, files changed since the merge-base
-    (committed + uncommitted) and untracked files, for the worktree and each submodule
-    worktree. Shared (symlinked) submodules are left out."""
+    """Committed + uncommitted changes from each repository's base commit, including
+    untracked files, for the worktree and each submodule worktree. Shared submodules are left out."""
     if not node.git:
         return {"repos": {}}
     repos = {name: _repo_changes(path, base) for name, (path, base) in _repos(node).items()}
@@ -505,7 +505,7 @@ def changes(node: Node) -> dict:
 
 
 def file_diff(node: Node, sub: str, path: str) -> dict:
-    """Unified diff of one changed file against the merge-base (working tree side)."""
+    """Unified diff of one changed file against the base (working tree side)."""
     repos = _repos(node) if node.git else {}
     if sub not in repos:
         raise TreeError(f"no repo {sub!r} in this node's worktree")
@@ -520,7 +520,7 @@ def file_diff(node: Node, sub: str, path: str) -> dict:
     elif path in known:
         f = known[path]
         paths = [f["old_path"], path] if f["old_path"] else [path]
-        diff = run_git(["-C", wt, "diff", "-M", info["merge_base"], "--", *paths], check=False)
+        diff = run_git(["-C", wt, "diff", "-M", info["base"], "--", *paths], check=False)
     else:
         raise TreeError(f"{path} is not among the changed files of {sub or 'the worktree'}")
     truncated = len(diff) > MAX_DIFF_BYTES

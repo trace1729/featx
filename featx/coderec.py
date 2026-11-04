@@ -144,14 +144,8 @@ def patch_text_stat(patch: bytes) -> dict:
     return {"files": files, "added": added, "deleted": deleted}
 
 
-def merge_base(repo: Path, base: str, commit: str) -> str:
-    if not base or not commit:
-        return ""
-    return _out(_git(repo, "merge-base", base, commit))
-
-
 def recorded_base(workdir: Path, super_base: str, sub: str) -> str:
-    """The submodule commit the superproject's base branch records."""
+    """The submodule commit the superproject's base commit records."""
     if not super_base:
         return ""
     line = _out(_git(workdir, "ls-tree", super_base, sub))
@@ -163,9 +157,10 @@ def _record_repo(path: Path, dest: Path, sub: str, base: str) -> dict:
     if head.returncode != 0:
         return {"error": "not a git checkout"}
     commit = _out(head)
+    base = (_out(_git(path, "rev-parse", "--verify", f"{base}^{{commit}}")) or base) if base else ""
     patch, saved, omitted = repo_patch(path)
     info = {"head": commit, "branch": _out(_git(path, "rev-parse", "--abbrev-ref", "HEAD")),
-            "base": base, "merge_base": merge_base(path, base, commit), "dirty": bool(patch),
+            "base": base, "dirty": bool(patch),
             "patch": None, "untracked": saved, "omitted": omitted, **numstat(path, patch)}
     if patch:
         dest.mkdir(parents=True, exist_ok=True)

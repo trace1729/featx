@@ -66,6 +66,8 @@ def test_record_saves_patches_and_omits_build_dirs(root, tmp_path):
     assert not _git_out("for-each-ref", "refs/featx/", cwd=repo).strip()
     sup = rec["super"]
     assert sup["head"] == _git_out("rev-parse", "HEAD", cwd=repo).strip() and sup["dirty"]
+    assert sup["base"] == _git_out("rev-parse", "main", cwd=repo).strip()
+    assert "merge_base" not in sup
     assert set(sup["untracked"]) == {"u.txt", "tool.sh", ".gitignore", "src/new.scala"}
     omitted = {o["path"]: o["reason"] for o in sup["omitted"]}
     assert set(omitted) == {"build-vlt/", "big.bin"} and "50 files" in omitted["build-vlt/"]
@@ -187,6 +189,25 @@ def test_code_api_against_base_prev_worktree_and_runset(root, tmp_path):
     (rdir / "src-patches" / "super.patch").write_text("diff --git a/a.txt b/a.txt\n")
     legacy = service.runset_code(f"c/{rs3.name}", "base")
     assert legacy["legacy"] is True and legacy["patches"]["super.patch"].startswith("diff --git")
+
+
+def test_old_code_record_keeps_its_saved_comparison_commit(root, tmp_path):
+    repo, wt = _node_worktree(root, tmp_path)
+    rs, _ = Tree().new_runset(Tree().get("c"))
+    (wt / "a.txt").write_text("one\ntwo\n")
+    rec = _save_record(wt, rs)
+    ref = f"c/{rs.name}"
+    fixed_base = rec["super"]["base"]
+
+    entry, saved = Tree().find_runset(ref)
+    saved.provenance["code"]["super"].update(base="main", merge_base=fixed_base)
+    Tree().save_runset(entry, saved)
+    _git("commit", "-q", "--allow-empty", "-m", "upstream", cwd=repo)
+
+    repo_view = service.runset_code(ref, "base")["repos"][""]
+    assert repo_view["base"] == fixed_base and repo_view["ahead"] == 0
+    assert "merge_base" not in repo_view and "behind" not in repo_view
+    assert [f["path"] for f in repo_view["files"]] == ["a.txt"]
 
 
 def test_code_from_the_runset_that_built_the_bin(root, tmp_path):

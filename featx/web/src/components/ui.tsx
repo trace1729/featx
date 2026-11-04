@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { fmtDuration } from "../util";
+import { copyText, fmtDuration } from "../util";
 import { useI18n } from "../i18n";
 
 export function Badge({ kind, title, children }: { kind?: string; title?: string; children: ReactNode }) {
@@ -19,6 +19,26 @@ export function VerdictMark({ verdict }: { verdict: string }) {
     <span className={`verdict ${verdict}`} title={t("verdict: {verdict}", { verdict: t(verdict) })}>
       {VERDICT_MARK[verdict] ?? "·"}
     </span>
+  );
+}
+
+/** A page title that shows only the short name; clicking copies the full path or ref. */
+export function CopyTitle({ text, children }: { text: string; children: ReactNode }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const copy = async () => {
+    if (!(await copyText(text))) return;
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <h1 style={{ margin: 0 }} className="mono copyable" title={t("click to copy {text}", { text })} onClick={copy}>
+      {children}
+      {copied && <span className="muted small"> {t("copied")}</span>}
+    </h1>
   );
 }
 

@@ -194,15 +194,19 @@ featx recipe set N run workload=spec17 'benchmarks=[mcf]'  # spec06 | spec17 | s
 featx submit N run --bin <emu> --point mcf_165900000000_0.031476 --set run.W=100000 --set run.I=200000
 featx submit N --dry-run  # validate and show the exact resolved submission without creating anything
 featx node show N [--json] [--full]  # concise research record by default; full context on request
-featx worktree changes N [--json]    # committed + working-tree changes vs each repo's merge-base
+featx worktree changes N [--json]    # committed + working-tree changes vs each repo's base
 ```
+
+A worktree's base ref is resolved once at creation and saved as a full commit SHA; later movement
+of that branch does not change the node's comparisons. JSON carries full base/HEAD SHAs, while
+text and the Web UI show their first 12 characters. Use `featx worktree set-base NODE REF
+[--sub NAME]` only to repair a record or turn a legacy ref into a commit.
 
 Builds sharing a workdir can be queued; dispatch serializes them so they never compile in the
 same directory simultaneously. Different workdirs still build in parallel.
 
-Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`,
-`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`),
-`featx worktree set-base NODE REF [--sub NAME]`.
+Other commands: `featx plugin list|show NAME`, `featx baseline add|rm|list`, and
+`featx worktree rename-branch NODE` (e.g. an old `featx/<path>` branch to `<path>`).
 
 ## Web UI (leaderboard)
 
@@ -220,11 +224,13 @@ Pages:
   `pk.self.mean_abs_err_pct`). Runsets are only ranked within a comparability class: same
   reference, PERF block, `W`, `I` and point set. Runsets that did not finish every point are shown
   only with "show incomplete" and are never ranked.
-- **Node**: hypothesis, verdict, evidence and comment are collapsed under **Node details**;
-  recipes, scripts, worktree and notes are grouped under **settings**, with **runsets** and
-  **submit** as the other main tabs. A "code changed" badge appears when the node worktree differs
-  from its base; the worktree section lists the commits ahead, the changed/untracked files per repo
-  (main + submodule worktrees) and each file's diff against the merge-base. The runsets table has a parameters column (the keys the
+- **Node**: **runsets**, **submit**, **worktree** and **notes** tabs; the node details (hypothesis,
+  verdict, evidence, comment) are open by default, and recipes and scripts are folded into the
+  submit tab (collapsed). A title shows only the node name and copies the full path when clicked
+  (a runset's title copies its full ref the same way). A "code changed" badge appears when the node worktree differs
+  from its base; the worktree tab lists the base commit, current HEAD, commits since base,
+  changed/untracked files per repo (main + submodule worktrees) and each file's diff from that base.
+  The runsets table has a parameters column (the keys the
   runsets differ on), a code column (snapshot id, files and +/− vs base), checkbox selection of two
   runsets with **compare** (opens the newer one's code tab against the older), multi-selection for
   **archive**, and a "show archived (N)" toggle. Untracked files are folded: "untracked: N files in K dirs", then a
