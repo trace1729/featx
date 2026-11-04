@@ -5,7 +5,26 @@ The feature tree is the source of truth; do not create untracked experiments in
 ad-hoc directories. See `docs/reference.md` for full syntax and `intent.md` for
 rationale. Keep this guide, both READMEs, and the reference in sync.
 
-## 1. Mental model
+- `docs/reference.md` is a symlink to `featx/docs/reference.md`: one file, also
+  served as topics by `featx help <topic>`, MCP `docs`, and the UI Docs page.
+- This guide carries the rules and the canonical invocations; per-command flags
+  live in `featx <cmd> --help`.
+
+## 1. Never
+
+- Mutate only after inspecting the node, worktree, tasks, Git status, and runsets;
+  preserve user files and active experiments.
+- Reset/clean/rebase/force-push, cancel, delete, gc, or restart without explicit
+  authorization; `reap --apply`, `gc --apply`, `node rm`, `task cancel`, and
+  `daemon stop` all need it. Dry-run and inspect first.
+- Send `submit --dry-run` to a daemon older than the CLI: it may ignore the flag
+  and submit for real. Check `featx daemon status` first.
+- Call missing, pending, blocked, timed-out, or unverified work done.
+- Kill processes by PID or name; use `featx reap`.
+- Run tests against production state or read secrets (`.env`, tokens). Use a
+  temporary `FEATX_ROOT` and temporary repositories.
+
+## 2. Mental model
 
 - **Node**: hypothesis, verdict, evidence, notes, Git info, recipes, and runsets.
 - **Worktree**: checkout associated with a node; make repository changes there.
@@ -16,38 +35,24 @@ rationale. Keep this guide, both READMEs, and the reference in sync.
 
 The daemon owns scheduling and process state. Jobs survive the interactive session.
 
-## 2. Safety and compatibility
-
-- Inspect node, worktree, tasks, Git status, and runsets before mutating anything.
-- Preserve user files and active experiments; no unauthorized reset/clean/rebase/
-  force-push/cancel/delete/gc/restart.
-- **Match CLI and daemon versions.** Never send `submit --dry-run` to an old
-  daemon: it may ignore the flag and perform a real submission.
-- Use temporary `FEATX_ROOT` and repositories for tests, not production state.
-- Do not expose tokens or read secret files such as `.env`.
-- `reap --apply`, `gc --apply`, `node rm`, `task cancel`, and `daemon stop`
-  require explicit authorization. Dry-run and inspect first.
-- Never claim success from missing, pending, blocked, or unverified results.
-
-## 3. Resume or inspect an exploration
+## 3. Inspect an exploration
 
 ```bash
-featx daemon status
-featx config show effective
-featx ps
-featx tree
-featx node show <node> [--full --json]
+source .venv/bin/activate
+featx daemon status && featx config show effective
+featx ps && featx tree
+featx node show <node>                    # concise; --recipes, --runsets N (0 hides), --full, --json
 featx worktree status <node>
 featx worktree changes <node> [--json]
 featx result <node>/<YYYYMMDD-n> [--json]
 ```
 
-- `node show`: concise research record; `--full` YAML, `--full --json` full JSON.
-- `--runsets 0` hides runsets; negative counts are invalid.
-- `worktree changes`: committed + uncommitted changes vs each merge-base.
-- Gitlinks appear in their own submodule section; detached submodule HEADs are normal.
+- `node show` is the concise research record; `--runsets 0` hides runsets and negative
+  counts are invalid.
+- `worktree changes` lists committed + uncommitted changes against each merge-base.
+- Gitlinks get their own submodule section; detached submodule HEADs are normal.
 
-## 4. Start an exploration
+## 4. Start and configure an exploration
 
 Write a falsifiable hypothesis: mechanism, workload, baseline, metric, threshold,
 and constraints. Empty hypotheses warn but do not block creation.
@@ -61,34 +66,26 @@ featx worktree create <node> --adopt \
   --path /abs/worktree --repo /abs/main-checkout \
   --base <root-ref> --sub-base TraceRTL=<submodule-ref>
 
-featx worktree set-base <node> <ref> [--sub TraceRTL]
-```
-
-- Validate base refs before registration; do not invent a submodule base.
-- Keep source unchanged during recording/compilation to avoid binary drift.
-- Same-workdir builds serialize at dispatch; different workdirs build in parallel.
-- Cached emulators isolate running simulations from subsequent builds.
-
-## 5. Configure an experiment
-
-Recipe precedence: defaults → workload → root → ancestors → node → submit `--set`.
-
-```bash
-featx recipe show <node> build --explain
-featx recipe show <node> run --explain
-featx recipe show <node> post --explain
+featx recipe show <node> <build|run|post> --explain
 featx recipe set <node> run W=20000000 I=40000000
 featx recipe set <node> post -f post.yaml   # replaces the node layer
 ```
 
+Recipe precedence: defaults → workload → root → ancestors → node → submit `--set`.
+
+- Validate base refs before registration; do not invent a submodule base. Repair
+  later with `featx worktree set-base <node> <ref> [--sub TraceRTL]`.
+- Keep source unchanged during recording/compilation to avoid binary drift.
 - Inline `key.path=value` merges; `null` deletes an inherited key; lists replace.
 - Exec needs matching checkpoint/reference/restorer; trace needs matching trace
   and normal replay options. Do not use diagnostic replay shortcuts by default.
 - Points are `<bench>_<cp>_<weight>`; coverage cannot combine with explicit points.
 - Verify images, traces, weights, `W`, `I`, and comparison reference before submit.
 - Node scripts inherit into `<runset>/scripts`; post steps must write `summary.json`.
+- Same-workdir builds serialize at dispatch; different workdirs build in parallel.
+  Cached emulators isolate running simulations from subsequent builds.
 
-## 6. Preview, submit, and monitor
+## 5. Submit and monitor
 
 ```bash
 featx submit <node> build run post --dry-run
@@ -102,11 +99,12 @@ featx events --wait 600
   creating runsets, tasks, events, snapshots, links, or checkpoint caches.
 - Record runset and build/run/post task IDs. Use `--bin`, `--after`, and
   `--priority` only as intended; running jobs are never preempted.
-- `wait` returns `finished`, `blocked`, `pending`, and `timed_out`.
-  Only all requested tasks succeeded means success; timeout/blocked is not success.
-- Avoid manual polling. Acknowledge events only after handling them.
+- `wait` returns `finished`, `blocked`, `pending`, and `timed_out`; only all
+  requested tasks succeeded means success.
+- `featx task show <task>` is a digest (counts, ETA, failed jobs); `--jobs --state failed`
+  lists jobs. Avoid manual polling. Acknowledge events only after handling them.
 
-## 7. Failure handling and iteration
+## 6. Failures and iteration
 
 ```bash
 featx logs <task-id> -j <failed-point> --err
@@ -118,17 +116,15 @@ featx log append <runset> -p "<problem/evidence>" \
 featx task relaunch <task-id>
 
 # Changed code/scripts/recipes/binary/intent:
-featx task resubmit <task-id> [--set kind.key=value]
-featx task resubmit <task-id> --all-points
+featx task resubmit <task-id> [--set kind.key=value] [--all-points]
 ```
 
 - Infra failures retry automatically; design failures need diagnosis and a fix.
 - Use CLI `--all-points` or MCP `only_failed=False` for full-suite verification.
 - Dependency failures auto-cancel dependents; upstream relaunch revives only
   auto-cancelled tasks, never human-cancelled ones.
-- Use `featx reap` to inspect stale processes; never kill by PID/name alone.
 
-## 8. Results, provenance, and review
+## 7. Results, provenance, and review
 
 ```bash
 featx result <runset> --json
@@ -139,16 +135,18 @@ featx node set <node> --verdict inconclusive \
 
 - Check exact code/recipe/binary/inputs, completed points, drift, reference,
   PERF block, W, I, and point-set compatibility.
+- `featx result` is a digest (tasks, `failures`, post metrics, review); `--provenance`,
+  `--recipes`, `--overrides`, `--reports` add a section, `--full` adds all of them.
 - Build records HEAD + patch in `<runset>/code`; large/build-output content may
   be omitted. Code views rebuild in temporary object directories without writes.
-- Use MCP `runset_code(runset, against=...)` or REST `/runsets/code` for code
-  comparison; there is no `featx runset code` CLI command.
+- Compare code with MCP `runset_code(runset, against=...)` or REST `/runsets/code`;
+  there is no `featx runset code` CLI command.
 - All-terminal runsets need review when verdict is `open` or evidence is empty.
   Failure and cancellation also count; they never set verdict/evidence automatically.
 - Choose `supported`, `refuted`, or `inconclusive` from evidence. A non-open
   verdict plus evidence clears the CLI **Review needed** reminder on refresh.
 
-## 9. MCP operation map
+## 8. MCP operation map
 
 | Purpose | Tool |
 |---|---|
@@ -171,27 +169,24 @@ featx node set <node> --verdict inconclusive \
 - `node_move(dry_run=True, keep_branches=True)` previews without renaming branches.
 - Read tool errors; do not retry unchanged failing calls.
 
-## 10. Web UI and language
+## 9. Web UI and developing featx
 
 ```bash
 featx ui
 ```
 
-- The UI shares CLI/MCP state. EN / 中文 saves the browser preference.
-- Built-in labels/dialogs/hints are localized; unknown labels fall back to English.
-- User content, Git refs, commands, paths, logs, recipe/metric keys, and reference
-  documentation stay unchanged. CLI localization is outside this scope.
-- The Web UI hides review-needed badges, banners and event rows; use the node's
-  verdict/evidence editor.
-
-## 11. Developing featx itself
-
-- CLI: `cli.py`; shared operations: `service.py`, `context.py`; worktrees: `worktree.py`.
-- Scheduler: `sched/scheduler.py`, `sched/daemon.py`; MCP: `mcp_server.py`.
-- Input resolution: `ckpt.py`, `points.py`, `presets.py`, `recipes.py`.
-- Web: `web/src`, `i18n.tsx`; `web/dist` is generated, never edited manually.
-- Add tests in `tests/`, keep APIs additive, and update README/reference/MCP/this guide.
-- Keep dry-run/read-only operations side-effect-free. Localize built-in labels with `t()`.
+- The UI shares CLI/MCP state. EN / 中文 saves the browser preference; built-in
+  labels/dialogs/hints localize, unknown labels fall back to English, and user
+  content (paths, refs, commands, logs, recipe/metric keys, docs) stays unchanged.
+  CLI localization is outside this scope.
+- The UI hides review-needed badges, banners, and event rows; use the node's
+  verdict/evidence editor instead.
+- Code map: `cli.py` (CLI), `service.py` + `context.py` (shared operations),
+  `worktree.py`, `sched/scheduler.py` + `sched/daemon.py`, `mcp_server.py`,
+  `ckpt.py` + `points.py` + `presets.py` + `recipes.py`, web `web/src` + `i18n.tsx`
+  (`web/dist` is generated, never edited manually).
+- Add tests in `tests/`, keep APIs additive, and update README/reference/MCP/this
+  guide. Keep dry-run/read-only operations side-effect-free; localize with `t()`.
 
 ```bash
 .venv/bin/python -m pytest -q -p no:cacheprovider
@@ -202,7 +197,7 @@ cd featx/web && npm test && npm run build
 Exercise changed workflows in an isolated root with real `featx-exec`. Do not
 restart production `featxd` during testing; deployment is a separate decision.
 
-## 12. Completion checklist
+## 10. Completion checklist
 
 - Hypothesis and acceptance criteria are explicit.
 - Actual code, recipes, binaries, and inputs are recorded.
