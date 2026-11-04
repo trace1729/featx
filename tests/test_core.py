@@ -496,3 +496,84 @@ def test_worktree_base_validation_and_repair(root, tmp_path):
     with pytest.raises(TreeError, match="does not resolve"):
         service.worktree_create("create", repo=str(repo), path=str(dest), base="missing", submodules=[])
     assert not dest.exists() and Tree().get("create").node.git is None
+
+
+def test_result_summary_digests_submit_time_echo_and_lists_failures(root):
+    from featx.model import Job, Task
+    e = Tree().add("r/x", parents=True)
+    rs, rdir = Tree().new_runset(e, purpose="p")
+    rs.recipes = {"run": {"W": 1, "benchmarks": [f"b{i}" for i in range(50)]}}
+    rs.provenance = {"super": {"head": "abc", "dirty": True},
+                     "submodules": {"a": {"path": "/a", "head": "1", "dirty": True},
+                                    "b": {"path": "/b", "head": "2", "dirty": False}},
+                     "saved_patches": ["p"]}
+    rs.overrides = {"run": {"W": 1}}
+    t = Task(id="T1", kind="run", name="run", node_id=e.node.id, runset_id=rs.id,
+             runset_name=rs.name, state="failed",
+             jobs=[Job(name="ok", rel="run/ok", state="succeeded"),
+                   Job(name="bad", rel="run/bad", state="failed", rc=1,
+                       failure={"class": "design", "signature": "assert-mismatch"})])
+    taskstore.save(t)
+    rs.tasks = ["T1"]
+    Tree().save_runset(e, rs)
+    (rdir / "post" / "pk").mkdir(parents=True)
+    (rdir / "post" / "pk" / "summary.json").write_text('{"ipc": 1.5}')
+    (rdir / "post" / "pk" / "report.md").write_text("# report\n")
+
+    ref = f"r/x/{rs.name}"
+    short = service.result_get(ref)
+    assert short["post"]["pk"] == {"ipc": 1.5}                     # decision-relevant, kept
+    assert short["failures"] == [{"task": "run", "point": "bad", "rc": 1,
+                                  "failure": "assert-mismatch"}]
+    assert short["provenance"]["submodules"] == 2 and short["provenance"]["submodules_dirty"] == ["a"]
+    names = {"params": {"run": {"benchmarks": [f"b{i}" for i in range(50)]}}}
+    service.digest_run_params(names)                              # names -> count
+    assert names["params"]["run"]["benchmarks"] == 50
+    for gone in ("recipes", "overrides", "reports"):
+        assert gone not in short
+    assert "--recipes" in short["sections_hint"] and len(json.dumps(short)) < 4096
+
+    one = service.result_get(ref, sections=["recipes"])
+    assert one["recipes"]["run"]["W"] == 1 and "overrides" not in one
+
+    full = service.result_get(ref, detail="full")
+    assert full["recipes"]["run"]["benchmarks"][0] == "b0" and full["reports"]["pk"] == "# report\n"
+    assert full["provenance"]["submodules"]["a"]["head"] == "1"
+
+    with pytest.raises(ValueError, match="unknown section"):
+        service.result_get(ref, sections=["nope"])
+
+
+def test_node_context_summary_digests_runsets_and_ancestors(root):
+    from featx import context
+    from featx.model import Task
+
+    Tree().add("p/child", parents=True)
+    Tree().update("p", comment="x" * 500, hypothesis="parent hypothesis")
+    entry = Tree().get("p/child")
+    rs, _ = Tree().new_runset(entry, purpose="p")
+    rs.recipes = {"run": {"W": 1}}
+    rs.overrides = {"run": {"W": 1}}
+    rs.provenance = {"super": {"head": "a"}}
+    task = Task(id="T1", kind="run", name="run", node_id=entry.node.id, runset_id=rs.id,
+                runset_name=rs.name)
+    taskstore.save(task)
+    rs.tasks = ["T1"]
+    Tree().save_runset(entry, rs)
+
+    full = service.node_context("p/child", detail="full")
+    short = service.node_context("p/child")                     # summary is the default
+    assert {"params", "code", "overrides", "problem_log_tail"} <= set(full["runsets"][-1])
+    assert set(short["runsets"][-1]) == set(context.RUNSET_DIGEST_KEYS) | {"differing_values"}
+    assert short["runsets"][-1]["review"] and short["runsets"][-1]["tasks"]   # decision parts stay
+    assert full["ancestors"][-1]["comment"] == "x" * 500
+    assert "comment" not in short["ancestors"][-1] and short["ancestors"][-1]["hypothesis"]
+    assert short["recipes"] and "git" in short                   # the reason to use --full at all
+    assert len(json.dumps(short["runsets"][-1])) < len(json.dumps(full["runsets"][-1]))
+    assert len(json.dumps(short["ancestors"])) < len(json.dumps(full["ancestors"]))
+
+    brief = service.node_brief("p/child")                             # concise view has no recipes
+    assert "recipes" not in brief
+    with_recipes = service.node_brief("p/child", recipes=True)        # the --recipes shortcut
+    assert with_recipes["recipes"]["run"]["W"] == 20000000
+    assert set(with_recipes["recipes"]) == {"build", "run", "post"}

@@ -6,8 +6,10 @@ import socket
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import httpx
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
@@ -266,3 +268,156 @@ def test_mcp_research_workflow_and_move_preview(root):
     assert Tree().get("mcp").node.tags == []
     mcp_server.node_move("mcp", "renamed", dry_run=True, keep_branches=True)
     assert Tree().get("mcp").node.id == entry.node.id
+
+
+def test_rest_task_detail_summary_and_jobs(root):
+    """Rest stays full by default (the UI renders every job); CLI/MCP ask for summary/jobs."""
+    from featx.model import Job, Task
+
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    h = {"X-Featx-Token": d.token}
+    e = service.node_add("t/rest/x", parents=True)
+    jobs = [Job(name=f"bench_{i}", rel=f"run/b{i}", state="running", host="worker-a") for i in range(60)]
+    jobs += [Job(name=f"bad_{i}", rel=f"run/f{i}", state="failed", rc=1) for i in range(3)]
+    d.sched.tasks["T1"] = Task(id="T1", kind="run", name="run", node_id=e["id"], runset_id="R1",
+                               runset_name="20261104-1", spec={"I": 1000000}, jobs=jobs)
+
+    full = c.get("/tasks/T1", headers=h).json()
+    assert len(full["jobs"]) == 63 and "jobs_total" not in full          # UI contract unchanged
+
+    summary = c.get("/tasks/T1", params={"detail": "summary"}, headers=h).json()
+    assert "jobs" not in summary and summary["jobs_total"] == 63
+    assert [j["name"] for j in summary["jobs_failed"]] == ["bad_0", "bad_1", "bad_2"]
+    assert summary["jobs_truncated"] is False and "--jobs" in summary["jobs_hint"]
+
+    page = c.get("/tasks/T1", params={"detail": "jobs", "state": "failed", "limit": 1}, headers=h).json()
+    assert page["jobs_total"] == 3 and page["jobs_truncated"] is True
+    assert [j["name"] for j in page["jobs"]] == ["bad_0"]
+
+    bad = c.get("/tasks/T1", params={"detail": "everything"}, headers=h)
+    assert bad.status_code == 400 and "detail must be" in bad.json()["error"]
+
+
+def test_rest_result_detail_keeps_full_default_for_the_ui(root):
+    from featx.tree import Tree
+
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    h = {"X-Featx-Token": d.token}
+    e = service.node_add("r/api", parents=True)
+    tree = Tree()
+    entry = tree.get("r/api")
+    rs, _ = tree.new_runset(entry, purpose="p")
+    rs.recipes = {"run": {"W": 1}}
+    rs.provenance = {"super": {"head": "a"}, "submodules": {"s": {"dirty": True}}}
+    tree.save_runset(entry, rs)
+    ref = f"{e['path']}/{rs.name}"
+
+    full = c.get("/result", params={"ref": ref}, headers=h).json()
+    assert full["recipes"] == {"run": {"W": 1}} and full["provenance"]["submodules"]["s"]["dirty"]
+
+    short = c.get("/result", params={"ref": ref, "detail": "summary"}, headers=h).json()
+    assert "recipes" not in short and short["provenance"]["submodules"] == 1
+    assert short["provenance"]["submodules_dirty"] == ["s"]
+
+    added = c.get("/result", params={"ref": ref, "detail": "summary", "sections": "recipes"},
+                  headers=h).json()
+    assert added["recipes"] == {"run": {"W": 1}} and "sections_hint" in added
+    assert c.get("/result", params={"ref": ref, "detail": "nope"}, headers=h).status_code == 400
+
+
+def test_rest_node_context_keeps_full_default_and_accepts_detail(root):
+    from featx.tree import Tree
+
+    d = daemon.Daemon(port=1)
+    c = TestClient(daemon.build_app(d))
+    h = {"X-Featx-Token": d.token}
+    service.node_add("n/ctx", parents=True)
+    tree = Tree()
+    entry = tree.get("n/ctx")
+    rs, _ = tree.new_runset(entry, purpose="p")
+    rs.recipes = {"run": {"W": 1}}
+    rs.overrides = {"run": {"W": 1}}
+    tree.save_runset(entry, rs)
+
+    full = c.get("/nodes/context", params={"ref": "n/ctx"}, headers=h).json()   # UI contract
+    short = c.get("/nodes/context", params={"ref": "n/ctx", "detail": "summary"}, headers=h).json()
+    assert "params" in full["runsets"][-1] and "overrides" in full["runsets"][-1]
+    assert "params" not in short["runsets"][-1] and "overrides" not in short["runsets"][-1]
+    assert short["runsets"][-1]["purpose"] == "p" and short["recipes"] == full["recipes"]
+
+
+def _daemon_info(monkeypatch, **kw):
+    info = {"host": "localhost", "port": 1, "pid": 4242, "heartbeat": time.time(), **kw}
+    monkeypatch.setattr(cli, "daemon_info", lambda: dict(info))
+    monkeypatch.setattr(cli, "daemon_alive", lambda i, age=30: True)
+    monkeypatch.setattr(cli, "time", SimpleNamespace(sleep=lambda s: None, time=time.time))
+    return info
+
+
+def test_daemon_stop_escalates_to_kill_when_term_is_ignored(root, monkeypatch):
+    from featx.sched import executor
+
+    _daemon_info(monkeypatch)
+    kills = []
+    monkeypatch.setattr(executor, "kill", lambda host, pid, sig="TERM": kills.append(sig))
+    monkeypatch.setattr(executor, "alive_on_host", lambda host, pid: len(kills) < 2)  # dies on KILL
+
+    r = CliRunner().invoke(cli.app, ["daemon", "stop"])
+    assert r.exit_code == 0, r.output
+    assert kills == ["TERM", "KILL"] and "sending KILL" in r.output
+    assert "stopped" in r.output
+
+
+def test_daemon_stop_does_not_kill_a_responsive_daemon(root, monkeypatch):
+    from featx.sched import executor
+
+    _daemon_info(monkeypatch)
+    kills = []
+    monkeypatch.setattr(executor, "kill", lambda host, pid, sig="TERM": kills.append(sig))
+    monkeypatch.setattr(executor, "alive_on_host", lambda host, pid: False)
+
+    r = CliRunner().invoke(cli.app, ["daemon", "stop"])
+    assert r.exit_code == 0 and kills == ["TERM"] and "sending KILL" not in r.output
+
+
+def test_daemon_start_warns_when_the_api_is_unreachable(root, monkeypatch):
+    _daemon_info(monkeypatch)
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("connection refused")
+    monkeypatch.setattr(cli, "client", lambda: SimpleNamespace(get=boom))
+
+    r = CliRunner().invoke(cli.app, ["daemon", "start"])
+    assert r.exit_code == 0 and "half-stopped" in r.output and "already running" in r.output
+
+
+def test_shutdown_watchdog_leaves_after_the_grace_period(root, monkeypatch):
+    from featx.sched import daemon
+
+    exits = []
+    monkeypatch.setattr(daemon.os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(daemon, "time", SimpleNamespace(sleep=lambda s: None, time=time.time))
+    daemon._watch_shutdown(SimpleNamespace(should_exit=True), delay=0)
+    assert exits == [0]
+
+
+def test_term_handler_arms_a_hard_exit(root, monkeypatch):
+    from featx.sched import daemon
+
+    armed = []
+
+    class Timer:
+        def __init__(self, delay, fn, args=()):
+            self.delay, self.fn, self.args, self.daemon = delay, fn, args, False
+            armed.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(daemon.threading, "Timer", Timer)
+    with pytest.raises(SystemExit):
+        daemon._exit_on_term(15, None)
+    assert armed[0].delay == daemon.HARD_EXIT_AFTER and armed[0].fn is daemon.os._exit
+    assert armed[0].args == (0,) and armed[0].daemon is True   # must not delay a clean exit
