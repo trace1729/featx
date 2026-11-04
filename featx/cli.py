@@ -1070,6 +1070,12 @@ def daemon_start(foreground: bool = typer.Option(False, "--fg")):
     """Start featxd on the configured daemon host under runwatch (ssh if needed)."""
     info = daemon_info()
     if daemon_alive(info):
+        try:
+            client().get("/status")
+        except Exception:  # noqa: BLE001 — any failure means the API is not answering
+            typer.secho(f"featx: featxd pid {info['pid']} heartbeats but its API is unreachable; it is "
+                        "half-stopped and still holds the instance lock — run `featx daemon stop` "
+                        "(it escalates to KILL after 30 s)", fg=typer.colors.YELLOW, err=True)
         typer.echo(f"featxd already running on {info['host']}:{info['port']} (pid {info['pid']})")
         return
     exe = Path(sys.executable).parent / "featxd"
@@ -1096,6 +1102,15 @@ def daemon_start(foreground: bool = typer.Option(False, "--fg")):
     fail(f"featxd did not come up; see {rw_dir}/featxd/log on {host}")
 
 
+def _wait_dead(info: dict, seconds: int) -> bool:
+    from .sched.executor import alive_on_host
+    for _ in range(seconds):
+        time.sleep(1)
+        if alive_on_host(info["host"], info["pid"]) is False:
+            return True
+    return False
+
+
 @daemon_app.command("stop")
 @guarded
 def daemon_stop():
@@ -1103,14 +1118,16 @@ def daemon_stop():
     if not daemon_alive(info):
         typer.echo("featxd not running")
         return
-    from .sched.executor import alive_on_host, kill
+    from .sched.executor import kill
     kill(info["host"], info["pid"], "TERM")
-    for _ in range(30):
-        time.sleep(1)
-        if alive_on_host(info["host"], info["pid"]) is False:
-            break
-    else:
-        fail(f"featxd pid {info['pid']} on {info['host']} still alive 30 s after TERM")
+    if not _wait_dead(info, 30):
+        # uvicorn can wait forever on a sync handler stuck in a blocking call, so a daemon that
+        # closed its port may still hold the instance lock. Escalating keeps `stop` usable.
+        typer.secho(f"featx: pid {info['pid']} ignored TERM for 30 s (a stuck request can block "
+                    "shutdown); sending KILL", fg=typer.colors.YELLOW, err=True)
+        kill(info["host"], info["pid"], "KILL")
+        if not _wait_dead(info, 10):
+            fail(f"featxd pid {info['pid']} on {info['host']} survived KILL; inspect it with `featx reap`")
     # The daemon marks itself stopped on a clean exit; cover a hard death too, otherwise
     # a start right after stop would trust the still-fresh heartbeat.
     cur = daemon_info()

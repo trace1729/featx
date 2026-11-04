@@ -470,7 +470,30 @@ def single_instance():
         handle.close()
 
 
+HARD_EXIT_AFTER = 20   # seconds the whole shutdown may take before `os._exit`
+
+
+def _watch_shutdown(server, delay: float = HARD_EXIT_AFTER) -> None:
+    """Leave `delay` seconds after uvicorn starts shutting down, whatever the handlers do.
+
+    A sync endpoint stuck in a blocking call (seen: an NFS read under /nfs/share) makes
+    `asyncio.run`'s task cancellation wait forever, so `main` never reaches the `finally`:
+    the port closes, the tick loop keeps running and the process holds the instance lock.
+    Jobs run in detached processes on their hosts, so exiting hard loses nothing; `featx
+    daemon stop` writes the `stopped` mark when the daemon could not."""
+    while not getattr(server, "should_exit", False):
+        time.sleep(0.2)
+    time.sleep(delay)
+    os._exit(0)
+
+
 def _exit_on_term(_signum, _frame) -> None:
+    # Belt and braces: uvicorn runs this handler only after its own graceful shutdown, and
+    # raises SystemExit from it so `finally` still marks the daemon stopped. The timer must be a
+    # daemon thread, or the interpreter would wait HARD_EXIT_AFTER before a clean shutdown ends.
+    timer = threading.Timer(HARD_EXIT_AFTER, os._exit, (0,))
+    timer.daemon = True
+    timer.start()
     raise SystemExit(0)
 
 
@@ -490,9 +513,12 @@ def main() -> None:
         # uvicorn restores the previous SIGTERM handler after its graceful shutdown and then
         # re-raises the signal; with the default handler that kills us before `finally` runs.
         signal.signal(signal.SIGTERM, _exit_on_term)
+        server = uvicorn.Server(uvicorn.Config(build_app(d), host=d.bind, port=d.port,
+                                               log_level="warning", timeout_graceful_shutdown=5))
+        threading.Thread(target=_watch_shutdown, args=(server,), name="featx-shutdown-watchdog",
+                         daemon=True).start()
         try:
-            uvicorn.run(build_app(d), host=d.bind, port=d.port, log_level="warning",
-                        timeout_graceful_shutdown=5)
+            server.run()
         finally:
             d.stop.set()
             d.inbox.close()
