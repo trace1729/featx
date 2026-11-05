@@ -102,6 +102,15 @@ def build_script(task_id: str, spec: dict) -> str:
             out.append(f"[ -d build ] || cp -a {shlex.quote(str(reuse))} build || exit 1\n")
             out.append("rm -f build/emu build/gsim-compile/emu\n")
         else:
+            # The workdir is shared with other builds of the node. difftest's gsim.mk compiles
+            # every .cpp under gsim-compile/model, so a model left by a bigger design (e.g. a
+            # trace build) adds stale SimTop<N>.cpp files that no longer match SimTop.h; and
+            # RTL elaborated by a TraceRTL build would be reused as is. Start from scratch.
+            out.append("if [ -e build/.tracertl-elab ]; then\n"
+                       "  echo 'featx: removing RTL elaborated by a TraceRTL build'\n"
+                       "  rm -rf build/rtl build/generated-src build/.tracertl-elab\n"
+                       "fi\n")
+            out.append("rm -rf build/gsim-compile\n")
             out.append('echo "== step1 make gsim $(date)"\n')
             out.append(f"{timeout}make gsim -j{jobs} {common} {g.get('step1_args', '')}\n")
             out.append('step1_rc=$?\n')

@@ -72,6 +72,18 @@ def test_build_options_mode_and_raw_args(root):
     assert presets.key_recipe(spec) != presets.key_recipe(_build())
 
 
+def test_gsim_build_script_starts_from_clean_model(migrated):
+    spec = _build({"mode": "exec"})
+    spec["workdir"] = "/wd"
+    script = jobs.build_script("T", spec)
+    # a model or RTL left by another build of the shared workdir must not leak in
+    assert script.index("rm -rf build/gsim-compile\n") < script.index("make gsim")
+    assert "rm -rf build/rtl build/generated-src build/.tracertl-elab" in script
+    # relinking a reused build tree keeps it
+    spec["gsim"]["reuse_build_from"] = "/other/build"
+    assert "rm -rf build/gsim-compile" not in jobs.build_script("T", spec)
+
+
 def test_verilator_build_script(migrated):
     spec = _build({"tool": "verilator", "verilator": {"args": "EXTRA=1"}})
     assert spec["type"] == "verilator"
