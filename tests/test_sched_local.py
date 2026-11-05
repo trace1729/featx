@@ -330,6 +330,47 @@ def test_same_workdir_builds_queue_at_dispatch_and_survive_restart(root, fake_em
     assert restarted.tasks[d].outputs["cache_hit"] and restarted.tasks[e].outputs["cache_hit"]
 
 
+def test_relaunch_two_same_workdir_builds_serializes_without_deadlock(root, fake_emu, tmp_path):
+    """Both builds can be requeued in the same tick: one must own the workdir, the other wait."""
+    emu, _ = fake_emu
+    make_node(fake_emu, ["ok_1_0.5"])
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    # $0 is <runset>/build/.fx/<attempt>/build-body.sh; ../.. is the runset's build dir, which
+    # is stable across attempts, so each task fails once and succeeds on relaunch.
+    script = (
+        'marker="$(dirname "$0")/../../.ran"\n'
+        'if [ ! -f "$marker" ]; then\n'
+        '  touch "$marker"\n'
+        '  echo "fail once" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        f'mkdir -p build && cp {emu} build/emu\n'
+    )
+    service.recipe_set("t/sched/x", "build", {
+        "type": "script", "workdir": str(wd), "cores": 1, "mem_gb": 1, "cache": False,
+        "script": script,
+    })
+    s = sched()
+    a = s.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    b = s.submit("t/sched/x", ["build"])["tasks"][0]["id"]
+    run_until(s, lambda: all(s.tasks[t].state == "failed" for t in (a, b)))
+
+    # Relaunch both before the next tick: both are running with only queued jobs, the state
+    # that used to make each task wait for the other forever.
+    s.relaunch(a, force=True)
+    s.relaunch(b, force=True)
+    assert s.tasks[a].state == "running" and s.tasks[b].state == "running"
+    assert all(j.state == "queued" for t in (a, b) for j in s.tasks[t].jobs)
+    s.tick()
+    owners = [t for t in (a, b)
+              if any(j.state in ("launching", "running") for j in s.tasks[t].jobs)]
+    assert len(owners) == 1, (s.tasks[a].note, s.tasks[b].note)
+    waiting = b if owners == [a] else a
+    assert s.tasks[waiting].note.startswith("waiting for build workdir")
+    run_until(s, lambda: all(s.tasks[t].state == "succeeded" for t in (a, b)))
+
+
 def test_different_workdirs_build_in_parallel(root, fake_emu, tmp_path):
     emu, _ = fake_emu
     make_node(fake_emu, ["ok_1_0.5"])

@@ -590,12 +590,24 @@ class Scheduler:
     def _build_workdir_conflict(self, task: Task) -> Task | None:
         if task.kind != "build":
             return None
+        # A build whose job is already launching/running owns the workdir; it never blocks.
+        if any(job.state in ("launching", "running") for job in task.jobs):
+            return None
         workdir = Path(task.spec["workdir"]).resolve()
-        for other in self.tasks.values():
-            if (other.id != task.id and other.kind == "build" and other.state == "running"
-                    and Path(other.spec["workdir"]).resolve() == workdir):
-                return other
-        return None
+        same = [other for other in self.tasks.values()
+                if (other.id != task.id and other.kind == "build" and other.state == "running"
+                    and Path(other.spec["workdir"]).resolve() == workdir)]
+        if not same:
+            return None
+        active = [other for other in same
+                  if any(job.state in ("launching", "running") for job in other.jobs)]
+        if active:
+            return active[0]
+        # Neither build has launched yet (e.g. two failed builds relaunched before a tick).
+        # Let the launch-order winner proceed so the pair serializes instead of waiting on itself.
+        # task.id is time-ordered, so equal-second `created` values still pick one winner.
+        winner = min([task, *same], key=lambda t: (*launch_order(t), t.id))
+        return None if winner is task else winner
 
     def _tick_locked(self) -> bool:
         """Poll/materialize under the lock; True if some job waits for a launch."""
